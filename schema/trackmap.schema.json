@@ -1,0 +1,144 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mixray.dev/schema/trackmap.schema.json",
+  "title": "TrackMap",
+  "description": "Engine output for one processed audio region. The only contract between engine/ and apps/web/. All times are seconds from the start of the processed region.",
+  "type": "object",
+  "required": ["version", "id", "source", "duration", "tempo", "beats", "downbeats", "key", "chords", "sections", "energy", "stems", "notes", "arrangements"],
+  "additionalProperties": false,
+  "properties": {
+    "version": { "const": 1 },
+    "id": { "type": "string", "description": "SHA-256 of the decoded audio region (cache key)." },
+    "source": {
+      "type": "object",
+      "required": ["title", "region_start", "region_end"],
+      "additionalProperties": false,
+      "properties": {
+        "title": { "type": "string" },
+        "artist": { "type": "string" },
+        "license": { "type": "string", "description": "e.g. 'owned', 'CC BY 4.0'." },
+        "region_start": { "type": "number", "minimum": 0, "description": "Offset of the region in the original file." },
+        "region_end": { "type": "number", "minimum": 0 }
+      }
+    },
+    "duration": { "type": "number", "exclusiveMinimum": 0, "maximum": 90 },
+    "tempo": {
+      "type": "object",
+      "required": ["bpm", "time_signature", "confidence"],
+      "additionalProperties": false,
+      "properties": {
+        "bpm": { "type": "number", "minimum": 40, "maximum": 220 },
+        "time_signature": { "type": "array", "items": { "type": "integer" }, "minItems": 2, "maxItems": 2 },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    },
+    "beats": { "type": "array", "items": { "type": "number", "minimum": 0 } },
+    "downbeats": { "type": "array", "items": { "type": "number", "minimum": 0 }, "description": "Bar starts; bar index = position in this array." },
+    "key": {
+      "type": "object",
+      "required": ["tonic", "mode", "confidence"],
+      "additionalProperties": false,
+      "properties": {
+        "tonic": { "enum": ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"] },
+        "mode": { "enum": ["major", "minor"] },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    },
+    "chords": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["bar", "start", "end", "label"],
+        "additionalProperties": false,
+        "properties": {
+          "bar": { "type": "integer", "minimum": 0 },
+          "start": { "type": "number" },
+          "end": { "type": "number" },
+          "label": { "type": "string", "description": "e.g. 'Am', 'F', 'C', 'G', or 'N' for no chord." },
+          "root_midi": { "type": "integer", "minimum": 0, "maximum": 127 }
+        }
+      }
+    },
+    "sections": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["start", "end", "label"],
+        "additionalProperties": false,
+        "properties": {
+          "start": { "type": "number" },
+          "end": { "type": "number" },
+          "label": { "enum": ["intro", "verse", "build", "drop", "breakdown", "chorus", "bridge", "outro", "section"] }
+        }
+      }
+    },
+    "energy": {
+      "type": "object",
+      "required": ["hop", "values"],
+      "additionalProperties": false,
+      "properties": {
+        "hop": { "type": "number", "exclusiveMinimum": 0, "description": "Seconds between values." },
+        "values": { "type": "array", "items": { "type": "number", "minimum": 0, "maximum": 1 } }
+      }
+    },
+    "stems": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "url", "level"],
+        "additionalProperties": false,
+        "properties": {
+          "name": { "enum": ["vocals", "drums", "bass", "guitar", "piano", "other"] },
+          "url": { "type": "string", "description": "Compressed audio for playback in the browser." },
+          "wav_url": { "type": "string", "description": "Lossless stem for the rebuild kit." },
+          "level": { "type": "number", "minimum": 0, "maximum": 1, "description": "Relative RMS; near 0 means the stem is effectively empty." },
+          "peaks": { "type": "array", "items": { "type": "number" }, "description": "Downsampled waveform for drawing." }
+        }
+      }
+    },
+    "notes": {
+      "type": "object",
+      "description": "Transcribed notes per stem (Basic Pitch), already snapped to the beat grid.",
+      "additionalProperties": { "$ref": "#/$defs/noteList" }
+    },
+    "arrangements": {
+      "type": "object",
+      "required": ["easy"],
+      "additionalProperties": false,
+      "properties": {
+        "source_stem": { "type": "string" },
+        "easy": { "$ref": "#/$defs/noteList", "description": "Right-hand melody, MIDI 60-84." },
+        "intermediate": { "$ref": "#/$defs/noteList", "description": "Melody plus left-hand root+fifth per bar." }
+      }
+    },
+    "summary": { "type": "string", "description": "One-line Muse summary of the track." },
+    "recipes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["stem", "recipe"],
+        "additionalProperties": false,
+        "properties": {
+          "stem": { "type": "string" },
+          "recipe": { "type": "object", "description": "Sound Recipe JSON from Muse Spark Open (oscillators, filter, envelope, fx)." }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "note": {
+      "type": "object",
+      "required": ["start", "end", "pitch", "velocity"],
+      "additionalProperties": false,
+      "properties": {
+        "start": { "type": "number", "minimum": 0 },
+        "end": { "type": "number", "minimum": 0 },
+        "pitch": { "type": "integer", "minimum": 0, "maximum": 127 },
+        "velocity": { "type": "integer", "minimum": 1, "maximum": 127 },
+        "bar": { "type": "integer", "minimum": 0 },
+        "hand": { "enum": ["right", "left"] }
+      }
+    },
+    "noteList": { "type": "array", "items": { "$ref": "#/$defs/note" } }
+  }
+}
