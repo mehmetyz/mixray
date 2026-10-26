@@ -1,0 +1,75 @@
+@import "tailwindcss";
+
+:root {
+  --bg: #121010;
+  --surface: #1c1917;
+  --surface-2: #262220;
+  --inset: #171413;
+  --line: #2e2926;
+  --line-2: #35302c;
+  --control: #3d3733;
+  --inactive: #4a433e;
+  --muted-wave: #302b28;
+
+  --text: #f5efe6;
+  --text-2: #cfc5b8;
+  --text-muted: #a89c8e;
+
+  --accent: #ff7a1a;
+  --accent-ink: #1a0d03;
+  --accent-hover: #ffb070;
+  --you: #ffd08a;
+
+  --rest: #b8aa98;
+  --left-hand: #9c8cd9;
+  --left-hand-2: #7e6fc0;
+}
+
+@theme inline {
+  --color-*: initial;
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-inset: var(--inset);
+  --color-line: var(--line);
+  --color-line-2: var(--line-2);
+  --color-control: var(--control);
+  --color-inactive: var(--inactive);
+  --color-muted-wave: var(--muted-wave);
+  --color-text: var(--text);
+  --color-text-2: var(--text-2);
+  --color-muted: var(--text-muted);
+  --color-accent: var(--accent);
+  --color-accent-ink: var(--accent-ink);
+  --color-accent-hover: var(--accent-hover);
+  --color-you: var(--you);
+  --color-rest: var(--rest);
+  --color-left-hand: var(--left-hand);
+  --color-left-hand-2: var(--left-hand-2);
+
+  --font-sans: var(--font-manrope), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-jetbrains-mono), ui-monospace, monospace;
+
+  --radius-card: 20px;
+  --radius-well: 14px;
+  --radius-icon: 10px;
+}
+
+@utility page-container {
+  margin-inline: auto;
+  max-width: 1280px;
+  padding-inline: 16px;
+
+  @media (width >= 48rem) {
+    padding-inline: 40px;
+  }
+}
+
+@utility eyebrow {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--accent);
+}

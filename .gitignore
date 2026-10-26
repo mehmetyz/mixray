@@ -1,3 +1,26 @@
+### Mixray ###
+# env & secrets
+.env
+.env.*
+!.env.example
+
+# node / next
+node_modules/
+.next/
+out/
+.vercel/
+*.tsbuildinfo
+next-env.d.ts
+
+# audio & model artifacts (only small, owned demo files under apps/web/public/demos are committed)
+*.wav
+*.flac
+*.aiff
+*.pt
+*.ckpt
+*.th
+*.safetensors
+
 #
 #
 .env
@@ -165,7 +188,7 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
+# lib/
 lib64/
 parts/
 sdist/
