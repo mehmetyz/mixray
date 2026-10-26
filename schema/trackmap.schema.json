@@ -2,26 +2,28 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://mixray.dev/schema/trackmap.schema.json",
   "title": "TrackMap",
-  "description": "Engine output for one processed audio region. The only contract between engine/ and apps/web/. All times are seconds from the start of the processed region.",
+  "description": "Engine output for one clip (≤ 30 s). The only contract between engine/ and apps/web/. Times are seconds from the start of the clip. Each sound the user picks is one entry in `isolations`.",
   "type": "object",
-  "required": ["version", "id", "source", "duration", "tempo", "beats", "downbeats", "key", "chords", "sections", "energy", "stems", "notes", "arrangements"],
+  "required": ["version", "id", "source", "duration", "tempo", "beats", "downbeats", "key", "chords", "sections", "energy", "suggestions", "isolations"],
   "additionalProperties": false,
   "properties": {
-    "version": { "const": 1 },
-    "id": { "type": "string", "description": "SHA-256 of the decoded audio region (cache key)." },
+    "version": { "const": 2 },
+    "id": { "type": "string", "description": "SHA-256 of the decoded clip (cache key)." },
     "source": {
       "type": "object",
-      "required": ["title", "region_start", "region_end"],
+      "required": ["kind", "title", "clip_start", "clip_end"],
       "additionalProperties": false,
       "properties": {
+        "kind": { "enum": ["audio", "video"] },
         "title": { "type": "string" },
         "artist": { "type": "string" },
         "license": { "type": "string", "description": "e.g. 'owned', 'CC BY 4.0'." },
-        "region_start": { "type": "number", "minimum": 0, "description": "Offset of the region in the original file." },
-        "region_end": { "type": "number", "minimum": 0 }
+        "clip_start": { "type": "number", "minimum": 0, "description": "Offset of the clip in the original file." },
+        "clip_end": { "type": "number", "minimum": 0 },
+        "mix_url": { "type": "string", "description": "Full-mix audio of the clip for playback." }
       }
     },
-    "duration": { "type": "number", "exclusiveMinimum": 0, "maximum": 90 },
+    "duration": { "type": "number", "exclusiveMinimum": 0, "maximum": 30 },
     "tempo": {
       "type": "object",
       "required": ["bpm", "time_signature", "confidence"],
@@ -54,7 +56,7 @@
           "bar": { "type": "integer", "minimum": 0 },
           "start": { "type": "number" },
           "end": { "type": "number" },
-          "label": { "type": "string", "description": "e.g. 'Am', 'F', 'C', 'G', or 'N' for no chord." },
+          "label": { "type": "string", "description": "e.g. 'Am', 'F', or 'N' for no chord." },
           "root_midi": { "type": "integer", "minimum": 0, "maximum": 127 }
         }
       }
@@ -77,50 +79,68 @@
       "required": ["hop", "values"],
       "additionalProperties": false,
       "properties": {
-        "hop": { "type": "number", "exclusiveMinimum": 0, "description": "Seconds between values." },
+        "hop": { "type": "number", "exclusiveMinimum": 0 },
         "values": { "type": "array", "items": { "type": "number", "minimum": 0, "maximum": 1 } }
       }
     },
-    "stems": {
+    "summary": { "type": "string", "description": "One-line Muse summary of the clip." },
+    "suggestions": {
       "type": "array",
+      "description": "Sounds Muse Spark hears in the clip, offered as chips.",
+      "items": {
+        "type": "object",
+        "required": ["label", "prompt"],
+        "additionalProperties": false,
+        "properties": {
+          "label": { "type": "string", "description": "Short UI label, e.g. 'Supersaw lead'." },
+          "prompt": { "type": "string", "description": "Text prompt sent to SAM Audio." }
+        }
+      }
+    },
+    "isolations": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/isolation" }
+    },
+    "fallback_stems": {
+      "type": "array",
+      "description": "Demucs stems, computed once per clip; used when a prompt maps to a standard instrument.",
       "items": {
         "type": "object",
         "required": ["name", "url", "level"],
         "additionalProperties": false,
         "properties": {
           "name": { "enum": ["vocals", "drums", "bass", "guitar", "piano", "other"] },
-          "url": { "type": "string", "description": "Compressed audio for playback in the browser." },
-          "wav_url": { "type": "string", "description": "Lossless stem for the rebuild kit." },
-          "level": { "type": "number", "minimum": 0, "maximum": 1, "description": "Relative RMS; near 0 means the stem is effectively empty." },
-          "peaks": { "type": "array", "items": { "type": "number" }, "description": "Downsampled waveform for drawing." }
+          "url": { "type": "string" },
+          "wav_url": { "type": "string" },
+          "level": { "type": "number", "minimum": 0, "maximum": 1 }
         }
       }
     },
-    "notes": {
+    "video": {
       "type": "object",
-      "description": "Transcribed notes per stem (Basic Pitch), already snapped to the beat grid.",
-      "additionalProperties": { "$ref": "#/$defs/noteList" }
-    },
-    "arrangements": {
-      "type": "object",
-      "required": ["easy"],
+      "description": "Present only for video clips.",
+      "required": ["url", "fps", "width", "height", "tracks"],
       "additionalProperties": false,
       "properties": {
-        "source_stem": { "type": "string" },
-        "easy": { "$ref": "#/$defs/noteList", "description": "Right-hand melody, MIDI 60-84." },
-        "intermediate": { "$ref": "#/$defs/noteList", "description": "Melody plus left-hand root+fifth per bar." }
-      }
-    },
-    "summary": { "type": "string", "description": "One-line Muse summary of the track." },
-    "recipes": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "required": ["stem", "recipe"],
-        "additionalProperties": false,
-        "properties": {
-          "stem": { "type": "string" },
-          "recipe": { "type": "object", "description": "Sound Recipe JSON from Muse Spark Open (oscillators, filter, envelope, fx)." }
+        "url": { "type": "string", "description": "720p web copy of the clip." },
+        "fps": { "type": "number", "description": "Mask frame rate (10)." },
+        "width": { "type": "integer" },
+        "height": { "type": "integer" },
+        "tracks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "label", "masks_url", "visible"],
+            "additionalProperties": false,
+            "properties": {
+              "id": { "type": "string" },
+              "label": { "type": "string", "description": "e.g. 'Keyboard player'." },
+              "prompt": { "type": "string", "description": "Text prompt or 'tap@x,y' used for SAM 3.1." },
+              "masks_url": { "type": "string", "description": "JSON with one polygon list per frame." },
+              "visible": { "type": "array", "items": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 }, "description": "[start, end] ranges where the object is on screen." },
+              "isolation_id": { "type": "string", "description": "Isolation produced from this track, once requested." }
+            }
+          }
         }
       }
     }
@@ -139,6 +159,41 @@
         "hand": { "enum": ["right", "left"] }
       }
     },
-    "noteList": { "type": "array", "items": { "$ref": "#/$defs/note" } }
+    "noteList": { "type": "array", "items": { "$ref": "#/$defs/note" } },
+    "isolation": {
+      "type": "object",
+      "required": ["id", "label", "prompt", "method", "sound_url", "rest_url", "peaks", "notes", "arrangements"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "description": "SHA-256 of clip id + prompt." },
+        "label": { "type": "string" },
+        "prompt": { "type": "string" },
+        "method": { "enum": ["sam_audio_text", "sam_audio_visual", "demucs"] },
+        "sound_url": { "type": "string" },
+        "sound_wav_url": { "type": "string" },
+        "rest_url": { "type": "string" },
+        "peaks": { "type": "array", "items": { "type": "number" } },
+        "rest_peaks": { "type": "array", "items": { "type": "number" } },
+        "pitch_confidence": { "type": "number", "minimum": 0, "maximum": 1, "description": "Mean transcription confidence; drives the Demucs fallback choice." },
+        "range": {
+          "type": "object",
+          "required": ["low", "high"],
+          "additionalProperties": false,
+          "properties": { "low": { "type": "integer" }, "high": { "type": "integer" } }
+        },
+        "notes": { "$ref": "#/$defs/noteList", "description": "Transcribed notes, snapped to the beat grid." },
+        "arrangements": {
+          "type": "object",
+          "required": ["easy"],
+          "additionalProperties": false,
+          "properties": {
+            "easy": { "$ref": "#/$defs/noteList", "description": "Right-hand part, MIDI 60-84." },
+            "intermediate": { "$ref": "#/$defs/noteList", "description": "Plus left-hand root+fifth per bar." }
+          }
+        },
+        "summary": { "type": "string", "description": "One-line Muse description of this sound." },
+        "recipe": { "type": "object", "description": "Sound recipe JSON from Muse Spark Open." }
+      }
+    }
   }
 }
