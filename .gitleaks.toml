@@ -1,0 +1,6 @@
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Build output and installed dependencies; git-ignored, regenerated locally"
+paths = ['''(^|/)\.next/''', '''(^|/)node_modules/''', '''(^|/)\.venv/''']
