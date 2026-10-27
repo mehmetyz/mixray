@@ -23,6 +23,6 @@ app = modal.App("mixray")
 def api() -> FastAPI:
     """Serve the Mixray HTTP API."""
 
-    from web import create_api  # noqa: PLC0415
+    from web import create_api
 
     return create_api()

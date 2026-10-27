@@ -23,8 +23,15 @@ target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "W", "F", "I", "B", "UP", "ANN", "N", "SIM", "RET", "PL", "RUF"]
+# Heavy model libraries are imported inside Modal functions on purpose (AGENTS.md: the container
+# only pays for them when the function runs), so a function-local import is the convention here.
+ignore = ["PLC0415"]
 
 [tool.mypy]
 python_version = "3.11"
 strict = true
 warn_unreachable = true
+
+[[tool.mypy.overrides]]
+module = ["torch.*", "torchaudio.*", "sam_audio.*"]
+ignore_missing_imports = true
