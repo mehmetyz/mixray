@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import os
+import time
 from collections.abc import Callable
 from email.parser import BytesParser
 from email.policy import default as default_email_policy
@@ -33,6 +36,8 @@ from ingest import (
 )
 
 CORS_ENV = "MIXRAY_CORS_ORIGINS"
+API_KEY_ENV = "MIXRAY_API_KEY"
+DEV_NO_AUTH_ENV = "MIXRAY_DEV_NO_AUTH"
 DEFAULT_CORS_ORIGINS = (
     "https://mixray.vercel.app",
     "https://mixray.dev",
@@ -40,6 +45,7 @@ DEFAULT_CORS_ORIGINS = (
     "http://127.0.0.1:3000",
 )
 MAX_PROMPT_LEN = 120
+SIGNED_TOKEN_PARTS = 2
 
 MEDIA_TYPES: dict[str, str] = {
     ".wav": "audio/wav",
@@ -101,6 +107,45 @@ def _client_ip(request: Request) -> str:
     if request.client and request.client.host:
         return request.client.host
     return "127.0.0.1"
+
+
+def _extract_token(request: Request) -> str:
+    auth_header = request.headers.get("authorization", "").strip()
+    if auth_header.lower().startswith("bearer "):
+        return auth_header[7:].strip()
+    return request.headers.get("x-api-key", "").strip()
+
+
+def _verify_signed_token(token: str, secret: str) -> bool:
+    parts = token.split(".")
+    if len(parts) != SIGNED_TOKEN_PARTS:
+        return False
+    expiry_str, signature = parts
+    if not expiry_str.isdigit():
+        return False
+    if int(expiry_str) < int(time.time()):
+        return False
+    expected = hmac.new(
+        secret.encode("utf-8"), expiry_str.encode("utf-8"), hashlib.sha256
+    ).hexdigest()
+    return hmac.compare_digest(signature, expected)
+
+
+def _require_auth(request: Request) -> None:
+    secret = os.environ.get(API_KEY_ENV, "").strip()
+    if not secret:
+        if os.environ.get(DEV_NO_AUTH_ENV) == "1":
+            return
+        raise HTTPException(
+            status_code=503,
+            detail="MIXRAY_API_KEY is not configured on the engine.",
+        )
+    token = _extract_token(request)
+    if not token:
+        raise HTTPException(status_code=401, detail="Missing API key.")
+    if hmac.compare_digest(token, secret) or _verify_signed_token(token, secret):
+        return
+    raise HTTPException(status_code=401, detail="Invalid API key.")
 
 
 def _parse_multipart(content_type: str, body: bytes) -> MultipartUpload:
@@ -263,6 +308,7 @@ def create_api(
     }
 
     async def post_job(request: Request) -> JobResponse:
+        _require_auth(request)
         try:
             body = await request.body()
             parsed = _parse_multipart(request.headers.get("content-type", ""), body)
@@ -283,9 +329,11 @@ def create_api(
             raise HTTPException(status_code=error.status_code, detail=str(error)) from error
 
     def post_isolate(job_id: str, body: IsolateRequest, request: Request) -> JobResponse:
+        _require_auth(request)
         return _start_or_reuse_isolation(job_id, body, _client_ip(request), hooks)
 
-    def get_job(job_id: str) -> JobResponse:
+    def get_job(job_id: str, request: Request) -> JobResponse:
+        _require_auth(request)
         _reload()
         record = read_job(job_id)
         if record is None:

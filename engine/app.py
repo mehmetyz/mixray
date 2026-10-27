@@ -22,6 +22,7 @@ CLEANUP_TIMEOUT_SECONDS = 300
 MAX_ISOLATE_CONTAINERS = 2
 
 CACHE_VOLUME = modal.Volume.from_name("mixray-cache", create_if_missing=True)
+API_SECRET = modal.Secret.from_name("mixray-secrets")
 
 app = modal.App("mixray")
 
@@ -77,6 +78,7 @@ def cleanup_old_uploads() -> int:
 @app.function(
     image=web_image,
     volumes={DEFAULT_CACHE_PATH: CACHE_VOLUME},
+    secrets=[API_SECRET],
     timeout=WEB_TIMEOUT_SECONDS,
     gpu=None,
 )
