@@ -21,6 +21,9 @@ next-env.d.ts
 *.th
 *.safetensors
 
+# local scratch: test audio/video we do not own, never committed
+.local/
+
 #
 #
 .env
