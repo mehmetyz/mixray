@@ -17,6 +17,16 @@ from typing import TYPE_CHECKING, TypedDict
 import modal
 
 from images import sam_audio_image
+from ingest import (
+    IsolationEntry,
+    JobRecord,
+    append_isolation_to_trackmap,
+    clip_dir,
+    compute_wav_peaks,
+    encode_mp3,
+    get_cache_root,
+    write_job,
+)
 
 if TYPE_CHECKING:
     import torch
@@ -263,6 +273,107 @@ def measure(model_id: str = DEFAULT_MODEL_ID, prompt: str = DEFAULT_PROMPT) -> M
         LOGGER.error("saving wav failed: %s", result["error"])
 
     return result
+
+
+def run_isolation(
+    clip_id: str,
+    iso_id: str,
+    prompt: str,
+    label: str,
+    cache_root: Path | None = None,
+) -> IsolationEntry:
+    """Separate `prompt` from `clip_id` with SAM Audio and persist sound, rest, and peaks."""
+    import json
+
+    os.environ["HF_HOME"] = f"{WEIGHTS_PATH}/huggingface"
+    root = cache_root if cache_root is not None else get_cache_root()
+    iso_dir = clip_dir(clip_id, root) / "isolations" / iso_id
+    cached_json = iso_dir / "isolation.json"
+    trackmap_url = f"/files/clips/{clip_id}/trackmap.json"
+
+    if cached_json.exists():
+        entry: IsolationEntry = json.loads(cached_json.read_text(encoding="utf-8"))
+        append_isolation_to_trackmap(clip_id, entry, root)
+        write_job(
+            {
+                "id": clip_id,
+                "status": "done",
+                "stage": "done",
+                "trackmap_url": trackmap_url,
+                "isolation_id": iso_id,
+                "cached": True,
+                "error": None,
+            },
+            root,
+        )
+        return entry
+
+    import torch
+    from sam_audio import SAMAudio, SAMAudioProcessor
+
+    mix_wav = clip_dir(clip_id, root) / "mix.wav"
+    model = SAMAudio.from_pretrained(DEFAULT_MODEL_ID, **RANKERS_OFF).eval().cuda()
+    processor = SAMAudioProcessor.from_pretrained(DEFAULT_MODEL_ID)
+    batch = processor(audios=[str(mix_wav)], descriptions=[prompt]).to("cuda")
+    with torch.inference_mode():
+        separation = model.separate(batch, predict_spans=False, reranking_candidates=1)
+
+    target_item = separation.target[0] if isinstance(separation.target, list) else separation.target
+    residual_item = (
+        separation.residual[0] if isinstance(separation.residual, list) else separation.residual
+    )
+    sound = target_item.detach().float().cpu()
+    rest = residual_item.detach().float().cpu()
+
+    iso_dir.mkdir(parents=True, exist_ok=True)
+    sample_rate = int(processor.audio_sampling_rate)
+    sound_wav = iso_dir / "sound.wav"
+    rest_wav = iso_dir / "rest.wav"
+    _save_pcm16_wav(sound_wav, sound, sample_rate)
+    _save_pcm16_wav(rest_wav, rest, sample_rate)
+    encode_mp3(sound_wav, iso_dir / "sound.mp3")
+    encode_mp3(rest_wav, iso_dir / "rest.mp3")
+
+    write_job(
+        {
+            "id": clip_id,
+            "status": "running",
+            "stage": "analyzing",
+            "trackmap_url": trackmap_url,
+            "isolation_id": iso_id,
+            "cached": False,
+            "error": None,
+        },
+        root,
+    )
+
+    base_url = f"/files/clips/{clip_id}/isolations/{iso_id}"
+    entry = {
+        "id": iso_id,
+        "label": label,
+        "prompt": prompt,
+        "method": "sam_audio_text",
+        "sound_url": f"{base_url}/sound.mp3",
+        "sound_wav_url": f"{base_url}/sound.wav",
+        "rest_url": f"{base_url}/rest.mp3",
+        "peaks": compute_wav_peaks(sound_wav),
+        "rest_peaks": compute_wav_peaks(rest_wav),
+        "notes": [],
+        "arrangements": {"easy": [], "intermediate": []},
+    }
+    cached_json.write_text(json.dumps(entry), encoding="utf-8")
+    append_isolation_to_trackmap(clip_id, entry, root)
+    done_job: JobRecord = {
+        "id": clip_id,
+        "status": "done",
+        "stage": "done",
+        "trackmap_url": trackmap_url,
+        "isolation_id": iso_id,
+        "cached": False,
+        "error": None,
+    }
+    write_job(done_job, root)
+    return entry
 
 
 # The clip is dub techno with an ambient field recording mixed in: kick, hats, chord stabs, bass and

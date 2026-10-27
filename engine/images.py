@@ -36,11 +36,7 @@ def _git_spec(name: str, repo: str, commit: str) -> str:
     return f"{name} @ git+https://github.com/{repo}.git@{commit}"
 
 
-web_image = (
-    modal.Image.debian_slim(python_version=PYTHON_VERSION)
-    .uv_sync()
-    .add_local_python_source("images", "web")
-)
+web_image = media_image().uv_sync().add_local_python_source("images", "ingest", "isolate", "web")
 
 sam_audio_image = (
     media_image()
@@ -54,7 +50,7 @@ sam_audio_image = (
     )
     .pip_install(_git_spec("sam-audio", "facebookresearch/sam-audio", SAM_AUDIO_COMMIT))
     .pip_install(NUMPY_PIN, TRANSFORMERS_PIN, HUGGINGFACE_HUB_PIN, PROTOBUF_PIN)
-    .add_local_python_source("images")
+    .add_local_python_source("images", "ingest", "isolate", "web")
 )
 
 demucs_image = media_image()
