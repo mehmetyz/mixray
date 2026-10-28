@@ -27,6 +27,15 @@ HUGGINGFACE_HUB_PIN = "huggingface_hub==0.36.2"
 PROTOBUF_PIN = "protobuf==3.20.3"
 
 
+# Every container that runs a function declared in `app.py` has to import `app.py`, so it needs
+# every module `app.py` imports at the top level - not just the ones its own function touches.
+# Shipping one list everywhere removes a whole class of failure: an image that was missing a module
+# deploys cleanly, because Modal only serialises at deploy time, and then dies on import when a
+# request arrives, which looks like an unreachable endpoint rather than a missing file. Every module
+# here keeps its heavy dependencies inside its functions, so this costs only a few KB of source.
+LOCAL_SOURCES = ("images", "ingest", "isolate", "analyze", "web", "fallback", "transcribe")
+
+
 def media_image() -> modal.Image:
     """Base for every audio stage: Python plus ffmpeg for decoding."""
     return modal.Image.debian_slim(python_version=PYTHON_VERSION).apt_install(FFMPEG_PACKAGE)
@@ -36,7 +45,7 @@ def _git_spec(name: str, repo: str, commit: str) -> str:
     return f"{name} @ git+https://github.com/{repo}.git@{commit}"
 
 
-web_image = media_image().uv_sync().add_local_python_source("images", "ingest", "isolate", "web")
+web_image = media_image().uv_sync().add_local_python_source(*LOCAL_SOURCES)
 
 sam_audio_image = (
     media_image()
@@ -50,15 +59,13 @@ sam_audio_image = (
     )
     .pip_install(_git_spec("sam-audio", "facebookresearch/sam-audio", SAM_AUDIO_COMMIT))
     .pip_install(NUMPY_PIN, TRANSFORMERS_PIN, HUGGINGFACE_HUB_PIN, PROTOBUF_PIN)
-    .add_local_python_source("images", "ingest", "isolate", "web")
+    .add_local_python_source(*LOCAL_SOURCES)
 )
 
 # `analyze` is pure signal processing: no model, no GPU. Its dependencies come from the `analyze`
 # group in pyproject.toml so the librosa pin lives in exactly one place, and it gets its own image
 # so the API container does not pay librosa's import cost on every cold start.
-analyze_image = (
-    media_image().uv_sync(groups=["analyze"]).add_local_python_source("images", "ingest", "analyze")
-)
+analyze_image = media_image().uv_sync(groups=["analyze"]).add_local_python_source(*LOCAL_SOURCES)
 
 # 4.1.0 is the latest Demucs release and supports Python 3.11. It reads and writes audio through
 # `sphn` and declares `torchaudio` only under its `train` extra, so unlike earlier 4.x releases this
@@ -74,7 +81,7 @@ demucs_image = (
     media_image()
     .pip_install(TORCH_PIN, index_url=TORCH_CPU_INDEX)
     .pip_install(DEMUCS_PIN)
-    .add_local_python_source("images", "ingest", "fallback")
+    .add_local_python_source(*LOCAL_SOURCES)
 )
 
 # 0.4.0 is Basic Pitch's latest PyPI release and its classifiers explicitly support Python 3.11.
@@ -90,5 +97,5 @@ BASIC_PITCH_NUMPY_PIN = "numpy==1.26.4"
 basic_pitch_image = (
     media_image()
     .pip_install(BASIC_PITCH_PIN, TENSORFLOW_PIN, BASIC_PITCH_NUMPY_PIN)
-    .add_local_python_source("images", "ingest", "transcribe")
+    .add_local_python_source(*LOCAL_SOURCES)
 )
