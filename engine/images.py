@@ -77,4 +77,18 @@ demucs_image = (
     .add_local_python_source("images", "ingest", "fallback")
 )
 
-basic_pitch_image = media_image()
+# 0.4.0 is Basic Pitch's latest PyPI release and its classifiers explicitly support Python 3.11.
+BASIC_PITCH_PIN = "basic-pitch==0.4.0"
+# On Linux with Python 3.11, Basic Pitch 0.4.0's published dependency markers select TensorFlow,
+# not its smaller TFLite runtime (which it selects only below Python 3.11). 2.15.0 is the newest
+# release inside Basic Pitch's required `<2.15.1` range and runs inference on CPU without a GPU.
+TENSORFLOW_PIN = "tensorflow==2.15.0"
+# TensorFlow 2.15 requires numpy <2; this newest 1.x release satisfies that bound and keeps this
+# image separate from SAM Audio, whose pinned dependency set is incompatible with TensorFlow.
+BASIC_PITCH_NUMPY_PIN = "numpy==1.26.4"
+
+basic_pitch_image = (
+    media_image()
+    .pip_install(BASIC_PITCH_PIN, TENSORFLOW_PIN, BASIC_PITCH_NUMPY_PIN)
+    .add_local_python_source("images", "ingest", "transcribe")
+)
