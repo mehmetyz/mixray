@@ -60,5 +60,21 @@ analyze_image = (
     media_image().uv_sync(groups=["analyze"]).add_local_python_source("images", "ingest", "analyze")
 )
 
-demucs_image = media_image()
+# 4.1.0 is the latest Demucs release and supports Python 3.11. It reads and writes audio through
+# `sphn` and declares `torchaudio` only under its `train` extra, so unlike earlier 4.x releases this
+# image needs no torchaudio at all and no ceiling on torch. Its `numpy<2` and `torch<2.3` bounds
+# apply only to macOS x86_64, which this Linux image is not.
+DEMUCS_PIN = "demucs==4.1.0"
+TORCH_PIN = "torch==2.15.0"
+# The CPU-only wheel, because `fallback_clip` runs without a GPU: the default CUDA build pulls the
+# whole nvidia stack and would cost gigabytes of image and cold-start time for nothing.
+TORCH_CPU_INDEX = "https://download.pytorch.org/whl/cpu"
+
+demucs_image = (
+    media_image()
+    .pip_install(TORCH_PIN, index_url=TORCH_CPU_INDEX)
+    .pip_install(DEMUCS_PIN)
+    .add_local_python_source("images", "ingest", "fallback")
+)
+
 basic_pitch_image = media_image()
