@@ -276,17 +276,19 @@ def measure(model_id: str = DEFAULT_MODEL_ID, prompt: str = DEFAULT_PROMPT) -> M
     return result
 
 
-def run_isolation(
+def run_isolation(  # noqa: PLR0913
     clip_id: str,
     iso_id: str,
     prompt: str,
     label: str,
+    *,
+    model: "SAMAudio",
+    processor: "SAMAudioProcessor",
     cache_root: Path | None = None,
 ) -> IsolationEntry:
     """Separate `prompt` from `clip_id` with SAM Audio and persist sound, rest, and peaks."""
     import json
 
-    os.environ["HF_HOME"] = f"{WEIGHTS_PATH}/huggingface"
     root = cache_root if cache_root is not None else get_cache_root()
     iso_dir = clip_dir(clip_id, root) / "isolations" / iso_id
     cached_json = iso_dir / "isolation.json"
@@ -310,11 +312,8 @@ def run_isolation(
         return entry
 
     import torch
-    from sam_audio import SAMAudio, SAMAudioProcessor
 
     mix_wav = clip_dir(clip_id, root) / "mix.wav"
-    model = SAMAudio.from_pretrained(DEFAULT_MODEL_ID, **RANKERS_OFF).eval().cuda()
-    processor = SAMAudioProcessor.from_pretrained(DEFAULT_MODEL_ID)
     batch = processor(audios=[str(mix_wav)], descriptions=[prompt]).to("cuda")
     with torch.inference_mode():
         separation = model.separate(batch, predict_spans=False, reranking_candidates=1)
