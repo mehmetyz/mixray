@@ -331,14 +331,32 @@ def _bar_index(start: float, downbeats: list[float]) -> int:
     return max(0, bisect_right(downbeats, start) - 1)
 
 
+def _fold_into_easy_register(pitch: int) -> int:
+    """Move one pitch by whole octaves until it sits in the easy register.
+
+    A single shift of the whole part cannot always succeed: measured on a transcribed piano stem,
+    the raw notes spanned 45 semitones while the easy window is 24, so seven of forty-five notes
+    stayed outside it and the keyboard, which draws C4-B5, had nothing to show them on. Folding the
+    stragglers individually keeps every note playable and preserves its pitch class, which is what
+    matters when learning the part on keys; the cost is that an extreme leap is compressed into the
+    same two octaves as the rest.
+    """
+    folded = pitch
+    while folded < EASY_LOW_MIDI:
+        folded += 12
+    while folded > EASY_HIGH_MIDI:
+        folded -= 12
+    return _clamp_midi(folded)
+
+
 def transpose_easy_part(notes: list[Note], downbeats: list[float]) -> list[ArrangedNote]:
-    """Apply the one octave-only easy-part shift and annotate every note for the keyboard UI."""
+    """Shift the part by octaves into the easy register, folding any note the shift cannot reach."""
     shift = _octave_shift(notes)
     return [
         {
             "start": note["start"],
             "end": note["end"],
-            "pitch": note["pitch"] + shift,
+            "pitch": _fold_into_easy_register(note["pitch"] + shift),
             "velocity": note["velocity"],
             "bar": _bar_index(note["start"], downbeats),
             "hand": "right",

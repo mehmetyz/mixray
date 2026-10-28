@@ -98,8 +98,15 @@ TENSORFLOW_PIN = "tensorflow==2.15.0"
 # image separate from SAM Audio, whose pinned dependency set is incompatible with TensorFlow.
 BASIC_PITCH_NUMPY_PIN = "numpy==1.26.4"
 
+# `resampy`, which basic-pitch depends on, imports `pkg_resources` without declaring setuptools,
+# so the image needs it explicitly or `import basic_pitch` fails. setuptools dropped
+# `pkg_resources` after 80.9.0 - its own warning says to "pin to Setuptools<81" - so 80.9.0 is the
+# newest version that still works. Measured Oct 28; basic-pitch caps `resampy<0.4.3`, and those
+# releases are the ones that still reach for `pkg_resources`.
+SETUPTOOLS_PIN = "setuptools==80.9.0"
+
 basic_pitch_image = (
     media_image()
-    .pip_install(BASIC_PITCH_PIN, TENSORFLOW_PIN, BASIC_PITCH_NUMPY_PIN)
+    .pip_install(BASIC_PITCH_PIN, TENSORFLOW_PIN, BASIC_PITCH_NUMPY_PIN, SETUPTOOLS_PIN)
     .add_local_python_source(*LOCAL_SOURCES)
 )
