@@ -30,7 +30,7 @@ from ingest import (
 
 if TYPE_CHECKING:
     import torch
-    from sam_audio import Batch, SAMAudio
+    from sam_audio import Batch, SAMAudio, SAMAudioProcessor
 
 LOGGER = logging.getLogger(__name__)
 
@@ -479,6 +479,18 @@ class QualityTrial(TypedDict):
     error: str
 
 
+class RerankCandidate(TypedDict):
+    """Measurements and CLAP score for one sequentially drawn candidate."""
+
+    index: int
+    seconds: float
+    peak_vram_gb: float
+    target_rms: float
+    rest_rms: float
+    reconstruction_error: float
+    clap_score: float
+
+
 def _quality_trial(
     model: "SAMAudio",
     batch: "Batch",
@@ -540,6 +552,80 @@ def _quality_row(trial: QualityTrial) -> str:
     )
 
 
+def _rerank_row(candidate: RerankCandidate) -> str:
+    """Format one sequential candidate for the benchmark report."""
+    return (
+        f"{candidate['index']:>4} {candidate['seconds']:6.1f} "
+        f"{candidate['peak_vram_gb']:7.2f} {candidate['target_rms']:8.5f} "
+        f"{candidate['rest_rms']:8.5f} {candidate['reconstruction_error']:7.3f} "
+        f"{candidate['clap_score']:8.5f}"
+    )
+
+
+def _draw_rerank_candidate(
+    model: "SAMAudio",
+    processor: "SAMAudioProcessor",
+    clip: Path,
+    prompt: str,
+    index: int,
+) -> tuple[RerankCandidate, "torch.Tensor", "torch.Tensor"]:
+    """Draw one candidate and return CPU audio so GPU memory stays flat between draws."""
+    import torch
+
+    batch = processor(audios=[str(clip)], descriptions=[prompt]).to("cuda")
+    torch.cuda.reset_peak_memory_stats()
+    started = time.perf_counter()
+    with torch.inference_mode():
+        separation = model.separate(batch, predict_spans=True, reranking_candidates=1)
+    elapsed = time.perf_counter() - started
+    peak_vram_gb = torch.cuda.max_memory_allocated() / GIGABYTE
+
+    target_item = separation.target[0] if isinstance(separation.target, list) else separation.target
+    residual_item = (
+        separation.residual[0] if isinstance(separation.residual, list) else separation.residual
+    )
+    target = target_item.detach().float().cpu()
+    residual = residual_item.detach().float().cpu()
+    mix = batch.audios.detach().float().flatten().cpu()
+    mix_rms = max(_rms(mix), 1e-9)
+    result: RerankCandidate = {
+        "index": index,
+        "seconds": round(elapsed, 1),
+        "peak_vram_gb": round(peak_vram_gb, 3),
+        "target_rms": round(_rms(target), 5),
+        "rest_rms": round(_rms(residual), 5),
+        "reconstruction_error": round(_rms(mix - (target + residual)) / mix_rms, 5),
+        "clap_score": 0.0,
+    }
+    del separation, target_item, residual_item, batch
+    torch.cuda.empty_cache()
+    return result, target, residual
+
+
+def _score_rerank_candidates(
+    model: "SAMAudio",
+    prompt: str,
+    sample_rate: int,
+    targets: list["torch.Tensor"],
+    results: list[RerankCandidate],
+) -> tuple[RerankCandidate, RerankCandidate]:
+    """Score all CPU candidates in one CLAP call and return the best and worst results."""
+    import torch
+
+    stacked_targets = torch.stack(targets).to("cuda")
+    with torch.inference_mode():
+        scores = model.text_ranker(
+            extracted_audio=[stacked_targets], descriptions=[prompt], sample_rate=sample_rate
+        )
+    score_values = scores[0].detach().float().cpu()
+    for result, score in zip(results, score_values, strict=True):
+        result["clap_score"] = float(score)
+    return (
+        max(results, key=lambda result: result["clap_score"]),
+        min(results, key=lambda result: result["clap_score"]),
+    )
+
+
 @app.function(
     image=sam_audio_image,
     gpu=MEASURE_GPU,
@@ -596,4 +682,92 @@ def quality(model_id: str = DEFAULT_MODEL_ID, prompt: str = QUALITY_PROMPT) -> s
 
     WEIGHTS_VOLUME.commit()
     say(f"wrote WAVs to {output_dir}")
+    return "\n".join(lines)
+
+
+@app.function(
+    image=sam_audio_image,
+    gpu=MEASURE_GPU,
+    volumes={WEIGHTS_PATH: WEIGHTS_VOLUME},
+    secrets=[HF_SECRET],
+    timeout=MEASURE_TIMEOUT_SECONDS,
+)
+def rerank(
+    model_id: str = DEFAULT_MODEL_ID,
+    prompt: str = QUALITY_PROMPT,
+    candidates: int = 4,
+) -> str:
+    """Draw candidates one at a time and use CLAP to select the best text match.
+
+    Keeping every completed candidate on the CPU prevents their activations from accumulating on
+    a 24 GB GPU; only the small stacked outputs return to the GPU for one CLAP scoring pass.
+    """
+    os.environ["HF_HOME"] = f"{WEIGHTS_PATH}/huggingface"
+
+    import torch
+    from sam_audio import SAMAudio, SAMAudioProcessor
+
+    logging.basicConfig(level=logging.INFO)
+    lines: list[str] = []
+
+    def say(text: str) -> None:
+        lines.append(text)
+        LOGGER.info(text)
+
+    if candidates < 1:
+        say("candidates must be at least 1")
+        return "\n".join(lines)
+
+    output_dir = Path(WEIGHTS_PATH) / "measure"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    clip = output_dir / "clip.wav"
+    if not clip.exists():
+        subprocess.run(_clip_argv(str(clip)), check=True)
+
+    properties = torch.cuda.get_device_properties(0)
+    started = time.perf_counter()
+    model = SAMAudio.from_pretrained(model_id, **_quality_load_kwargs()).eval().cuda()
+    processor = SAMAudioProcessor.from_pretrained(model_id)
+    load_seconds = time.perf_counter() - started
+    sample_rate = int(processor.audio_sampling_rate)
+    stem = model_id.rsplit("/", 1)[-1]
+
+    say(f"{stem} on {properties.name} ({properties.total_memory / GIGABYTE:.1f} GB)")
+    say(f"warm load with CLAP text_ranker and the default span predictor: {load_seconds:.1f}s")
+    say(f"prompt: {prompt!r}")
+
+    results: list[RerankCandidate] = []
+    targets: list[torch.Tensor] = []
+    residuals: list[torch.Tensor] = []
+    for index in range(candidates):
+        say(f"drawing candidate {index + 1}/{candidates}")
+        result, target, residual = _draw_rerank_candidate(model, processor, clip, prompt, index + 1)
+        results.append(result)
+        targets.append(target)
+        residuals.append(residual)
+
+    winner, worst = _score_rerank_candidates(model, prompt, sample_rate, targets, results)
+    winner_index = winner["index"]
+    score_spread = winner["clap_score"] - worst["clap_score"]
+
+    say(f"{'cand':>4} {'secs':>6} {'peakGB':>7} {'target':>8} {'rest':>8} {'recon':>7} {'CLAP':>8}")
+    for result in results:
+        say(_rerank_row(result))
+    say(f"CLAP winner: candidate {winner_index}")
+    say(
+        f"CLAP spread: best {winner['clap_score']:.5f}, worst {worst['clap_score']:.5f}, "
+        f"difference {score_spread:.5f}"
+    )
+
+    for result, target, residual in zip(results, targets, residuals, strict=True):
+        outcome = "winner" if result["index"] == winner_index else "candidate"
+        name = (
+            f"{stem}__{prompt.replace(' ', '_')}__candidate{result['index']:02d}"
+            f"__clap{result['clap_score']:+.5f}__{outcome}"
+        )
+        _save_pcm16_wav(output_dir / f"{name}__sound.wav", target, sample_rate)
+        _save_pcm16_wav(output_dir / f"{name}__rest.wav", residual, sample_rate)
+
+    WEIGHTS_VOLUME.commit()
+    say(f"wrote {2 * candidates} WAVs to {output_dir}")
     return "\n".join(lines)
