@@ -30,6 +30,7 @@ from ingest import (
 
 if TYPE_CHECKING:
     import torch
+    from sam_audio import Batch, SAMAudio
 
 LOGGER = logging.getLogger(__name__)
 
@@ -439,4 +440,160 @@ def sweep(model_id: str = DEFAULT_MODEL_ID) -> str:
 
     WEIGHTS_VOLUME.commit()
     say(f"wrote {2 * len(SWEEP_PROMPTS)} files to {output_dir}")
+    return "\n".join(lines)
+
+
+QUALITY_PROMPT = "synth chord"
+# The README calls `predict_spans=True` with `reranking_candidates=8` "better results at the cost
+# of latency and memory", and the subjective scores it publishes put `sam-audio-base` *below*
+# `-small` on music (3.87 vs 4.11), so candidate reranking is the lever worth measuring, not model
+# size. The ladder climbs so an out-of-memory failure at the top still leaves every cheaper rung
+# measured: each candidate runs the ODE on its own copy of the clip.
+QUALITY_LADDER: list[tuple[bool, int]] = [(False, 1), (True, 1), (True, 2), (True, 4), (True, 8)]
+
+
+def _quality_load_kwargs() -> dict[str, object]:
+    """Load options for the quality ladder, as a fresh dict per call.
+
+    `reranking_candidates > 1` scores candidates with `text_ranker` for text prompts and with
+    `visual_ranker` only when a masked video is present (`sam_audio/model/model.py` lines 319-334),
+    so CLAP is the only ranker this needs and ImageBind never has to be importable. The released
+    config leaves `text_ranker` at None (`sam_audio/model/config.py` line 215), which makes
+    reranking a silent no-op until it is passed in. `span_predictor` keeps its default so
+    `predict_spans=True` has something to call. The dict is rebuilt every call because
+    `parse_ranker_config` pops `kind` out of the mapping it is handed.
+    """
+    return {"visual_ranker": None, "text_ranker": {"kind": "clap"}}
+
+
+class QualityTrial(TypedDict):
+    """One rung of the quality ladder. `error` is empty when the separation finished."""
+
+    predict_spans: bool
+    candidates: int
+    seconds: float
+    peak_vram_gb: float
+    sound_rms: float
+    rest_rms: float
+    reconstruction_error: float
+    error: str
+
+
+def _quality_trial(
+    model: "SAMAudio",
+    batch: "Batch",
+    predict_spans: bool,
+    candidates: int,
+) -> tuple[QualityTrial, "torch.Tensor | None", "torch.Tensor | None"]:
+    """Run one rung and measure it.
+
+    A rung too big for the card reports the error instead of raising, so the ladder continues.
+    """
+    import torch
+
+    trial: QualityTrial = {
+        "predict_spans": predict_spans,
+        "candidates": candidates,
+        "seconds": 0.0,
+        "peak_vram_gb": 0.0,
+        "sound_rms": 0.0,
+        "rest_rms": 0.0,
+        "reconstruction_error": 0.0,
+        "error": "",
+    }
+    torch.cuda.reset_peak_memory_stats()
+    started = time.perf_counter()
+    try:
+        with torch.inference_mode():
+            separation = model.separate(
+                batch, predict_spans=predict_spans, reranking_candidates=candidates
+            )
+    except Exception as error:  # a rung that does not fit must not end the ladder
+        trial["seconds"] = round(time.perf_counter() - started, 1)
+        trial["error"] = f"{type(error).__name__}: {error}"
+        torch.cuda.empty_cache()
+        return trial, None, None
+
+    trial["seconds"] = round(time.perf_counter() - started, 1)
+    trial["peak_vram_gb"] = round(torch.cuda.max_memory_allocated() / GIGABYTE, 3)
+
+    mix = batch.audios.detach().float().flatten().cpu()
+    target = separation.target[0].detach().float().cpu()
+    residual = separation.residual[0].detach().float().cpu()
+    mix_rms = max(_rms(mix), 1e-9)
+    trial["sound_rms"] = round(_rms(target), 5)
+    trial["rest_rms"] = round(_rms(residual), 5)
+    trial["reconstruction_error"] = round(_rms(mix - (target + residual)) / mix_rms, 5)
+    return trial, target, residual
+
+
+def _quality_row(trial: QualityTrial) -> str:
+    if trial["error"]:
+        return (
+            f"{trial['predict_spans']!s:>5} {trial['candidates']:>2} "
+            f"{trial['seconds']:6.1f} FAILED {trial['error'][:70]}"
+        )
+    return (
+        f"{trial['predict_spans']!s:>5} {trial['candidates']:>2} {trial['seconds']:6.1f} "
+        f"{trial['peak_vram_gb']:7.2f} {trial['sound_rms']:8.5f} "
+        f"{trial['rest_rms']:8.5f} {trial['reconstruction_error']:7.3f}"
+    )
+
+
+@app.function(
+    image=sam_audio_image,
+    gpu=MEASURE_GPU,
+    volumes={WEIGHTS_PATH: WEIGHTS_VOLUME},
+    secrets=[HF_SECRET],
+    timeout=MEASURE_TIMEOUT_SECONDS,
+)
+def quality(model_id: str = DEFAULT_MODEL_ID, prompt: str = QUALITY_PROMPT) -> str:
+    """Separate one clip at rising candidate counts and report cost and output per rung.
+
+    Answers whether span prediction and candidate reranking are worth their latency, and how many
+    candidates a 24 GB card can hold. Every rung writes its own pair of WAVs for A/B listening.
+    """
+    os.environ["HF_HOME"] = f"{WEIGHTS_PATH}/huggingface"
+
+    import torch
+    from sam_audio import SAMAudio, SAMAudioProcessor
+
+    logging.basicConfig(level=logging.INFO)
+    lines: list[str] = []
+
+    def say(text: str) -> None:
+        lines.append(text)
+        LOGGER.info(text)
+
+    output_dir = Path(WEIGHTS_PATH) / "measure"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    clip = output_dir / "clip.wav"
+    if not clip.exists():
+        subprocess.run(_clip_argv(str(clip)), check=True)
+
+    properties = torch.cuda.get_device_properties(0)
+    started = time.perf_counter()
+    model = SAMAudio.from_pretrained(model_id, **_quality_load_kwargs()).eval().cuda()
+    processor = SAMAudioProcessor.from_pretrained(model_id)
+    sample_rate = int(processor.audio_sampling_rate)
+    stem = model_id.rsplit("/", 1)[-1]
+
+    say(f"{stem} on {properties.name} ({properties.total_memory / GIGABYTE:.1f} GB)")
+    load_seconds = time.perf_counter() - started
+    say(f"loaded clap text_ranker and the default span predictor in {load_seconds:.1f}s")
+    say(f"prompt: {prompt!r}")
+    say(f"{'spans':>5} {'k':>2} {'secs':>6} {'peakGB':>7} {'target':>8} {'rest':>8} {'recon':>7}")
+
+    for predict_spans, candidates in QUALITY_LADDER:
+        batch = processor(audios=[str(clip)], descriptions=[prompt]).to("cuda")
+        trial, target, residual = _quality_trial(model, batch, predict_spans, candidates)
+        say(_quality_row(trial))
+        if target is None or residual is None:
+            continue
+        name = f"{stem}__{prompt.replace(' ', '_')}__spans{int(predict_spans)}__k{candidates}"
+        _save_pcm16_wav(output_dir / f"{name}__sound.wav", target, sample_rate)
+        _save_pcm16_wav(output_dir / f"{name}__rest.wav", residual, sample_rate)
+
+    WEIGHTS_VOLUME.commit()
+    say(f"wrote WAVs to {output_dir}")
     return "\n".join(lines)
