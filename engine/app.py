@@ -7,7 +7,8 @@ from typing import TYPE_CHECKING
 
 import modal
 
-from images import sam_audio_image, web_image
+from analyze import apply_analysis
+from images import analyze_image, sam_audio_image, web_image
 from ingest import DEFAULT_CACHE_PATH, cleanup_expired_clips, write_job
 from isolate import HF_SECRET, MEASURE_GPU, WEIGHTS_PATH, WEIGHTS_VOLUME, run_isolation
 
@@ -18,6 +19,7 @@ LOGGER = logging.getLogger(__name__)
 
 WEB_TIMEOUT_SECONDS = 120
 ISOLATE_TIMEOUT_SECONDS = 300
+ANALYZE_TIMEOUT_SECONDS = 300
 CLEANUP_TIMEOUT_SECONDS = 300
 MAX_ISOLATE_CONTAINERS = 2
 
@@ -59,6 +61,36 @@ def isolate_worker(clip_id: str, iso_id: str, prompt: str, label: str) -> None:
 
 
 @app.function(
+    image=analyze_image,
+    volumes={DEFAULT_CACHE_PATH: CACHE_VOLUME},
+    timeout=ANALYZE_TIMEOUT_SECONDS,
+    gpu=None,
+)
+def analyze_worker(clip_id: str) -> None:
+    """Apply CPU clip analysis and finish the job without blocking playback."""
+    logging.basicConfig(level=logging.INFO)
+    CACHE_VOLUME.reload()
+    try:
+        apply_analysis(clip_id)
+    except Exception:
+        # Failure only degrades harmony view; the playable, isolatable clip never blocks.
+        LOGGER.exception("analysis failed for clip=%s", clip_id)
+    finally:
+        write_job(
+            {
+                "id": clip_id,
+                "status": "done",
+                "stage": "done",
+                "trackmap_url": f"/files/clips/{clip_id}/trackmap.json",
+                "isolation_id": None,
+                "cached": False,
+                "error": None,
+            }
+        )
+        CACHE_VOLUME.commit()
+
+
+@app.function(
     image=web_image,
     volumes={DEFAULT_CACHE_PATH: CACHE_VOLUME},
     schedule=modal.Period(days=1),
@@ -89,6 +121,7 @@ def api() -> FastAPI:
 
     return create_api(
         spawn_isolation=isolate_worker.spawn,
+        spawn_analysis=analyze_worker.spawn,
         commit_volume=CACHE_VOLUME.commit,
         reload_volume=CACHE_VOLUME.reload,
     )

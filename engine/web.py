@@ -56,6 +56,7 @@ MEDIA_TYPES: dict[str, str] = {
 }
 
 IsolationSpawner = Callable[[str, str, str, str], object]
+AnalysisSpawner = Callable[[str], object]
 VolumeHook = Callable[[], object]
 
 
@@ -71,6 +72,7 @@ class RuntimeHooks(TypedDict):
     """Modal volume and worker hooks injected into the FastAPI routes."""
 
     spawn_isolation: IsolationSpawner | None
+    spawn_analysis: AnalysisSpawner | None
     commit: Callable[[], None]
     reload: Callable[[], None]
 
@@ -273,6 +275,26 @@ def _start_or_reuse_isolation(
     return _to_job_response(running_record)
 
 
+def _start_analysis(record: JobRecord, hooks: RuntimeHooks) -> JobRecord:
+    """Start analysis for a fresh clip and persist its running job state."""
+    analysis_spawner = hooks["spawn_analysis"]
+    if record["cached"] or analysis_spawner is None:
+        return record
+    analyzing_record: JobRecord = {
+        "id": record["id"],
+        "status": "running",
+        "stage": "analyzing",
+        "trackmap_url": record["trackmap_url"],
+        "isolation_id": record["isolation_id"],
+        "cached": False,
+        "error": None,
+    }
+    updated_record = write_job(analyzing_record)
+    hooks["commit"]()
+    analysis_spawner(updated_record["id"])
+    return updated_record
+
+
 def get_health() -> HealthResponse:
     """Return the engine health status."""
     return HealthResponse(ok=True)
@@ -280,6 +302,7 @@ def get_health() -> HealthResponse:
 
 def create_api(
     spawn_isolation: IsolationSpawner | None = None,
+    spawn_analysis: AnalysisSpawner | None = None,
     commit_volume: VolumeHook | None = None,
     reload_volume: VolumeHook | None = None,
 ) -> FastAPI:
@@ -303,6 +326,7 @@ def create_api(
 
     hooks: RuntimeHooks = {
         "spawn_isolation": spawn_isolation,
+        "spawn_analysis": spawn_analysis,
         "commit": _commit,
         "reload": _reload,
     }
@@ -324,6 +348,7 @@ def create_api(
             }
             record = ingest_upload(params)
             _commit()
+            record = _start_analysis(record, hooks)
             return _to_job_response(record)
         except IngestError as error:
             raise HTTPException(status_code=error.status_code, detail=str(error)) from error
