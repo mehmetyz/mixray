@@ -73,6 +73,10 @@ analyze_image = media_image().uv_sync(groups=["analyze"]).add_local_python_sourc
 # apply only to macOS x86_64, which this Linux image is not.
 DEMUCS_PIN = "demucs==4.1.0"
 TORCH_PIN = "torch==2.15.0"
+# Demucs needs numpy but does not declare it: `demucs/transformer.py` imports it unconditionally
+# while the package only requires it on macOS x86_64, so a pip install on Linux succeeds and then
+# dies on `import demucs`. Measured Oct 28 against 4.1.0, which runs correctly on numpy 2.4.6.
+DEMUCS_NUMPY_PIN = "numpy==2.4.6"
 # The CPU-only wheel, because `fallback_clip` runs without a GPU: the default CUDA build pulls the
 # whole nvidia stack and would cost gigabytes of image and cold-start time for nothing.
 TORCH_CPU_INDEX = "https://download.pytorch.org/whl/cpu"
@@ -80,7 +84,7 @@ TORCH_CPU_INDEX = "https://download.pytorch.org/whl/cpu"
 demucs_image = (
     media_image()
     .pip_install(TORCH_PIN, index_url=TORCH_CPU_INDEX)
-    .pip_install(DEMUCS_PIN)
+    .pip_install(DEMUCS_PIN, DEMUCS_NUMPY_PIN)
     .add_local_python_source(*LOCAL_SOURCES)
 )
 
