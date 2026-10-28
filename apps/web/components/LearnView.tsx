@@ -5,6 +5,13 @@ import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } fr
 import { drawLearnPianoRoll, type PlayedNoteDot } from "@/lib/studio/canvas";
 import { midiToNoteName } from "@/lib/studio/format";
 import {
+  scorePerformance,
+  type ScoreBar,
+  type ScoreInput,
+  type ScoreNote,
+  type ScoreResult,
+} from "@/lib/score";
+import {
   lookupShortcutKey,
   playMonitorNote,
   subscribeWebMidi,
@@ -16,6 +23,10 @@ import { useStudio, type HandFilter } from "./StudioContext";
 import { TimelineRuler } from "./StudioShell";
 
 type DifficultyLevel = "easy" | "intermediate";
+
+type ProblemBarDetails = {
+  reason: string;
+};
 
 const WHITE_KEYS = TWO_OCTAVE_KEYS.filter((k) => !k.isSharp);
 
@@ -48,6 +59,52 @@ function filterArrangementNotes(
   });
 }
 
+function toScoreReferenceNotes(notes: Note[]): ScoreNote[] {
+  return notes.map((note) => ({ onsetSeconds: note.start, pitch: note.pitch }));
+}
+
+function toScorePlayedNotes(notes: PlayedNoteDot[]): ScoreNote[] {
+  return notes.map((note) => ({ onsetSeconds: note.time, pitch: note.pitch }));
+}
+
+function formatPercent(rate: number): string {
+  return `${Math.round(rate * 100)}%`;
+}
+
+function formatOffset(offsetMs: number): string {
+  const rounded = Math.round(offsetMs);
+  return `${rounded >= 0 ? "+" : ""}${rounded} ms ${rounded >= 0 ? "late" : "early"}`;
+}
+
+function describeProblemBar(bar: ScoreBar): ProblemBarDetails {
+  if (bar.wrongPitch > 0) {
+    return { reason: `${bar.wrongPitch} wrong pitch${bar.wrongPitch === 1 ? "" : "es"}` };
+  }
+  if (bar.missed > 0) {
+    return { reason: `${bar.missed} missed note${bar.missed === 1 ? "" : "s"}` };
+  }
+  if (bar.meanOffsetMs !== null && Math.abs(bar.meanOffsetMs) > 50) {
+    return { reason: formatOffset(bar.meanOffsetMs) };
+  }
+  if (bar.extra > 0) {
+    return { reason: `${bar.extra} extra note${bar.extra === 1 ? "" : "s"}` };
+  }
+  return { reason: `${formatPercent(bar.onTimeRate)} on time` };
+}
+
+function isWorseProblemBar(candidate: ScoreBar, current: ScoreBar): boolean {
+  if (candidate.onTimeRate !== current.onTimeRate) {
+    return candidate.onTimeRate < current.onTimeRate;
+  }
+  if (candidate.hitRate !== current.hitRate) {
+    return candidate.hitRate < current.hitRate;
+  }
+  const candidateErrors = candidate.missed + candidate.wrongPitch + candidate.extra;
+  const currentErrors = current.missed + current.wrongPitch + current.extra;
+  if (candidateErrors !== currentErrors) return candidateErrors > currentErrors;
+  return candidate.index < current.index;
+}
+
 export function LearnView() {
   const {
     clipId,
@@ -73,7 +130,6 @@ export function LearnView() {
   const [selectedMidiId, setSelectedMidiId] = useState<string>("qwerty");
   const [playedDots, setPlayedDots] = useState<PlayedNoteDot[]>([]);
   const [lastPlayedLabel, setLastPlayedLabel] = useState<string>("Ready · press A–L");
-  const [barScores, setBarScores] = useState<number[]>([92, 88, 94, 90, 91, 86, 89, 93]);
   const [coachFeedback, setCoachFeedback] = useState<string>(
     "Play along on A–L or a MIDI keyboard. Coach measures onset timing (±50 ms window) and pitch per bar.",
   );
@@ -105,28 +161,28 @@ export function LearnView() {
     return active;
   }, [activeNotes, currentTime]);
 
+  const scoreResult = useMemo<ScoreResult>(() => {
+    const scoreInput: ScoreInput = {
+      referenceNotes: toScoreReferenceNotes(activeNotes),
+      playedNotes: toScorePlayedNotes(playedDots),
+      downbeats: trackMap.downbeats,
+      durationSeconds: duration,
+    };
+    return scorePerformance(scoreInput);
+  }, [activeNotes, playedDots, trackMap.downbeats, duration]);
+
   const handleUserNote = useCallback(
     (midi: number) => {
       playMonitorNote(midi);
       const now = currentTimeRef.current;
-      let nearestOffsetMs = 0;
-      let bestDist = Infinity;
-
-      for (const ref of activeNotes) {
-        const dist = Math.abs(now - ref.start);
-        if (dist < bestDist) {
-          bestDist = dist;
-          nearestOffsetMs = Math.round((now - ref.start) * 1000);
-        }
-      }
 
       setLastPlayedLabel(`${midiToNoteName(midi)} · MIDI ${midi}`);
       setPlayedDots((prev) => [
         ...prev.slice(-48),
-        { time: now, pitch: midi, offsetMs: nearestOffsetMs },
+        { time: now, pitch: midi, offsetMs: 0 },
       ]);
     },
-    [activeNotes],
+    [],
   );
 
   useEffect(() => {
@@ -172,64 +228,32 @@ export function LearnView() {
   }, [activeNotes, playedDots, currentTime, duration, trackMap.downbeats, loopRange, problemBar]);
 
   const analyzeLastTake = () => {
-    const barCount = Math.min(8, Math.max(1, trackMap.downbeats.length));
-    if (playedDots.length >= 3) {
-      const nextScores: number[] = [];
-      let worstBar = 1;
-      let worstScore = 100;
-      let worstOffset = 0;
-
-      for (let b = 0; b < barCount; b += 1) {
-        const start = trackMap.downbeats[b] ?? 0;
-        const end = trackMap.downbeats[b + 1] ?? duration;
-        const inBar = playedDots.filter((dot) => dot.time >= start && dot.time < end);
-        if (inBar.length === 0) {
-          nextScores.push(85);
-          continue;
-        }
-        const meanAbs =
-          inBar.reduce((acc, item) => acc + Math.abs(item.offsetMs), 0) / inBar.length;
-        const score = Math.max(35, Math.min(99, Math.round(100 - meanAbs * 0.45)));
-        nextScores.push(score);
-        if (score < worstScore) {
-          worstScore = score;
-          worstBar = b + 1;
-          worstOffset = Math.round(
-            inBar.reduce((acc, item) => acc + item.offsetMs, 0) / inBar.length,
-          );
-        }
-      }
-
-      setBarScores(nextScores);
-      const sign = worstOffset >= 0 ? "+" : "";
-      const reason = `${sign}${worstOffset}ms ${worstOffset >= 0 ? "late" : "early"}`;
-      applyCoachAction({ name: "mark_problem_bar", args: { bar: worstBar, reason } });
-      applyCoachAction({
-        name: "set_loop",
-        args: { start_bar: Math.max(1, worstBar - 1), end_bar: Math.min(16, worstBar + 2) },
-      });
-      applyCoachAction({ name: "set_tempo", args: { percent: 75 } });
-      setCoachFeedback(
-        `Bar ${worstBar} averaged ${reason}. Looped bars ${Math.max(1, worstBar - 1)}–${Math.min(16, worstBar + 2)} at 75% tempo so your hand settles on the beat.`,
-      );
+    const attemptedBars = scoreResult.bars.filter((bar) => bar.attempted);
+    const firstAttemptedBar = attemptedBars[0];
+    if (firstAttemptedBar === undefined) {
+      setCoachFeedback("No take recorded yet. Play a bar on A–L or a MIDI keyboard, then analyze it.");
       return;
     }
 
-    // Deterministic take simulation when clicking Analyze before recording MIDI notes
-    const targetBar = Math.min(9, Math.max(1, trackMap.downbeats.length > 8 ? 9 : 2));
-    setBarScores([93, 90, 92, 89, 91, 48, 86, 94]);
+    let problem = firstAttemptedBar;
+    for (const bar of attemptedBars.slice(1)) {
+      if (isWorseProblemBar(bar, problem)) problem = bar;
+    }
+
+    const problemDetails = describeProblemBar(problem);
+    const problemBarNumber = problem.index + 1;
+    const loopStart = Math.max(1, problemBarNumber - 1);
+    const loopEnd = Math.min(16, problemBarNumber + 2);
     applyCoachAction({
       name: "mark_problem_bar",
-      args: { bar: targetBar, reason: "+74ms late entry" },
+      args: { bar: problemBarNumber, reason: problemDetails.reason },
     });
-    applyCoachAction({
-      name: "set_loop",
-      args: { start_bar: Math.max(1, targetBar - 1), end_bar: Math.min(16, targetBar + 2) },
-    });
+    applyCoachAction({ name: "set_loop", args: { start_bar: loopStart, end_bar: loopEnd } });
     applyCoachAction({ name: "set_tempo", args: { percent: 75 } });
-    seek(trackMap.downbeats[Math.max(0, targetBar - 2)] ?? 0);
+    const offsetDescription =
+      problem.meanOffsetMs === null ? "no matched notes" : `mean ${formatOffset(problem.meanOffsetMs)}`;
     setCoachFeedback(
-      `Bar ${targetBar} entered +74 ms late on the chord change. Looped bars ${Math.max(1, targetBar - 1)}–${Math.min(16, targetBar + 2)} at 75% rate.`,
+      `Bar ${problemBarNumber}: ${formatPercent(problem.hitRate)} hits, ${formatPercent(problem.onTimeRate)} on time, ${offsetDescription}, ${problemDetails.reason}. Looped bars ${loopStart}–${loopEnd} at 75% tempo.`,
     );
   };
 
@@ -511,24 +535,42 @@ export function LearnView() {
           <p className="eyebrow">Accuracy per bar</p>
           <div
             role="img"
-            aria-label="Per-bar timing and pitch accuracy chart"
-            className="grid h-16 grid-cols-8 items-end gap-1.5 rounded-well border border-line bg-inset p-2"
+            aria-label="Per-bar hit and on-time rate chart; bars without played notes are not played"
+            className="grid h-20 grid-cols-8 items-end gap-1.5 rounded-well border border-line bg-inset p-2"
           >
-            {barScores.map((score, idx) => {
-              const isProblem = problemBar !== null && problemBar.bar === idx + 1;
+            {scoreResult.bars.slice(0, 8).map((bar) => {
+              const isProblem = problemBar !== null && problemBar.bar === bar.index + 1;
+              const rateLabel = bar.attempted
+                ? `${formatPercent(bar.hitRate)} / ${formatPercent(bar.onTimeRate)}`
+                : "not played";
               return (
-                <div key={idx} className="flex h-full flex-col items-center justify-end gap-1">
+                <div
+                  key={bar.index}
+                  title={`Bar ${bar.index + 1}: ${rateLabel}`}
+                  className="flex h-full flex-col items-center justify-end gap-1"
+                >
                   <div
-                    style={{ height: `${Math.max(16, Math.round(score * 0.72))}%` }}
-                    className={`w-full rounded-xs ${isProblem ? "bg-you" : "bg-inactive"}`}
+                    style={{ height: `${bar.attempted ? Math.max(16, Math.round(bar.hitRate * 72)) : 16}%` }}
+                    className={`w-full rounded-xs ${
+                      bar.attempted
+                        ? isProblem
+                          ? "bg-you"
+                          : "bg-inactive"
+                        : "border border-dashed border-line-2 bg-transparent"
+                    }`}
                   />
-                  <span className={`mono-num text-[10px] ${isProblem ? "text-you" : "text-muted"}`}>
-                    {idx + 1}
+                  <span
+                    className={`mono-num text-center text-[8px] leading-none ${
+                      isProblem ? "text-you" : "text-muted"
+                    }`}
+                  >
+                    {bar.index + 1} · {rateLabel}
                   </span>
                 </div>
               );
             })}
           </div>
+          <p className="mono-num text-[10px] text-muted">Bar height: hits · label: hits / on time</p>
         </div>
 
         <div className="mt-auto border-t border-line pt-3">
