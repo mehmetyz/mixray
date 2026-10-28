@@ -9,6 +9,13 @@ dependencies = [
 ]
 
 [dependency-groups]
+# librosa 1.0.0 requires Python >= 3.12 and the engine is pinned to 3.11 for Basic Pitch, so this
+# is the newest release that still supports 3.11. It lives in its own group because only the
+# `analyze` image needs it; the API container should not pay its import cost on every cold start.
+analyze = [
+  "librosa==0.11.0",
+  "soundfile==0.14.0",
+]
 dev = [
   "mypy==2.4.0",
   "ruff==0.17.2",
@@ -33,5 +40,5 @@ strict = true
 warn_unreachable = true
 
 [[tool.mypy.overrides]]
-module = ["torch.*", "torchaudio.*", "sam_audio.*"]
+module = ["torch.*", "torchaudio.*", "sam_audio.*", "librosa.*"]
 ignore_missing_imports = true

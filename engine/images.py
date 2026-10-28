@@ -53,5 +53,12 @@ sam_audio_image = (
     .add_local_python_source("images", "ingest", "isolate", "web")
 )
 
+# `analyze` is pure signal processing: no model, no GPU. Its dependencies come from the `analyze`
+# group in pyproject.toml so the librosa pin lives in exactly one place, and it gets its own image
+# so the API container does not pay librosa's import cost on every cold start.
+analyze_image = (
+    media_image().uv_sync(groups=["analyze"]).add_local_python_source("images", "ingest", "analyze")
+)
+
 demucs_image = media_image()
 basic_pitch_image = media_image()

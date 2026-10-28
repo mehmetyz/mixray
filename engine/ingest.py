@@ -563,19 +563,31 @@ def ingest_upload(params: IngestParams, cache_root: Path | None = None) -> JobRe
     return write_job(job, root)
 
 
+def trackmap_path(clip_id: str, cache_root: Path | None = None) -> Path:
+    root = cache_root if cache_root is not None else get_cache_root()
+    return clip_dir(clip_id, root) / "trackmap.json"
+
+
+def write_trackmap(
+    clip_id: str, trackmap: dict[str, object], cache_root: Path | None = None
+) -> None:
+    """Replace a clip's trackmap in one step, so a reader never sees a half-written file."""
+    path = trackmap_path(clip_id, cache_root)
+    tmp_path = path.with_suffix(".json.tmp")
+    tmp_path.write_text(json.dumps(trackmap), encoding="utf-8")
+    tmp_path.replace(path)
+
+
 def append_isolation_to_trackmap(
     clip_id: str, entry: IsolationEntry, cache_root: Path | None = None
 ) -> None:
     """Insert or replace an isolation entry inside the clip's trackmap.json."""
-    root = cache_root if cache_root is not None else get_cache_root()
-    trackmap_path = clip_dir(clip_id, root) / "trackmap.json"
-    trackmap = json.loads(trackmap_path.read_text(encoding="utf-8"))
+    path = trackmap_path(clip_id, cache_root)
+    trackmap = json.loads(path.read_text(encoding="utf-8"))
     isolations = [item for item in trackmap.get("isolations", []) if item.get("id") != entry["id"]]
     isolations.append(entry)
     trackmap["isolations"] = isolations
-    tmp_path = trackmap_path.with_suffix(".json.tmp")
-    tmp_path.write_text(json.dumps(trackmap), encoding="utf-8")
-    tmp_path.replace(trackmap_path)
+    write_trackmap(clip_id, trackmap, cache_root)
 
 
 def cleanup_expired_clips(
