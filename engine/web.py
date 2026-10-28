@@ -13,7 +13,7 @@ from typing import TypedDict
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel, Field
 
 from ingest import (
@@ -59,7 +59,7 @@ MEDIA_TYPES: dict[str, str] = {
 IsolationSpawner = Callable[[str, str, str, str], object]
 AnalysisSpawner = Callable[[str], object]
 VolumeHook = Callable[[], object]
-FileRoute = Callable[[str], FileResponse | JSONResponse]
+FileRoute = Callable[[str], Response]
 
 
 class MultipartUpload(TypedDict):
@@ -226,7 +226,7 @@ def _trackmap_clip_id(file_path: str) -> str | None:
 def _file_route(reload_volume: Callable[[], None]) -> FileRoute:
     """Build the file route, serving TrackMaps from their assembled sidecars."""
 
-    def get_file(file_path: str) -> FileResponse | JSONResponse:
+    def get_file(file_path: str) -> Response:
         root = get_cache_root().resolve()
         candidate = (root / file_path).resolve()
         if not candidate.is_relative_to(root):
@@ -358,7 +358,7 @@ def create_api(
         CORSMiddleware,
         allow_origins=_cors_origins(),
         allow_credentials=False,
-        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_methods=["GET", "POST", "OPTIONS", "HEAD"],
         allow_headers=["*"],
     )
 
@@ -417,5 +417,10 @@ def create_api(
         "/jobs/{job_id}/isolate", post_isolate, methods=["POST"], response_model=JobResponse
     )
     api.add_api_route("/jobs/{job_id}", get_job, methods=["GET"], response_model=JobResponse)
-    api.add_api_route("/files/{file_path:path}", _file_route(_reload), methods=["GET"])
+    api.add_api_route(
+        "/files/{file_path:path}",
+        _file_route(_reload),
+        methods=["GET", "HEAD"],
+        response_class=Response,
+    )
     return api

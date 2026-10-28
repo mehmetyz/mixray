@@ -12,11 +12,15 @@ import {
   type ScoreResult,
 } from "@/lib/score";
 import {
+  connectWebMidi,
+  createNoteStream,
+  type MidiDevice,
+  type NoteStream,
+} from "@/lib/midi";
+import {
   lookupShortcutKey,
   playMonitorNote,
-  subscribeWebMidi,
   TWO_OCTAVE_KEYS,
-  type MidiDeviceOption,
 } from "@/lib/studio/synth-key";
 import type { Note } from "@/lib/trackmap/trackmap.generated";
 import { useStudio, type HandFilter } from "./StudioContext";
@@ -126,7 +130,7 @@ export function LearnView() {
   } = useStudio();
 
   const [level, setLevel] = useState<DifficultyLevel>("easy");
-  const [midiDevices, setMidiDevices] = useState<MidiDeviceOption[]>([]);
+  const [midiDevices, setMidiDevices] = useState<MidiDevice[]>([]);
   const [selectedMidiId, setSelectedMidiId] = useState<string>("qwerty");
   const [playedDots, setPlayedDots] = useState<PlayedNoteDot[]>([]);
   const [lastPlayedLabel, setLastPlayedLabel] = useState<string>("Ready · press A–L");
@@ -141,6 +145,8 @@ export function LearnView() {
   useEffect(() => {
     currentTimeRef.current = currentTime;
   }, [currentTime]);
+
+  const [noteStream, setNoteStream] = useState<NoteStream | null>(null);
 
   const activeNotes = useMemo(() => {
     if (selectedIsolation === undefined) return [];
@@ -173,27 +179,44 @@ export function LearnView() {
 
   const handleUserNote = useCallback(
     (midi: number) => {
-      playMonitorNote(midi);
-      const now = currentTimeRef.current;
-
-      setLastPlayedLabel(`${midiToNoteName(midi)} · MIDI ${midi}`);
-      setPlayedDots((prev) => [
-        ...prev.slice(-48),
-        { time: now, pitch: midi, offsetMs: 0 },
-      ]);
+      noteStream?.emitNoteOn(midi, 96, "screen");
     },
-    [],
+    [noteStream],
   );
 
   useEffect(() => {
-    return subscribeWebMidi(
-      selectedMidiId,
-      (midi) => handleUserNote(midi),
-      (devices) => setMidiDevices(devices),
-    );
-  }, [selectedMidiId, handleUserNote]);
+    const stream = createNoteStream(() => currentTimeRef.current);
+    setNoteStream(stream);
+
+    const unsubscribe = stream.subscribe((event) => {
+      if (event.kind === "note_on") {
+        playMonitorNote(event.pitch);
+        setLastPlayedLabel(`${midiToNoteName(event.pitch)} · MIDI ${event.pitch}`);
+        setPlayedDots((prev) => [
+          ...prev.slice(-48),
+          { time: event.onsetSeconds, pitch: event.pitch, offsetMs: 0 },
+        ]);
+      }
+    });
+
+    return () => {
+      unsubscribe();
+      stream.dispose();
+      setNoteStream(null);
+    };
+  }, []);
 
   useEffect(() => {
+    if (noteStream === null) return;
+    return connectWebMidi(
+      noteStream,
+      (devices) => setMidiDevices(devices),
+      selectedMidiId,
+    );
+  }, [noteStream, selectedMidiId]);
+
+  useEffect(() => {
+    if (noteStream === null) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.repeat) return;
       const target = event.target;
@@ -206,12 +229,22 @@ export function LearnView() {
       }
       const mapped = lookupShortcutKey(event.key);
       if (mapped !== undefined) {
-        handleUserNote(mapped.midi);
+        noteStream.emitNoteOn(mapped.midi, 96, "qwerty");
+      }
+    };
+    const onKeyUp = (event: KeyboardEvent) => {
+      const mapped = lookupShortcutKey(event.key);
+      if (mapped !== undefined) {
+        noteStream.emitNoteOff(mapped.midi, "qwerty");
       }
     };
     window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [handleUserNote]);
+    window.addEventListener("keyup", onKeyUp);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+    };
+  }, [noteStream]);
 
   useEffect(() => {
     if (rollCanvasRef.current === null) return;

@@ -31,8 +31,11 @@ VIDEO_FPS = 10
 MAX_VIDEO_FRAMES = 300
 RETENTION_SECONDS = 7 * 24 * 60 * 60
 
-DAILY_CLIP_QUOTA = 5
-DAILY_ISOLATION_QUOTA = 10
+DAILY_CLIP_QUOTA = 25
+DAILY_ISOLATION_QUOTA = 50
+DISABLE_QUOTA_ENV = "MIXRAY_DISABLE_QUOTA"
+CLIP_QUOTA_ENV = "MIXRAY_DAILY_CLIP_QUOTA"
+ISOLATION_QUOTA_ENV = "MIXRAY_DAILY_ISOLATION_QUOTA"
 
 DEFAULT_BPM = 120.0
 BEATS_PER_BAR = 4
@@ -248,10 +251,14 @@ def _save_quotas(cache_root: Path, quotas: dict[str, IpQuotaCounter]) -> None:
 def check_and_increment_quota(
     client_ip: str, kind: Literal["clips", "isolations"], cache_root: Path
 ) -> None:
-    """Enforce per-IP daily limits (5 clips, 10 isolations) and record usage."""
+    """Enforce per-IP daily limits and record usage."""
+    if os.environ.get(DISABLE_QUOTA_ENV) == "1":
+        return
+    clip_limit = int(os.environ.get(CLIP_QUOTA_ENV, str(DAILY_CLIP_QUOTA)))
+    isolation_limit = int(os.environ.get(ISOLATION_QUOTA_ENV, str(DAILY_ISOLATION_QUOTA)))
     quotas = _load_quotas(cache_root)
     counter = quotas.get(client_ip, {"clips": 0, "isolations": 0})
-    limit = DAILY_CLIP_QUOTA if kind == "clips" else DAILY_ISOLATION_QUOTA
+    limit = clip_limit if kind == "clips" else isolation_limit
     if counter[kind] >= limit:
         raise QuotaExceededError(f"Daily {kind} limit ({limit}) reached for this IP.")
     counter[kind] += 1
