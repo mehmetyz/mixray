@@ -129,11 +129,11 @@ export function AddShell({ center, inspector }: AddShellProps) {
           </div>
         </aside>
 
-        <main className="flex min-w-0 flex-1 flex-col bg-bg p-5 md:p-8 lg:overflow-y-auto">
+        <main className="flex min-w-0 flex-1 flex-col bg-bg p-4 md:p-6 lg:overflow-y-auto">
           {center}
         </main>
 
-        <aside className="flex w-full shrink-0 flex-col gap-5 border-t border-line bg-surface p-4 lg:w-80 lg:border-t-0 lg:border-l lg:overflow-y-auto">
+        <aside className="flex w-full shrink-0 flex-col gap-4 border-t border-line bg-surface p-4 lg:w-80 lg:border-t-0 lg:border-l lg:overflow-y-auto">
           {inspector}
         </aside>
       </div>

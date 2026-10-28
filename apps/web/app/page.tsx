@@ -12,9 +12,9 @@ export default async function AddPage() {
   );
 
   const inspector = (
-    <>
+    <div className="space-y-4 text-xs">
       <div>
-        <span className="eyebrow mb-2 block">Or try a precomputed demo</span>
+        <span className="eyebrow mb-2 block">Precomputed Demo</span>
         <div className="space-y-2">
           {demos.map(({ id, trackMap }) => {
             if (trackMap === null) return null;
@@ -22,57 +22,94 @@ export default async function AddPage() {
               <Link
                 key={id}
                 href={`/c/${id}/pick`}
-                className="block rounded-card border border-line-2 bg-inset p-3 transition hover:border-control"
+                className="group block rounded-card border border-line-2 bg-inset p-3 transition hover:border-control hover:bg-surface-2"
               >
-                <div className="flex items-center justify-between gap-2 text-xs font-medium text-text">
-                  <span>{trackMap.source.title}</span>
-                  <span className="mono-num text-[10px] uppercase text-accent">
-                    {trackMap.source.kind}
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-semibold text-text group-hover:text-accent">
+                    {trackMap.source.title}
+                  </span>
+                  <span className="mono-num rounded-icon border border-line-2 bg-bg px-1.5 py-0.5 text-[10px] uppercase text-accent">
+                    Ready
                   </span>
                 </div>
-                <p className="mono-num mt-1 text-xs text-muted">
-                  {Math.round(trackMap.tempo.bpm)} BPM · {trackMap.key.tonic} {trackMap.key.mode} ·{" "}
-                  {trackMap.isolations.length} stems ready
+                <p className="mono-num mt-1 text-[11px] text-muted">
+                  {Math.round(trackMap.tempo.bpm)} BPM · {trackMap.key.tonic} {trackMap.key.mode} · 30s
                 </p>
                 {trackMap.summary !== undefined ? (
-                  <p className="mt-1.5 text-[11px] leading-relaxed text-text-2">
+                  <p className="mt-1 text-[11px] leading-snug text-text-2">
                     {trackMap.summary}
                   </p>
                 ) : null}
+
+                {trackMap.isolations.length > 0 ? (
+                  <div className="mt-2 flex flex-wrap gap-1 border-t border-line-2 pt-1.5">
+                    {trackMap.isolations.map((iso) => (
+                      <span
+                        key={iso.id}
+                        className="mono-num rounded-icon border border-line-2 bg-bg px-1.5 py-0.5 text-[10px] text-text-2"
+                      >
+                        {iso.label}
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
+
+                <div className="mt-2 flex items-center justify-between text-[11px] font-medium text-text group-hover:text-accent">
+                  <span>Open Demo Studio</span>
+                  <span className="transition-transform group-hover:translate-x-0.5">→</span>
+                </div>
               </Link>
             );
           })}
         </div>
-        <p className="mt-2 text-[11px] text-muted">
-          Demos are the builder&apos;s own music and run at zero GPU cost.
-        </p>
       </div>
 
-      <div className="space-y-2 border-t border-line pt-4">
-        <span className="eyebrow block">How it works</span>
-        <ol className="space-y-2 text-xs text-text-2">
-          <li>
-            <span className="mono-num mr-2 text-muted">01</span>Drop your clip (≤ 30 seconds).
-          </li>
-          <li>
-            <span className="mono-num mr-2 text-muted">02</span>Tap a player (SAM 3.1) or type a
-            prompt (SAM Audio).
-          </li>
-          <li>
-            <span className="mono-num mr-2 text-muted">03</span>Inspect key, chords, notes &amp;
-            synth recipe.
-          </li>
-          <li>
-            <span className="mono-num mr-2 text-muted">04</span>Practice on MIDI/QWERTY with the
-            Muse Spark coach.
-          </li>
-          <li>
-            <span className="mono-num mr-2 text-muted">05</span>Export WAV stems, MIDI &amp; synth
-            recipe.
-          </li>
-        </ol>
+      <div className="space-y-1.5 border-t border-line pt-3">
+        <span className="eyebrow block">Capabilities</span>
+        <div className="space-y-1.5 text-[11px] text-text-2">
+          <div className="rounded-well border border-line-2 bg-inset px-2.5 py-1.5">
+            <span className="font-semibold text-text">01 · Isolate</span>
+            <p className="text-muted leading-tight">Tap any player in video or enter text prompt.</p>
+          </div>
+          <div className="rounded-well border border-line-2 bg-inset px-2.5 py-1.5">
+            <span className="font-semibold text-text">02 · X-Ray</span>
+            <p className="text-muted leading-tight">Tempo, key, chords, and piano roll notes.</p>
+          </div>
+          <div className="rounded-well border border-line-2 bg-inset px-2.5 py-1.5">
+            <span className="font-semibold text-text">03 · Learn</span>
+            <p className="text-muted leading-tight">Interactive keys &amp; AI coach scoring.</p>
+          </div>
+        </div>
       </div>
-    </>
+
+      <div className="space-y-1.5 border-t border-line pt-3">
+        <span className="eyebrow block">Media Limits</span>
+        <div className="grid grid-cols-2 gap-1.5 text-[10px]">
+          <div className="rounded-icon border border-line-2 bg-inset p-1.5">
+            <span className="text-muted block">Duration</span>
+            <span className="mono-num text-text">≤ 30s selection</span>
+          </div>
+          <div className="rounded-icon border border-line-2 bg-inset p-1.5">
+            <span className="text-muted block">File Size</span>
+            <span className="mono-num text-text">≤ 50 MB</span>
+          </div>
+          <div className="rounded-icon border border-line-2 bg-inset p-1.5">
+            <span className="text-muted block">Audio</span>
+            <span className="mono-num text-text">MP3, WAV, FLAC</span>
+          </div>
+          <div className="rounded-icon border border-line-2 bg-inset p-1.5">
+            <span className="text-muted block">Video</span>
+            <span className="mono-num text-text">MP4, MOV, WebM</span>
+          </div>
+        </div>
+      </div>
+
+      <div className="border-t border-line pt-2 text-[10px] text-muted">
+        <p className="leading-tight">
+          Processed privately in ephemeral containers. Never used for AI training.
+        </p>
+      </div>
+    </div>
   );
 
   return <AddShell center={<ClipPicker />} inspector={inspector} />;

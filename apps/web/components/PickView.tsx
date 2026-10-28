@@ -167,12 +167,77 @@ export function PickView() {
           </span>
         </div>
 
+        {/* Track Overview Summary */}
+        <div className="space-y-1.5 rounded-card border border-line-2 bg-inset p-3">
+          <div className="flex items-center justify-between text-xs">
+            <span className="truncate font-semibold text-text">{trackMap.source.title}</span>
+            <span className="mono-num text-[10px] uppercase text-accent">{trackMap.source.kind}</span>
+          </div>
+          <div className="mono-num flex items-center gap-2 text-xs text-muted">
+            <span>{Math.round(trackMap.tempo.bpm)} BPM</span>
+            <span>·</span>
+            <span>{trackMap.key.tonic} {trackMap.key.mode}</span>
+            <span>·</span>
+            <span>{trackMap.duration}s</span>
+          </div>
+          {trackMap.summary !== undefined ? (
+            <p className="border-t border-line-2 pt-1.5 text-[11px] leading-relaxed text-text-2">
+              {trackMap.summary}
+            </p>
+          ) : null}
+        </div>
+
         {errorMessage !== null ? (
           <div
             role="alert"
             className="rounded-icon border border-accent bg-inset px-3 py-2 text-xs text-text"
           >
             {errorMessage}
+          </div>
+        ) : null}
+
+        {/* Ready Isolated Stems */}
+        {trackMap.isolations.length > 0 ? (
+          <div className="space-y-1.5">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-medium text-text">Isolated sounds</span>
+              <span className="mono-num text-[10px] text-muted">
+                {trackMap.isolations.length} available
+              </span>
+            </div>
+            <div className="space-y-1">
+              {trackMap.isolations.map((iso) => {
+                const active = selectedIsolationId === iso.id;
+                return (
+                  <button
+                    key={iso.id}
+                    type="button"
+                    onClick={() => {
+                      selectIsolation(iso.id);
+                      setMonitor("sound");
+                    }}
+                    className={`flex w-full cursor-pointer items-center justify-between rounded-icon border px-2.5 py-2 text-left transition ${
+                      active
+                        ? "border-accent bg-surface-2 font-medium text-text"
+                        : "border-line-2 bg-inset text-text-2 hover:border-control hover:text-text"
+                    }`}
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-1.5">
+                        {active ? <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-accent"></span> : null}
+                        <span className="truncate text-xs font-medium">{iso.label}</span>
+                      </div>
+                      <span className="mono-num block truncate text-[10px] text-muted">
+                        &quot;{iso.prompt}&quot;
+                      </span>
+                    </div>
+                    <span className="mono-num ml-2 shrink-0 rounded-icon border border-line-2 bg-bg px-1.5 py-0.5 text-[9px] uppercase text-muted">
+                      {iso.method === "demucs" ? "Demucs" : "SAM"}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
           </div>
         ) : null}
 
@@ -208,7 +273,7 @@ export function PickView() {
 
         <form onSubmit={onPromptSubmit} className="space-y-2 border-t border-line pt-3">
           <label htmlFor="sound-prompt-input" className="block text-xs text-muted">
-            Describe sound
+            Describe another sound
           </label>
           <div className="flex gap-1.5">
             <input
@@ -216,7 +281,7 @@ export function PickView() {
               type="text"
               value={promptInput}
               onChange={(event) => setPromptInput(event.target.value)}
-              placeholder="e.g. supersaw lead, cello"
+              placeholder="e.g. guitar, bass, cello"
               className="mono-num h-8 flex-1 rounded-icon border border-line-2 bg-inset px-2.5 text-xs text-text placeholder:text-muted focus:border-text focus:outline-none"
             />
             <button
@@ -265,6 +330,29 @@ export function PickView() {
             </label>
           </div>
         ) : null}
+
+        {/* Demo switcher / Try precomputed demo card */}
+        <div className="space-y-1.5 rounded-well border border-line-2 bg-inset p-3">
+          <div className="flex items-center justify-between text-xs">
+            <span className="font-medium text-text">
+              {isDemo ? "Your own audio" : "Try a precomputed demo"}
+            </span>
+            <span className="mono-num text-[10px] uppercase text-muted">
+              {isDemo ? "Custom" : "Demo"}
+            </span>
+          </div>
+          <p className="text-[11px] leading-relaxed text-text-2">
+            {isDemo
+              ? "Want to isolate a sound in your own song or video?"
+              : "Compare with our precomputed reference lead (melodic EDM style)."}
+          </p>
+          <Link
+            href={isDemo ? "/" : "/c/demo1/pick"}
+            className="mono-num inline-flex items-center gap-1 pt-0.5 text-xs font-medium text-accent hover:underline"
+          >
+            {isDemo ? "+ Upload your clip →" : "Load demo1 (EDM Lead) →"}
+          </Link>
+        </div>
 
         <div className="mt-auto border-t border-line pt-3">
           {selectedIsolation !== undefined ? (
