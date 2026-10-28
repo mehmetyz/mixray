@@ -9,7 +9,8 @@ from typing import TYPE_CHECKING
 import modal
 
 from analyze import apply_analysis
-from images import analyze_image, sam_audio_image, web_image
+from fallback import run_fallback, stem_for_prompt
+from images import analyze_image, basic_pitch_image, demucs_image, sam_audio_image, web_image
 from ingest import DEFAULT_CACHE_PATH, cleanup_expired_clips, write_job
 from isolate import (
     DEFAULT_MODEL_ID,
@@ -20,6 +21,7 @@ from isolate import (
     WEIGHTS_VOLUME,
     run_isolation,
 )
+from transcribe import apply_transcription
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
@@ -30,6 +32,8 @@ LOGGER = logging.getLogger(__name__)
 WEB_TIMEOUT_SECONDS = 120
 ISOLATE_TIMEOUT_SECONDS = 300
 ANALYZE_TIMEOUT_SECONDS = 300
+TRANSCRIBE_TIMEOUT_SECONDS = 300
+FALLBACK_TIMEOUT_SECONDS = 900
 CLEANUP_TIMEOUT_SECONDS = 300
 MAX_ISOLATE_CONTAINERS = 2
 
@@ -96,6 +100,19 @@ class IsolationWorker:
                     "error": "Audio isolation failed. Please try another prompt.",
                 }
             )
+        else:
+            # Spawned outside the try above: the sound is already written and the job already says
+            # done, so a follow-up that cannot even be queued must not relabel a successful
+            # isolation as failed and tell the user to try another prompt.
+            try:
+                transcribe_worker.spawn(clip_id, iso_id)
+                # Deliberately narrows T1.3's per-clip fallback to prompts that map to a standard
+                # stem: Demucs has no equivalent for "supersaw lead", so running it would spend CPU
+                # on an alternative the UI could never offer.
+                if stem_for_prompt(prompt) is not None:
+                    fallback_worker.spawn(clip_id)
+            except Exception:
+                LOGGER.exception("could not queue follow-up work for clip=%s", clip_id)
         finally:
             CACHE_VOLUME.commit()
 
@@ -127,6 +144,46 @@ def analyze_worker(clip_id: str) -> None:
                 "error": None,
             }
         )
+        CACHE_VOLUME.commit()
+
+
+@app.function(
+    image=basic_pitch_image,
+    volumes={DEFAULT_CACHE_PATH: CACHE_VOLUME},
+    timeout=TRANSCRIBE_TIMEOUT_SECONDS,
+    gpu=None,
+)
+def transcribe_worker(clip_id: str, isolation_id: str) -> None:
+    """Apply CPU Basic Pitch transcription without blocking playable isolation output."""
+    logging.basicConfig(level=logging.INFO)
+    CACHE_VOLUME.reload()
+    try:
+        # Basic Pitch handles a 30-second clip on CPU without reserving a GPU.
+        apply_transcription(clip_id, isolation_id)
+    except Exception:
+        # Failure only removes an optional enhancement; the playable isolation must not break.
+        LOGGER.exception("transcription failed for clip=%s isolation=%s", clip_id, isolation_id)
+    finally:
+        CACHE_VOLUME.commit()
+
+
+@app.function(
+    image=demucs_image,
+    volumes={DEFAULT_CACHE_PATH: CACHE_VOLUME},
+    timeout=FALLBACK_TIMEOUT_SECONDS,
+    gpu=None,
+)
+def fallback_worker(clip_id: str) -> None:
+    """Create CPU Demucs alternatives without blocking playable isolation output."""
+    logging.basicConfig(level=logging.INFO)
+    CACHE_VOLUME.reload()
+    try:
+        # Demucs handles a 30-second clip on CPU without reserving a GPU.
+        run_fallback(clip_id)
+    except Exception:
+        # Failure only removes an optional enhancement; the playable isolation must not break.
+        LOGGER.exception("fallback failed for clip=%s", clip_id)
+    finally:
         CACHE_VOLUME.commit()
 
 
