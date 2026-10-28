@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-import json
 import os
 import time
 from collections.abc import Callable
@@ -14,18 +13,17 @@ from typing import TypedDict
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 from ingest import (
     MAX_UPLOAD_BYTES,
     IngestError,
     IngestParams,
-    IsolationEntry,
     JobRecord,
     JobStage,
     JobStatus,
-    append_isolation_to_trackmap,
+    build_served_trackmap,
     check_and_increment_quota,
     clip_dir,
     get_cache_root,
@@ -46,6 +44,9 @@ DEFAULT_CORS_ORIGINS = (
 )
 MAX_PROMPT_LEN = 120
 SIGNED_TOKEN_PARTS = 2
+TRACKMAP_PATH_PARTS = 3
+CLIPS_DIRECTORY = "clips"
+TRACKMAP_FILE_NAME = "trackmap.json"
 
 MEDIA_TYPES: dict[str, str] = {
     ".wav": "audio/wav",
@@ -58,6 +59,7 @@ MEDIA_TYPES: dict[str, str] = {
 IsolationSpawner = Callable[[str, str, str, str], object]
 AnalysisSpawner = Callable[[str], object]
 VolumeHook = Callable[[], object]
+FileRoute = Callable[[str], FileResponse | JSONResponse]
 
 
 class MultipartUpload(TypedDict):
@@ -209,6 +211,52 @@ def _cors_origins() -> list[str]:
     return list(DEFAULT_CORS_ORIGINS)
 
 
+def _trackmap_clip_id(file_path: str) -> str | None:
+    """Return a clip ID only for the assembled TrackMap endpoint path."""
+    path_parts = file_path.split("/")
+    if (
+        len(path_parts) == TRACKMAP_PATH_PARTS
+        and path_parts[0] == CLIPS_DIRECTORY
+        and path_parts[2] == TRACKMAP_FILE_NAME
+    ):
+        return path_parts[1]
+    return None
+
+
+def _file_route(reload_volume: Callable[[], None]) -> FileRoute:
+    """Build the file route, serving TrackMaps from their assembled sidecars."""
+
+    def get_file(file_path: str) -> FileResponse | JSONResponse:
+        root = get_cache_root().resolve()
+        candidate = (root / file_path).resolve()
+        if not candidate.is_relative_to(root):
+            raise HTTPException(status_code=400, detail="Invalid file path.")
+        trackmap_clip_id = _trackmap_clip_id(file_path)
+        if trackmap_clip_id is not None:
+            reload_volume()
+            try:
+                trackmap = build_served_trackmap(trackmap_clip_id, root)
+            except FileNotFoundError as error:
+                raise HTTPException(status_code=404, detail="File not found.") from error
+            return JSONResponse(
+                content=trackmap,
+                media_type=MEDIA_TYPES[".json"],
+                headers={"Cache-Control": "public, max-age=86400"},
+            )
+        if not candidate.is_file():
+            reload_volume()
+        if not candidate.is_file():
+            raise HTTPException(status_code=404, detail="File not found.")
+        media_type = MEDIA_TYPES.get(candidate.suffix.lower(), "application/octet-stream")
+        return FileResponse(
+            path=candidate,
+            media_type=media_type,
+            headers={"Cache-Control": "public, max-age=86400"},
+        )
+
+    return get_file
+
+
 def _start_or_reuse_isolation(
     job_id: str,
     body: IsolateRequest,
@@ -230,8 +278,6 @@ def _start_or_reuse_isolation(
     trackmap_url = f"/files/clips/{job_id}/trackmap.json"
 
     if cached_json.exists():
-        entry: IsolationEntry = json.loads(cached_json.read_text(encoding="utf-8"))
-        append_isolation_to_trackmap(job_id, entry, root)
         done_record = write_job(
             {
                 "id": job_id,
@@ -365,27 +411,11 @@ def create_api(
             raise HTTPException(status_code=404, detail="Job not found.")
         return _to_job_response(record)
 
-    def get_file(file_path: str) -> FileResponse:
-        root = get_cache_root().resolve()
-        candidate = (root / file_path).resolve()
-        if not candidate.is_relative_to(root):
-            raise HTTPException(status_code=400, detail="Invalid file path.")
-        if not candidate.is_file():
-            _reload()
-        if not candidate.is_file():
-            raise HTTPException(status_code=404, detail="File not found.")
-        media_type = MEDIA_TYPES.get(candidate.suffix.lower(), "application/octet-stream")
-        return FileResponse(
-            path=candidate,
-            media_type=media_type,
-            headers={"Cache-Control": "public, max-age=86400"},
-        )
-
     api.add_api_route("/health", get_health, methods=["GET"], response_model=HealthResponse)
     api.add_api_route("/jobs", post_job, methods=["POST"], response_model=JobResponse)
     api.add_api_route(
         "/jobs/{job_id}/isolate", post_isolate, methods=["POST"], response_model=JobResponse
     )
     api.add_api_route("/jobs/{job_id}", get_job, methods=["GET"], response_model=JobResponse)
-    api.add_api_route("/files/{file_path:path}", get_file, methods=["GET"])
+    api.add_api_route("/files/{file_path:path}", _file_route(_reload), methods=["GET"])
     return api

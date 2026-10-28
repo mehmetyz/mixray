@@ -131,7 +131,7 @@ class IsolationArrangements(TypedDict):
 
 
 class IsolationEntry(TypedDict):
-    """One entry in TrackMap.isolations."""
+    """One producer-owned isolation cache entry."""
 
     id: str
     label: str
@@ -144,6 +144,23 @@ class IsolationEntry(TypedDict):
     rest_peaks: list[float]
     notes: list[dict[str, object]]
     arrangements: IsolationArrangements
+
+
+ANALYSIS_FIELDS: tuple[str, ...] = (
+    "tempo",
+    "beats",
+    "downbeats",
+    "key",
+    "chords",
+    "sections",
+    "energy",
+)
+TRANSCRIPTION_FIELDS: tuple[str, ...] = (
+    "notes",
+    "arrangements",
+    "pitch_confidence",
+    "range",
+)
 
 
 def get_cache_root() -> Path:
@@ -549,7 +566,7 @@ def ingest_upload(params: IngestParams, cache_root: Path | None = None) -> JobRe
         }
         (target / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
         trackmap = _build_initial_trackmap(meta, target / "mix_mono.wav", probe)
-        (target / "trackmap.json").write_text(json.dumps(trackmap), encoding="utf-8")
+        write_trackmap(clip_id, trackmap, root)
 
     job: JobRecord = {
         "id": clip_id,
@@ -578,16 +595,64 @@ def write_trackmap(
     tmp_path.replace(path)
 
 
-def append_isolation_to_trackmap(
-    clip_id: str, entry: IsolationEntry, cache_root: Path | None = None
-) -> None:
-    """Insert or replace an isolation entry inside the clip's trackmap.json."""
-    path = trackmap_path(clip_id, cache_root)
-    trackmap = json.loads(path.read_text(encoding="utf-8"))
-    isolations = [item for item in trackmap.get("isolations", []) if item.get("id") != entry["id"]]
-    isolations.append(entry)
+def _read_json_object(path: Path) -> dict[str, object]:
+    """Read one JSON object from a cache artifact."""
+    loaded = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(loaded, dict) or not all(isinstance(key, str) for key in loaded):
+        raise ValueError(f"expected JSON object at {path}")
+    return {key: value for key, value in loaded.items() if isinstance(key, str)}
+
+
+def _read_optional_json_object(path: Path) -> dict[str, object] | None:
+    """Read an optional JSON object sidecar."""
+    if not path.exists():
+        return None
+    return _read_json_object(path)
+
+
+def _read_optional_json_array(path: Path) -> list[object] | None:
+    """Read an optional JSON array sidecar."""
+    if not path.exists():
+        return None
+    loaded = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(loaded, list):
+        raise ValueError(f"expected JSON array at {path}")
+    return loaded
+
+
+def build_served_trackmap(clip_id: str, cache_root: Path | None = None) -> dict[str, object]:
+    """Assemble a TrackMap from its ingest-time base and producer-owned sidecars."""
+    root = cache_root if cache_root is not None else get_cache_root()
+    directory = clip_dir(clip_id, root)
+    trackmap = _read_json_object(trackmap_path(clip_id, root))
+
+    analysis = _read_optional_json_object(directory / "analysis.json")
+    if analysis is not None:
+        for field in ANALYSIS_FIELDS:
+            if field in analysis:
+                trackmap[field] = analysis[field]
+
+    fallback_stems = _read_optional_json_array(directory / "fallback_stems.json")
+    if fallback_stems is not None:
+        trackmap["fallback_stems"] = fallback_stems
+
+    isolations_dir = directory / "isolations"
+    isolations: list[dict[str, object]] = []
+    if isolations_dir.exists():
+        for isolation_dir in sorted(isolations_dir.iterdir(), key=lambda item: item.name):
+            if not isolation_dir.is_dir():
+                continue
+            isolation = _read_optional_json_object(isolation_dir / "isolation.json")
+            if isolation is None:
+                continue
+            transcription = _read_optional_json_object(isolation_dir / "transcription.json")
+            if transcription is not None:
+                for field in TRANSCRIPTION_FIELDS:
+                    if field in transcription:
+                        isolation[field] = transcription[field]
+            isolations.append(isolation)
     trackmap["isolations"] = isolations
-    write_trackmap(clip_id, trackmap, cache_root)
+    return trackmap
 
 
 def cleanup_expired_clips(

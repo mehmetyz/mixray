@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING, TypedDict
 import modal
 
 from images import analyze_image
-from ingest import clip_dir, get_cache_root, trackmap_path, write_trackmap
+from ingest import clip_dir, get_cache_root
 
 if TYPE_CHECKING:
     import numpy as np
@@ -466,17 +466,17 @@ def analyze_wav(wav_path: Path) -> TrackAnalysis:
 
 
 def apply_analysis(clip_id: str, cache_root: Path | None = None) -> TrackAnalysis:
-    """Analyse a cached clip and write the result into its trackmap."""
+    """Analyse a cached clip and write its producer-owned analysis sidecar."""
     root = cache_root if cache_root is not None else get_cache_root()
     wav_path = clip_dir(clip_id, root) / "mix_mono.wav"
     if not wav_path.exists():
         raise FileNotFoundError(f"no mono mix for clip {clip_id}: {wav_path}")
 
     analysis = analyze_wav(wav_path)
-    trackmap = json.loads(trackmap_path(clip_id, root).read_text(encoding="utf-8"))
-    for field, value in analysis.items():
-        trackmap[field] = value
-    write_trackmap(clip_id, trackmap, root)
+    path = clip_dir(clip_id, root) / "analysis.json"
+    tmp_path = path.with_suffix(".json.tmp")
+    tmp_path.write_text(json.dumps(analysis), encoding="utf-8")
+    tmp_path.replace(path)
     LOGGER.info(
         "analyzed %s: %.1f bpm, %s %s, %d bars, %d sections",
         clip_id,

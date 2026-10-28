@@ -19,7 +19,7 @@ from typing import Literal, TypedDict
 import modal
 
 from images import demucs_image
-from ingest import clip_dir, encode_mp3, get_cache_root, trackmap_path, write_trackmap
+from ingest import clip_dir, encode_mp3, get_cache_root
 
 LOGGER = logging.getLogger(__name__)
 
@@ -173,14 +173,12 @@ def separate_clip(clip_id: str, cache_root: Path | None = None) -> FallbackStems
 def write_fallback_stems(
     clip_id: str, fallback_stems: FallbackStems, cache_root: Path | None = None
 ) -> None:
-    """Replace a clip's fallback_stems array without disturbing its existing trackmap fields."""
+    """Write the producer-owned fallback stems sidecar."""
     root = cache_root if cache_root is not None else get_cache_root()
-    path = trackmap_path(clip_id, root)
-    trackmap = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(trackmap, dict):
-        raise ValueError(f"invalid trackmap for clip {clip_id}")
-    trackmap["fallback_stems"] = fallback_stems
-    write_trackmap(clip_id, trackmap, root)
+    path = clip_dir(clip_id, root) / "fallback_stems.json"
+    tmp_path = path.with_suffix(".json.tmp")
+    tmp_path.write_text(json.dumps(fallback_stems), encoding="utf-8")
+    tmp_path.replace(path)
 
 
 def run_fallback(clip_id: str, cache_root: Path | None = None) -> FallbackStems:

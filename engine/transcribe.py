@@ -20,7 +20,7 @@ from typing import Literal, TypeAlias, TypedDict, TypeGuard
 import modal
 
 from images import basic_pitch_image
-from ingest import DEFAULT_CACHE_PATH, clip_dir, get_cache_root, trackmap_path, write_trackmap
+from ingest import DEFAULT_CACHE_PATH, build_served_trackmap, clip_dir, get_cache_root
 
 LOGGER = logging.getLogger(__name__)
 
@@ -432,46 +432,17 @@ def transcribe_isolated_sound(wav_path: Path, trackmap: dict[str, object]) -> Tr
     }
 
 
-def write_transcription_to_trackmap(
-    clip_id: str,
-    isolation_id: str,
-    transcription: Transcription,
-    cache_root: Path | None = None,
-) -> None:
-    """Update one isolation's fields without disturbing concurrent clip analysis data."""
-    root = cache_root if cache_root is not None else get_cache_root()
-    path = trackmap_path(clip_id, root)
-    loaded = json.loads(path.read_text(encoding="utf-8"))
-    if not _is_mapping(loaded):
-        raise ValueError(f"invalid trackmap for clip {clip_id}")
-    isolations = loaded.get("isolations")
-    if not isinstance(isolations, list):
-        raise ValueError(f"invalid isolations for clip {clip_id}")
-
-    for isolation in isolations:
-        if not _is_mapping(isolation) or isolation.get("id") != isolation_id:
-            continue
-        isolation["notes"] = transcription["notes"]
-        isolation["arrangements"] = transcription["arrangements"]
-        isolation["pitch_confidence"] = transcription["pitch_confidence"]
-        isolation["range"] = transcription["range"]
-        write_trackmap(clip_id, loaded, root)
-        return
-    raise KeyError(f"isolation {isolation_id} not found for clip {clip_id}")
-
-
 def apply_transcription(
     clip_id: str, isolation_id: str, cache_root: Path | None = None
 ) -> Transcription:
-    """Read one cached isolation, transcribe it, and persist only its own TrackMap fields."""
+    """Read one cached isolation and write its producer-owned transcription sidecar."""
     root = cache_root if cache_root is not None else get_cache_root()
-    path = trackmap_path(clip_id, root)
-    loaded = json.loads(path.read_text(encoding="utf-8"))
-    if not _is_mapping(loaded):
-        raise ValueError(f"invalid trackmap for clip {clip_id}")
     wav_path = clip_dir(clip_id, root) / "isolations" / isolation_id / "sound.wav"
-    transcription = transcribe_isolated_sound(wav_path, loaded)
-    write_transcription_to_trackmap(clip_id, isolation_id, transcription, root)
+    transcription = transcribe_isolated_sound(wav_path, build_served_trackmap(clip_id, root))
+    path = wav_path.parent / "transcription.json"
+    tmp_path = path.with_suffix(".json.tmp")
+    tmp_path.write_text(json.dumps(transcription), encoding="utf-8")
+    tmp_path.replace(path)
     LOGGER.info(
         "transcribed isolation=%s for clip=%s: %d notes, confidence=%.3f",
         isolation_id,

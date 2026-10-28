@@ -20,7 +20,6 @@ from images import sam_audio_image
 from ingest import (
     IsolationEntry,
     JobRecord,
-    append_isolation_to_trackmap,
     clip_dir,
     compute_wav_peaks,
     encode_mp3,
@@ -296,7 +295,6 @@ def run_isolation(  # noqa: PLR0913
 
     if cached_json.exists():
         entry: IsolationEntry = json.loads(cached_json.read_text(encoding="utf-8"))
-        append_isolation_to_trackmap(clip_id, entry, root)
         write_job(
             {
                 "id": clip_id,
@@ -361,8 +359,9 @@ def run_isolation(  # noqa: PLR0913
         "notes": [],
         "arrangements": {"easy": [], "intermediate": []},
     }
-    cached_json.write_text(json.dumps(entry), encoding="utf-8")
-    append_isolation_to_trackmap(clip_id, entry, root)
+    tmp_path = cached_json.with_suffix(".json.tmp")
+    tmp_path.write_text(json.dumps(entry), encoding="utf-8")
+    tmp_path.replace(cached_json)
     done_job: JobRecord = {
         "id": clip_id,
         "status": "done",
