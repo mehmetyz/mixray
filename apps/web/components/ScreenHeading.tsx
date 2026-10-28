@@ -9,10 +9,10 @@ type ScreenHeadingProps = {
 
 export function ScreenHeading({ step, title, children }: ScreenHeadingProps) {
   return (
-    <div className="flex flex-col gap-3">
-      <p className="eyebrow">{stepEyebrow(step)}</p>
-      <h1 className="text-[44px] leading-tight font-extrabold tracking-[-1.5px]">{title}</h1>
-      {children}
+    <div>
+      <p className="eyebrow mb-1.5">{stepEyebrow(step)}</p>
+      <h1 className="text-xl font-semibold tracking-tight text-text md:text-2xl">{title}</h1>
+      {children !== undefined ? <div className="mt-1">{children}</div> : null}
     </div>
   );
 }

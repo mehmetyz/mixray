@@ -1,6 +1,5 @@
-import { ClipScreen, type ClipPageProps } from "@/components/ClipScreen";
+import { XRayView } from "@/components/XRayView";
 
-export default async function XRayPage({ params }: ClipPageProps) {
-  const { id } = await params;
-  return <ClipScreen clipId={id} step="xray" title="X-Ray" />;
+export default function XRayPage() {
+  return <XRayView />;
 }

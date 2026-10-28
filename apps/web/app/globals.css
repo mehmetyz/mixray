@@ -1,32 +1,37 @@
 @import "tailwindcss";
 
 :root {
-  --bg: #121010;
-  --surface: #1c1917;
-  --surface-2: #262220;
-  --inset: #171413;
-  --line: #2e2926;
-  --line-2: #35302c;
-  --control: #3d3733;
-  --inactive: #4a433e;
-  --muted-wave: #302b28;
+  --bg: #131417;
+  --surface: #16181c;
+  --surface-2: #1e2027;
+  --inset: #0e0f12;
+  --line: #24262d;
+  --line-2: #2c303a;
+  --control: #383c47;
+  --inactive: #454954;
+  --muted-wave: #23252c;
 
-  --text: #f5efe6;
-  --text-2: #cfc5b8;
-  --text-muted: #a89c8e;
+  --text: #eaecef;
+  --text-2: #b4bac6;
+  --text-muted: #8b919e;
 
-  --accent: #ff7a1a;
-  --accent-ink: #1a0d03;
-  --accent-hover: #ffb070;
-  --you: #ffd08a;
+  --accent: #ff6a1a;
+  --accent-ink: #131417;
+  --accent-hover: #ff8542;
+  --you: #f5b971;
 
-  --rest: #b8aa98;
-  --left-hand: #9c8cd9;
-  --left-hand-2: #7e6fc0;
+  --rest: #b8bdc7;
+  --left-hand: #7c8599;
+  --left-hand-2: #636b7d;
+  --key-white: #e4e6ea;
+  --key-white-ink: #131417;
+  --key-black: #1b1d23;
 }
 
 @theme inline {
   --color-*: initial;
+  --color-transparent: transparent;
+  --color-current: currentColor;
   --color-bg: var(--bg);
   --color-surface: var(--surface);
   --color-surface-2: var(--surface-2);
@@ -46,13 +51,16 @@
   --color-rest: var(--rest);
   --color-left-hand: var(--left-hand);
   --color-left-hand-2: var(--left-hand-2);
+  --color-key-white: var(--key-white);
+  --color-key-white-ink: var(--key-white-ink);
+  --color-key-black: var(--key-black);
 
-  --font-sans: var(--font-manrope), ui-sans-serif, system-ui, sans-serif;
-  --font-mono: var(--font-jetbrains-mono), ui-monospace, monospace;
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, monospace;
 
-  --radius-card: 20px;
-  --radius-well: 14px;
-  --radius-icon: 10px;
+  --radius-card: 8px;
+  --radius-well: 6px;
+  --radius-icon: 4px;
 }
 
 @utility page-container {
@@ -61,15 +69,38 @@
   padding-inline: 16px;
 
   @media (width >= 48rem) {
-    padding-inline: 40px;
+    padding-inline: 32px;
   }
 }
 
 @utility eyebrow {
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 600;
-  letter-spacing: 1.5px;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
-  color: var(--accent);
+  color: var(--text-muted);
+}
+
+@utility mono-num {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+input[type="range"] {
+  accent-color: var(--text);
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--bg);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--line-2);
+  border-radius: 3px;
 }

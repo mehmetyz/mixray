@@ -5,14 +5,14 @@ export type ClipStepId = Exclude<StepId, "add">;
 
 export const STEP_LABELS: Record<StepId, string> = {
   add: "Add",
-  pick: "Pick",
+  pick: "Pick a sound",
   xray: "X-Ray",
   learn: "Learn",
   take: "Take home",
 };
 
 const STEP_EYEBROWS: Record<StepId, string> = {
-  add: "Add",
+  add: "Add media",
   pick: "Pick a sound",
   xray: "X-Ray",
   learn: "Learn",
@@ -27,6 +27,7 @@ export type ClipNavState = {
   current: ClipStepId;
   clipId: string;
   soundPicked: boolean;
+  isolationId?: string;
 };
 
 /** Where the user is in the flow; clip steps exist only once a clip is added. */
@@ -45,14 +46,19 @@ export function stepNumber(id: StepId): number {
 }
 
 export function stepEyebrow(id: StepId): string {
-  return `Step ${stepNumber(id)} · ${STEP_EYEBROWS[id]}`;
+  const num = String(stepNumber(id)).padStart(2, "0");
+  return `${num} · ${STEP_EYEBROWS[id]}`;
 }
 
 function stepHref(id: StepId, nav: NavState): string | null {
   if (id === "add") return "/";
   if (nav.current === "add") return null;
   if (id !== "pick" && !nav.soundPicked) return null;
-  return `/c/${nav.clipId}/${id}`;
+  const base = `/c/${encodeURIComponent(nav.clipId)}/${id}`;
+  if (nav.isolationId !== undefined && nav.isolationId.length > 0) {
+    return `${base}?iso=${encodeURIComponent(nav.isolationId)}`;
+  }
+  return base;
 }
 
 export function buildStepLinks(nav: NavState): StepLink[] {

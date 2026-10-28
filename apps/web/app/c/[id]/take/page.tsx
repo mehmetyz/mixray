@@ -1,6 +1,5 @@
-import { ClipScreen, type ClipPageProps } from "@/components/ClipScreen";
+import { TakeHomeView } from "@/components/TakeHomeView";
 
-export default async function TakeHomePage({ params }: ClipPageProps) {
-  const { id } = await params;
-  return <ClipScreen clipId={id} step="take" title="Rebuild it in your DAW." />;
+export default function TakeHomePage() {
+  return <TakeHomeView />;
 }
