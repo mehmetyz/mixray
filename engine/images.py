@@ -42,6 +42,8 @@ LOCAL_SOURCES = (
     "fallback",
     "transcribe",
     "suggest",
+    "track",
+    "meta_api",
 )
 
 

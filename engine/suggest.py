@@ -18,13 +18,13 @@ assumed:
 
 import json
 import logging
-import os
 import subprocess
 from pathlib import Path
 from typing import TypedDict
 
 import modal
 
+import meta_api
 from images import web_image
 from ingest import clip_dir, get_cache_root
 
@@ -37,10 +37,7 @@ CACHE_PATH = "/cache"
 
 SUGGEST_TIMEOUT_SECONDS = 300
 API_SECRET = modal.Secret.from_name("mixray-secrets")
-API_KEY_ENV = "META_API_KEY"
 
-BASE_URL = "https://api.meta.ai/v1"
-RESPONSES_PATH = "/responses"
 # 1.2, not 1.3: the docs say audio understanding in 1.3 is not fully supported and may be degraded.
 # Contributor mode is the production default, as CONTEXT.md decided and the Add screen discloses.
 # Callers may pass the standard model instead, which costs roughly twelve times as much but keeps
@@ -50,10 +47,6 @@ STRUCTURE_MODEL = "muse-spark-1.2-contributor"
 STANDARD_MODEL = "muse-spark-1.2"
 # Reasoning shares the output budget, so a small cap can return an empty answer.
 MAX_OUTPUT_TOKENS = 4000
-REQUEST_TIMEOUT_SECONDS = 120.0
-ATTEMPTS = 3
-HTTP_OK = 200
-HTTP_SERVER_ERROR = 500
 
 WAVEFORM_SIZE = "320x180"
 WAVEFORM_RATE = 5
@@ -131,13 +124,6 @@ SUGGESTION_SCHEMA: dict[str, object] = {
 }
 
 
-def _api_key() -> str:
-    key = os.environ.get(API_KEY_ENV, "").strip()
-    if not key:
-        raise RuntimeError(f"{API_KEY_ENV} is not set")
-    return key
-
-
 def waveform_mp4(wav_path: Path, mp4_path: Path) -> None:
     """Wrap the audio in an mp4 whose picture is its own waveform.
 
@@ -166,59 +152,6 @@ def waveform_mp4(wav_path: Path, mp4_path: Path) -> None:
     subprocess.run(argv, check=True, capture_output=True)
 
 
-def _post_responses(payload: dict[str, object], api_key: str) -> dict[str, object]:
-    """Send one Responses API call, retrying on transport errors and 5xx."""
-    import httpx
-
-    last_error = ""
-    for attempt in range(1, ATTEMPTS + 1):
-        try:
-            response = httpx.post(
-                f"{BASE_URL}{RESPONSES_PATH}",
-                headers={"Authorization": f"Bearer {api_key}"},
-                json=payload,
-                timeout=REQUEST_TIMEOUT_SECONDS,
-            )
-        except httpx.HTTPError as error:
-            last_error = f"{type(error).__name__}: {error}"
-            LOGGER.warning("attempt %d/%d failed: %s", attempt, ATTEMPTS, last_error)
-            continue
-        if response.status_code >= HTTP_SERVER_ERROR:
-            last_error = f"HTTP {response.status_code}"
-            LOGGER.warning("attempt %d/%d got %s", attempt, ATTEMPTS, last_error)
-            continue
-        if response.status_code != HTTP_OK:
-            raise RuntimeError(f"Muse Spark returned HTTP {response.status_code}: {response.text}")
-        parsed: dict[str, object] = response.json()
-        return parsed
-    raise RuntimeError(f"Muse Spark unreachable after {ATTEMPTS} attempts: {last_error}")
-
-
-def _output_text(reply: dict[str, object]) -> str:
-    """Pull the assistant's text out of a Responses API reply.
-
-    The reply nests content parts inside output items, and reasoning items carry no text at all, so
-    every text part is collected rather than assuming the first item holds the answer.
-    """
-    output = reply.get("output")
-    if not isinstance(output, list):
-        raise RuntimeError("Muse Spark reply had no output")
-    chunks: list[str] = []
-    for item in output:
-        if not isinstance(item, dict):
-            continue
-        content = item.get("content")
-        if not isinstance(content, list):
-            continue
-        for part in content:
-            if isinstance(part, dict) and isinstance(part.get("text"), str):
-                chunks.append(part["text"])
-    text = "\n".join(chunks).strip()
-    if not text:
-        raise RuntimeError("Muse Spark reply carried no text")
-    return text
-
-
 def heard_audio(description: str) -> bool:
     """True when the reply describes sound rather than denying there was any."""
     lowered = description.lower()
@@ -231,9 +164,6 @@ def listen_to_clip(mp4_path: Path, api_key: str, model: str = LISTEN_MODEL) -> s
     The picture is never mentioned, by design: telling the model to ignore it reliably brings back
     the refusal this retries around.
     """
-    import base64
-
-    encoded = base64.b64encode(mp4_path.read_bytes()).decode("ascii")
     payload: dict[str, object] = {
         "model": model,
         "max_output_tokens": MAX_OUTPUT_TOKENS,
@@ -245,19 +175,19 @@ def listen_to_clip(mp4_path: Path, api_key: str, model: str = LISTEN_MODEL) -> s
                     # The media source sits directly on the part, and inline base64 travels as a
                     # data URL: an `input_video` carrying a `data` field is rejected with
                     # "input_video content part requires `video_url` or `file_id`".
-                    {"type": "input_video", "video_url": f"data:video/mp4;base64,{encoded}"},
+                    {"type": "input_video", "video_url": meta_api.data_url(mp4_path, "video/mp4")},
                 ],
             }
         ],
     }
-    for attempt in range(1, ATTEMPTS + 1):
-        description = _output_text(_post_responses(payload, api_key))
+    for attempt in range(1, meta_api.ATTEMPTS + 1):
+        description = meta_api.output_text(meta_api.post_responses(payload, api_key))
         if heard_audio(description):
             return description
         LOGGER.warning(
-            "attempt %d/%d did not hear the clip: %s", attempt, ATTEMPTS, description[:120]
+            "attempt %d/%d did not hear the clip: %s", attempt, meta_api.ATTEMPTS, description[:120]
         )
-    raise RuntimeError(f"Muse Spark did not hear the clip in {ATTEMPTS} attempts")
+    raise RuntimeError(f"Muse Spark did not hear the clip in {meta_api.ATTEMPTS} attempts")
 
 
 def structure_description(
@@ -284,7 +214,7 @@ def structure_description(
             }
         },
     }
-    return parse_suggestions(_output_text(_post_responses(payload, api_key)))
+    return parse_suggestions(meta_api.output_text(meta_api.post_responses(payload, api_key)))
 
 
 def parse_suggestions(raw: str) -> ClipSuggestions:
@@ -324,7 +254,7 @@ def suggest_clip(
 
     mp4_path = directory / "suggest_input.mp4"
     waveform_mp4(wav_path, mp4_path)
-    api_key = _api_key()
+    api_key = meta_api.api_key()
     described = listen_to_clip(mp4_path, api_key, model)
     LOGGER.info("muse spark heard: %s", described[:200])
     result = structure_description(described, api_key, model)

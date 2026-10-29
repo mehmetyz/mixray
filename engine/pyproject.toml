@@ -7,6 +7,9 @@ dependencies = [
   "fastapi==0.162.0",
   # `suggest` calls the Meta Responses API and needs per-request timeouts and retries.
   "httpx==0.28.1",
+  # Meta's own parser for the SAM 3 segmentation protocol. The mask payload is base85 in a variant
+  # the docs do not name, and this is the first-party decoder for it; it has no dependencies.
+  "meta-sam-parser==0.1.0",
   "modal==1.6.2",
 ]
 
