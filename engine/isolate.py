@@ -19,6 +19,7 @@ import modal
 from images import sam_audio_image
 from ingest import (
     IsolationEntry,
+    IsolationMethod,
     JobRecord,
     clip_dir,
     compute_wav_peaks,
@@ -30,6 +31,8 @@ from ingest import (
 if TYPE_CHECKING:
     import torch
     from sam_audio import Batch, SAMAudio, SAMAudioProcessor
+
+    from track import TrackResult
 
 LOGGER = logging.getLogger(__name__)
 
@@ -275,53 +278,53 @@ def measure(model_id: str = DEFAULT_MODEL_ID, prompt: str = DEFAULT_PROMPT) -> M
     return result
 
 
-def run_isolation(  # noqa: PLR0913
-    clip_id: str,
-    iso_id: str,
-    prompt: str,
-    label: str,
-    *,
-    model: "SAMAudio",
-    processor: "SAMAudioProcessor",
-    cache_root: Path | None = None,
-) -> IsolationEntry:
-    """Separate `prompt` from `clip_id` with SAM Audio and persist sound, rest, and peaks."""
+def _cached_isolation(
+    clip_id: str, iso_id: str, cache_root: Path
+) -> tuple[Path, Path, str, IsolationEntry | None]:
+    """Return the isolation cache paths and restore the job when its entry already exists."""
     import json
 
-    root = cache_root if cache_root is not None else get_cache_root()
-    iso_dir = clip_dir(clip_id, root) / "isolations" / iso_id
+    iso_dir = clip_dir(clip_id, cache_root) / "isolations" / iso_id
     cached_json = iso_dir / "isolation.json"
     trackmap_url = f"/files/clips/{clip_id}/trackmap.json"
+    if not cached_json.exists():
+        return iso_dir, cached_json, trackmap_url, None
 
-    if cached_json.exists():
-        entry: IsolationEntry = json.loads(cached_json.read_text(encoding="utf-8"))
-        write_job(
-            {
-                "id": clip_id,
-                "status": "done",
-                "stage": "done",
-                "trackmap_url": trackmap_url,
-                "isolation_id": iso_id,
-                "cached": True,
-                "error": None,
-            },
-            root,
-        )
-        return entry
-
-    import torch
-
-    mix_wav = clip_dir(clip_id, root) / "mix.wav"
-    batch = processor(audios=[str(mix_wav)], descriptions=[prompt]).to("cuda")
-    with torch.inference_mode():
-        separation = model.separate(batch, predict_spans=False, reranking_candidates=1)
-
-    target_item = separation.target[0] if isinstance(separation.target, list) else separation.target
-    residual_item = (
-        separation.residual[0] if isinstance(separation.residual, list) else separation.residual
+    entry: IsolationEntry = json.loads(cached_json.read_text(encoding="utf-8"))
+    write_job(
+        {
+            "id": clip_id,
+            "status": "done",
+            "stage": "done",
+            "trackmap_url": trackmap_url,
+            "isolation_id": iso_id,
+            "cached": True,
+            "error": None,
+        },
+        cache_root,
     )
-    sound = target_item.detach().float().cpu()
-    rest = residual_item.detach().float().cpu()
+    return iso_dir, cached_json, trackmap_url, entry
+
+
+# The arguments are one cohesive act of persistence and every heavy one is keyword-only, so
+# naming them beats bundling them into a record that exists only to satisfy the count.
+def _persist_isolation(  # noqa: PLR0913
+    clip_id: str,
+    iso_id: str,
+    *,
+    label: str,
+    prompt: str,
+    method: IsolationMethod,
+    sound: "torch.Tensor",
+    rest: "torch.Tensor",
+    processor: "SAMAudioProcessor",
+    cache_root: Path,
+    iso_dir: Path,
+    cached_json: Path,
+    trackmap_url: str,
+) -> IsolationEntry:
+    """Write one completed SAM Audio result using the shared isolation sidecar format."""
+    import json
 
     iso_dir.mkdir(parents=True, exist_ok=True)
     sample_rate = int(processor.audio_sampling_rate)
@@ -342,15 +345,15 @@ def run_isolation(  # noqa: PLR0913
             "cached": False,
             "error": None,
         },
-        root,
+        cache_root,
     )
 
     base_url = f"/files/clips/{clip_id}/isolations/{iso_id}"
-    entry = {
+    entry: IsolationEntry = {
         "id": iso_id,
         "label": label,
         "prompt": prompt,
-        "method": "sam_audio_text",
+        "method": method,
         "sound_url": f"{base_url}/sound.mp3",
         "sound_wav_url": f"{base_url}/sound.wav",
         "rest_url": f"{base_url}/rest.mp3",
@@ -371,8 +374,182 @@ def run_isolation(  # noqa: PLR0913
         "cached": False,
         "error": None,
     }
-    write_job(done_job, root)
+    write_job(done_job, cache_root)
     return entry
+
+
+def _separate_and_persist(  # noqa: PLR0913
+    clip_id: str,
+    iso_id: str,
+    *,
+    label: str,
+    prompt: str,
+    method: IsolationMethod,
+    batch: "Batch",
+    model: "SAMAudio",
+    processor: "SAMAudioProcessor",
+    cache_root: Path,
+    iso_dir: Path,
+    cached_json: Path,
+    trackmap_url: str,
+) -> IsolationEntry:
+    """Run one prepared SAM Audio batch and persist its result."""
+    import torch
+
+    with torch.inference_mode():
+        separation = model.separate(batch, predict_spans=False, reranking_candidates=1)
+
+    target_item = separation.target[0] if isinstance(separation.target, list) else separation.target
+    residual_item = (
+        separation.residual[0] if isinstance(separation.residual, list) else separation.residual
+    )
+    sound = target_item.detach().float().cpu()
+    rest = residual_item.detach().float().cpu()
+    return _persist_isolation(
+        clip_id,
+        iso_id,
+        label=label,
+        prompt=prompt,
+        method=method,
+        sound=sound,
+        rest=rest,
+        processor=processor,
+        cache_root=cache_root,
+        iso_dir=iso_dir,
+        cached_json=cached_json,
+        trackmap_url=trackmap_url,
+    )
+
+
+# Keyword-only below the identifiers: a caller cannot swap the model for the processor, which
+# is the mistake the argument count is a proxy for.
+def run_isolation(  # noqa: PLR0913
+    clip_id: str,
+    iso_id: str,
+    prompt: str,
+    label: str,
+    *,
+    model: "SAMAudio",
+    processor: "SAMAudioProcessor",
+    cache_root: Path | None = None,
+) -> IsolationEntry:
+    """Separate `prompt` from `clip_id` with SAM Audio and persist sound, rest, and peaks."""
+    root = cache_root if cache_root is not None else get_cache_root()
+    iso_dir, cached_json, trackmap_url, cached = _cached_isolation(clip_id, iso_id, root)
+    if cached is not None:
+        return cached
+
+    mix_wav = clip_dir(clip_id, root) / "mix.wav"
+    batch = processor(audios=[str(mix_wav)], descriptions=[prompt]).to("cuda")
+    return _separate_and_persist(
+        clip_id,
+        iso_id,
+        label=label,
+        prompt=prompt,
+        method="sam_audio_text",
+        batch=batch,
+        model=model,
+        processor=processor,
+        cache_root=root,
+        iso_dir=iso_dir,
+        cached_json=cached_json,
+        trackmap_url=trackmap_url,
+    )
+
+
+def _clip_video_size(directory: Path) -> tuple[int, int]:
+    """Read the pixel dimensions used when SAM 3.1 received this clip."""
+    import json
+
+    metadata = json.loads((directory / "trackmap.json").read_text(encoding="utf-8"))
+    if not isinstance(metadata, dict):
+        raise RuntimeError("clip trackmap is not an object")
+    video = metadata.get("video")
+    if not isinstance(video, dict):
+        raise RuntimeError("visual isolation requires a video clip")
+    width, height = video.get("width"), video.get("height")
+    if isinstance(width, bool) or not isinstance(width, int) or width <= 0:
+        raise RuntimeError("clip video width is invalid")
+    if isinstance(height, bool) or not isinstance(height, int) or height <= 0:
+        raise RuntimeError("clip video height is invalid")
+    return width, height
+
+
+def _video_frames(video_path: Path, width: int, height: int) -> "torch.Tensor":
+    """Decode the same 10 fps RGB frames that SAM 3.1 saw into uint8 NCHW form."""
+    import torch
+
+    completed = subprocess.run(
+        [
+            "ffmpeg",
+            "-v",
+            "error",
+            "-i",
+            str(video_path),
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "rgb24",
+            "pipe:1",
+        ],
+        check=True,
+        capture_output=True,
+    )
+    frame_size = width * height * 3
+    if not completed.stdout or len(completed.stdout) % frame_size != 0:
+        raise RuntimeError("decoded video frames do not match the clip dimensions")
+    return (
+        torch.frombuffer(bytearray(completed.stdout), dtype=torch.uint8)
+        .reshape(-1, height, width, 3)
+        .permute(0, 3, 1, 2)
+        .contiguous()
+    )
+
+
+# Same shape as `run_isolation`, deliberately: the two differ only in how the target is named.
+def run_visual_isolation(  # noqa: PLR0913
+    clip_id: str,
+    iso_id: str,
+    track: "TrackResult",
+    *,
+    model: "SAMAudio",
+    processor: "SAMAudioProcessor",
+    cache_root: Path | None = None,
+) -> IsolationEntry:
+    """Separate a tracked object with its SAM 3.1 raster mask as a SAM Audio visual prompt."""
+    from track import track_mask_tensor
+
+    root = cache_root if cache_root is not None else get_cache_root()
+    iso_dir, cached_json, trackmap_url, cached = _cached_isolation(clip_id, iso_id, root)
+    if cached is not None:
+        return cached
+
+    directory = clip_dir(clip_id, root)
+    width, height = _clip_video_size(directory)
+    segment_input = directory / "segment_input.mp4"
+    if not segment_input.is_file():
+        raise FileNotFoundError(f"clip {clip_id} has no segmented video: {segment_input}")
+    frames = _video_frames(segment_input, width, height)
+    masks = track_mask_tensor(track, int(frames.shape[0]), width, height)
+    masked_videos = processor.mask_videos([frames], [masks])
+    mix_wav = directory / "mix.wav"
+    batch = processor(audios=[str(mix_wav)], descriptions=[""], masked_videos=masked_videos).to(
+        "cuda"
+    )
+    return _separate_and_persist(
+        clip_id,
+        iso_id,
+        label=track["label"],
+        prompt=track["prompt"],
+        method="sam_audio_visual",
+        batch=batch,
+        model=model,
+        processor=processor,
+        cache_root=root,
+        iso_dir=iso_dir,
+        cached_json=cached_json,
+        trackmap_url=trackmap_url,
+    )
 
 
 # The clip is dub techno with an ambient field recording mixed in: kick, hats, chord stabs, bass and

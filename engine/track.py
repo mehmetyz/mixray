@@ -16,7 +16,7 @@ import re
 import subprocess
 from collections.abc import AsyncIterator, Iterable, Iterator
 from pathlib import Path
-from typing import TypedDict
+from typing import TYPE_CHECKING, Literal, TypedDict
 
 import modal
 
@@ -31,6 +31,7 @@ from meta_sam_parser import (
     SegmentationMaskRecord,
     VideoSegmentationResult,
     build_object_prompt,
+    decode_mask_to_raster,
     decode_mask_to_svg_path,
     parse_responses_stream,
     video_segmentation_format,
@@ -39,6 +40,9 @@ from meta_sam_parser import (
 import meta_api
 from images import web_image
 from ingest import VIDEO_FPS, clip_dir, get_cache_root
+
+if TYPE_CHECKING:
+    import torch
 
 LOGGER = logging.getLogger(__name__)
 
@@ -68,6 +72,32 @@ class FramePolygons(TypedDict):
     paths: list[str]
 
 
+class StoredMask(TypedDict):
+    """The complete, box-local SAM 3.1 mask needed to reconstruct a raster."""
+
+    encoding: Literal["one_bit", "lossless"]
+    payload: str
+    width: int
+    height: int
+
+
+class StoredMaskBounds(TypedDict):
+    """The half-open source-frame rectangle covered by one stored mask."""
+
+    left: float
+    top: float
+    right: float
+    bottom: float
+
+
+class StoredMaskRecord(TypedDict):
+    """One frame's source mask, retained separately from its UI outline."""
+
+    frame: int
+    mask: StoredMask
+    bounds: StoredMaskBounds
+
+
 class TrackResult(TypedDict):
     """What one tap produces: an outline per answered frame, and when the object is on screen."""
 
@@ -76,6 +106,7 @@ class TrackResult(TypedDict):
     prompt: str
     frames: list[FramePolygons]
     visible: list[list[float]]
+    masks: list[StoredMaskRecord]
 
 
 def point_prompt(width: int, height: int, x: int, y: int, frame: int) -> str:
@@ -207,11 +238,115 @@ def to_frame_space(path: str, mask: SegmentationMask, bounds: SegmentationMaskBo
     return rewritten
 
 
+def _stored_mask_record(record: SegmentationMaskRecord, frame: int) -> StoredMaskRecord:
+    """Keep the parser-owned payload so visual isolation never has to rasterize an SVG outline."""
+    return {
+        "frame": frame,
+        "mask": {
+            "encoding": record.mask.encoding,
+            "payload": record.mask.payload,
+            "width": record.mask.width,
+            "height": record.mask.height,
+        },
+        "bounds": {
+            "left": record.bounds.left,
+            "top": record.bounds.top,
+            "right": record.bounds.right,
+            "bottom": record.bounds.bottom,
+        },
+    }
+
+
+def _place_mask(
+    output: "torch.Tensor", record: StoredMaskRecord, frame_count: int, width: int, height: int
+) -> None:
+    """Set the tracked object to zero in SAM Audio's inverted full-frame mask."""
+    import torch
+    from torch.nn import functional as functions
+
+    frame = record["frame"]
+    if frame < 0 or frame >= frame_count:
+        raise ValueError(f"mask frame {frame} is outside the clip's {frame_count} frames")
+
+    source = record["mask"]
+    bounds = record["bounds"]
+    raster = decode_mask_to_raster(
+        SegmentationMask(
+            encoding=source["encoding"],
+            payload=source["payload"],
+            width=source["width"],
+            height=source["height"],
+        )
+    )
+    expected_size = source["width"] * source["height"]
+    if len(raster) != expected_size:
+        raise RuntimeError("decoded mask size did not match its dimensions")
+
+    left = round(bounds["left"])
+    top = round(bounds["top"])
+    right = round(bounds["right"])
+    bottom = round(bounds["bottom"])
+    placed_width = right - left
+    placed_height = bottom - top
+    if placed_width <= 0 or placed_height <= 0:
+        raise ValueError("mask bounds must cover at least one pixel")
+
+    local = torch.frombuffer(bytearray(raster), dtype=torch.uint8).reshape(
+        source["height"], source["width"]
+    )
+    placed = functions.interpolate(
+        local.unsqueeze(0).unsqueeze(0).to(torch.float32),
+        size=(placed_height, placed_width),
+        mode="nearest",
+    ).to(torch.uint8)[0, 0]
+
+    destination_left = max(0, left)
+    destination_top = max(0, top)
+    destination_right = min(width, right)
+    destination_bottom = min(height, bottom)
+    if destination_left >= destination_right or destination_top >= destination_bottom:
+        return
+
+    source_left = destination_left - left
+    source_top = destination_top - top
+    source_right = source_left + destination_right - destination_left
+    source_bottom = source_top + destination_bottom - destination_top
+    object_pixels = placed[source_top:source_bottom, source_left:source_right].bool()
+    destination = output[
+        frame, :, destination_top:destination_bottom, destination_left:destination_right
+    ]
+    destination.masked_fill_(object_pixels.unsqueeze(0), 0)
+
+
+def track_mask_tensor(
+    track: TrackResult, frame_count: int, width: int, height: int
+) -> "torch.Tensor":
+    """Build the uint8 NCHW mask `SAMAudioProcessor.mask_videos` expects for one track.
+
+    SAM Audio keeps pixels whose corresponding mask value is zero. The SAM 3.1 raster has ones on
+    the object, so the full-frame tensor starts as ones and `_place_mask` clears the object pixels.
+    """
+    import torch
+
+    if frame_count <= 0:
+        raise ValueError("frame_count must be positive")
+    if width <= 0 or height <= 0:
+        raise ValueError("video dimensions must be positive")
+    if not track["masks"]:
+        raise ValueError("track has no SAM 3.1 mask records")
+
+    output = torch.ones((frame_count, 3, height, width), dtype=torch.uint8)
+    for record in track["masks"]:
+        _place_mask(output, record, frame_count, width, height)
+    return output
+
+
 def build_track(
     result: VideoSegmentationResult, track_id: str, label: str, prompt: str, fps: int = VIDEO_FPS
 ) -> TrackResult:
     """Turn the parsed records into polygons per frame plus the spans the object is on screen."""
     by_frame: dict[int, list[str]] = {}
+    masks: list[StoredMaskRecord] = []
     for record in _mask_records(result):
         # `frame` is a FrameReference, and an image result carries none at all.
         if record.frame is None:
@@ -219,6 +354,7 @@ def build_track(
         index = record.frame.frame_index
         placed = to_frame_space(decode_mask_to_svg_path(record.mask), record.mask, record.bounds)
         by_frame.setdefault(index, []).append(placed)
+        masks.append(_stored_mask_record(record, index))
 
     frames: list[FramePolygons] = []
     for frame in sorted(by_frame):
@@ -229,6 +365,7 @@ def build_track(
         "prompt": prompt,
         "frames": frames,
         "visible": visible_ranges([item["time"] for item in frames]),
+        "masks": masks,
     }
 
 
