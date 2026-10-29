@@ -7,6 +7,7 @@ what it shows, and turns that answer into the concise text prompt SAM Audio sepa
 
 import json
 import logging
+import re
 import subprocess
 import tempfile
 from pathlib import Path
@@ -19,10 +20,19 @@ LOGGER = logging.getLogger(__name__)
 LABEL_MODEL = "muse-spark-1.2-contributor"
 MAX_OUTPUT_TOKENS = 4000
 MAX_LABEL_WORDS = 3
+# Acronyms a display label keeps upper case; everything else is title-cased word by word.
+ACRONYMS = frozenset({"midi", "dj", "tr", "fm", "sfx"})
+MAX_LABEL_LENGTH = 48
+MAX_PROMPT_LENGTH = 48
 
 LABEL_INSTRUCTION = (
-    "What musical instrument or sound source is shown in this image? "
-    "Answer with the single most prominent one."
+    "What musical instrument or sound source is shown in this image? Identify the single most "
+    "prominent one and return JSON only. `prompt` must be one to three lowercase words naming the "
+    "kind of instrument or sound: no sentence, markdown, brand or model name, or punctuation. "
+    "`label` must name the same thing in Title Case, with at most three words and no slashes. "
+    'Examples: {"label": "Electronic Keyboard", "prompt": "electronic keyboard"}; '
+    '{"label": "Grand Piano", "prompt": "grand piano"}; '
+    '{"label": "Snare Drum", "prompt": "snare drum"}.'
 )
 
 
@@ -42,18 +52,51 @@ class RegionBounds(TypedDict):
     bottom: int
 
 
+LabelFixture = tuple[str, RegionLabel]
+
+
 LABEL_SCHEMA: dict[str, object] = {
     "type": "object",
     "additionalProperties": False,
     "required": ["label", "prompt"],
     "properties": {
-        "label": {"type": "string", "description": "Title case, at most three words."},
+        "label": {
+            "type": "string",
+            "maxLength": MAX_LABEL_LENGTH,
+            "description": (
+                "The same instrument or sound as prompt, in Title Case, with one to three words "
+                "and no slashes or punctuation."
+            ),
+        },
         "prompt": {
             "type": "string",
-            "description": "Lowercase noun phrase, with no verbs or punctuation.",
+            "maxLength": MAX_PROMPT_LENGTH,
+            "description": (
+                "One to three lowercase words naming the instrument or sound; no sentence, "
+                "markdown, brand, model name, or punctuation."
+            ),
         },
     },
 }
+
+LABEL_FIXTURES: tuple[LabelFixture, ...] = (
+    (
+        '{"label": "Piano / Electronic Keyboard", "prompt": "The most prominent sound '
+        "source shown is a **Piano-style Keyboard - Electronic / MIDI Controller Keyboard** - "
+        'black and white piano keys."}',
+        {"label": "Piano Style Keyboard", "prompt": "piano style keyboard"},
+    ),
+    (
+        '{"label": "MIDI/Electronic Keyboard"}',
+        {"label": "MIDI Electronic Keyboard", "prompt": "midi electronic keyboard"},
+    ),
+    (
+        '{"label": "MIDI Controller Keyboard", "prompt": "The image shows an **ARTURIA '
+        "MiniLab 3 - 25-key USB MIDI Controller Keyboard** - a compact electronic/MIDI keyboard "
+        'controller."}',
+        {"label": "MIDI Controller Keyboard", "prompt": "midi controller keyboard"},
+    ),
+)
 
 
 def _crop_filter(bounds: RegionBounds) -> str:
@@ -93,42 +136,68 @@ def crop_region(frame_path: Path, bounds: RegionBounds, destination: Path) -> No
     )
 
 
-def _valid_label(value: object) -> str | None:
-    """Return a button-safe Title case label, or None when the reply is malformed."""
-    if not isinstance(value, str) or value != value.strip():
-        return None
-    words = value.split()
-    if not 1 <= len(words) <= MAX_LABEL_WORDS or value != value.title():
-        return None
-    if not all(word.isalnum() for word in words):
-        return None
-    return value
-
-
 def _valid_prompt(value: object) -> str | None:
     """Return a SAM Audio-ready lowercase noun phrase, or None when malformed."""
-    if not isinstance(value, str) or value != value.strip() or value != value.lower():
+    if (
+        not isinstance(value, str)
+        or value != value.strip()
+        or value != value.lower()
+        or len(value) > MAX_PROMPT_LENGTH
+    ):
         return None
     words = value.split()
-    if not words or not all(word.isalnum() for word in words):
+    if not 1 <= len(words) <= MAX_LABEL_WORDS or not all(word.isalnum() for word in words):
         return None
     return value
+
+
+def _normalise_prompt(value: object) -> str | None:
+    """Recover a short SAM Audio prompt from a verbose model field."""
+    if not isinstance(value, str):
+        return None
+    shortened = value.split("(", maxsplit=1)[0].split(" - ", maxsplit=1)[0]
+    words = re.findall(r"[^\W_]+", shortened.lower())
+    return _valid_prompt(" ".join(words[-MAX_LABEL_WORDS:]))
+
+
+def _title_label(prompt: str) -> str:
+    """Make a display label from a validated prompt.
+
+    `str.title` writes a lowercased acronym back as a word, so "midi keyboard" would reach a button
+    as "Midi Keyboard". Instrument names carry a handful of acronyms; they stay upper case.
+    """
+    return " ".join(word.upper() if word in ACRONYMS else word.title() for word in prompt.split())
 
 
 def parse_label(raw: str) -> RegionLabel:
-    """Validate a structured Muse Spark reply before exposing it as a separation prompt."""
+    """Validate and recover a structured Muse Spark reply before exposing its prompt."""
     try:
         parsed = json.loads(raw)
     except json.JSONDecodeError as error:
         raise RuntimeError("label reply was not valid JSON") from error
-    if not isinstance(parsed, dict) or set(parsed) != {"label", "prompt"}:
+    if not isinstance(parsed, dict):
         raise RuntimeError("label reply did not have the expected fields")
 
-    label = _valid_label(parsed["label"])
-    prompt = _valid_prompt(parsed["prompt"])
-    if label is None or prompt is None:
-        raise RuntimeError("label reply had an invalid label or prompt")
-    return {"label": label, "prompt": prompt}
+    label_value = parsed.get("label")
+    prompt_value = parsed.get("prompt")
+    prompt = _valid_prompt(prompt_value)
+    if prompt is None:
+        prompt = _normalise_prompt(prompt_value)
+        if prompt is None or any(character.isdigit() for character in prompt):
+            prompt = _normalise_prompt(label_value)
+    if prompt is None:
+        raise RuntimeError("label reply had no usable label or prompt")
+    # The label is always derived rather than taken from the reply, so the chip and the separation
+    # prompt can never name two different sounds, and acronyms are cased once in one place.
+    return {"label": _title_label(prompt), "prompt": prompt}
+
+
+def check_label_fixtures() -> None:
+    """Raise when parser recovery no longer handles the recorded API replies."""
+    for raw, expected in LABEL_FIXTURES:
+        actual = parse_label(raw)
+        if actual != expected:
+            raise AssertionError(f"expected {expected}, got {actual}")
 
 
 def label_region(frame_path: Path, bounds: RegionBounds, api_key: str) -> RegionLabel:
@@ -167,3 +236,7 @@ def label_region(frame_path: Path, bounds: RegionBounds, api_key: str) -> Region
     result = parse_label(raw)
     LOGGER.info("labelled selected region as %s", result["prompt"])
     return result
+
+
+if __name__ == "__main__":
+    check_label_fixtures()
