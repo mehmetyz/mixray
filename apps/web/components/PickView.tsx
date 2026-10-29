@@ -30,10 +30,16 @@ export function PickView() {
 
   const isDemo = !LIVE_CLIP_ID_RE.test(clipId);
   const [demoQuartetMode, setDemoQuartetMode] = useState<boolean>(false);
-  const [selectedMaskId, setSelectedMaskId] = useState<string>("violin");
+  const initialTargetId = trackMap.video?.tracks[0]?.id ?? "violin";
+  const [selectedMaskId, setSelectedMaskId] = useState<string>(initialTargetId);
   const [promptInput, setPromptInput] = useState<string>("");
   const [workingStage, setWorkingStage] = useState<JobStage | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  const matchedTrack = trackMap.video?.tracks.find(
+    (track) => track.isolation_id === selectedIsolationId,
+  );
+  const activeMaskId = matchedTrack?.id ?? selectedMaskId;
 
   const runOrSelectPrompt = async (prompt: string, label?: string) => {
     const cleanPrompt = prompt.trim();
@@ -135,7 +141,7 @@ export function PickView() {
         <VideoMaskStage
           video={trackMap.video}
           demoQuartetMode={demoQuartetMode}
-          selectedTargetId={selectedMaskId}
+          selectedTargetId={activeMaskId}
           onSelectTarget={(targetId, prompt, label, isolationId) => {
             setSelectedMaskId(targetId);
             if (isolationId !== undefined) {

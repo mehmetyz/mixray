@@ -1094,3 +1094,70 @@ def visual_probe(model_id: str = DEFAULT_MODEL_ID) -> str:
     WEIGHTS_VOLUME.commit()
     say(f"wrote WAVs to {output_dir}")
     return "\n".join(lines)
+
+
+VISUAL_COMPARE_PROMPT = "piano"
+
+
+@app.function(
+    image=sam_audio_image,
+    gpu=MEASURE_GPU,
+    volumes={WEIGHTS_PATH: WEIGHTS_VOLUME, "/cache": modal.Volume.from_name("mixray-cache")},
+    secrets=[HF_SECRET],
+    timeout=MEASURE_TIMEOUT_SECONDS,
+)
+def visual_vs_text(clip_id: str, track_id: str, prompt: str = VISUAL_COMPARE_PROMPT) -> str:
+    """Isolate the same source twice, once from a tracked mask and once from a text prompt.
+
+    This is the measurement the product rests on: pointing costs about nine times the latency of
+    typing, so it has to be worth it.
+    """
+    import json
+
+    os.environ["HF_HOME"] = f"{WEIGHTS_PATH}/huggingface"
+
+    import torch
+    from sam_audio import SAMAudio, SAMAudioProcessor
+
+    logging.basicConfig(level=logging.INFO)
+    lines: list[str] = []
+
+    def say(text: str) -> None:
+        lines.append(text)
+        LOGGER.info(text)
+
+    cache = Path("/cache")
+    track_path = cache / "clips" / clip_id / "tracks" / f"{track_id}.json"
+    track = json.loads(track_path.read_text(encoding="utf-8"))
+
+    model = SAMAudio.from_pretrained(DEFAULT_MODEL_ID, **RANKERS_OFF).eval().cuda()
+    processor = SAMAudioProcessor.from_pretrained(DEFAULT_MODEL_ID)
+    properties = torch.cuda.get_device_properties(0)
+    say(f"{DEFAULT_MODEL_ID} on {properties.name}, track {track_id}, text prompt {prompt!r}")
+
+    torch.cuda.reset_peak_memory_stats()
+    started = time.perf_counter()
+    visual = run_visual_isolation(
+        clip_id, f"{track_id}_visual", track, model=model, processor=processor, cache_root=cache
+    )
+    say(
+        f"visual: {time.perf_counter() - started:5.1f}s  "
+        f"peak {torch.cuda.max_memory_allocated() / GIGABYTE:5.2f} GB  -> {visual['sound_url']}"
+    )
+
+    torch.cuda.reset_peak_memory_stats()
+    started = time.perf_counter()
+    text = run_isolation(
+        clip_id,
+        f"{track_id}_text",
+        prompt,
+        "Text",
+        model=model,
+        processor=processor,
+        cache_root=cache,
+    )
+    say(
+        f"text:   {time.perf_counter() - started:5.1f}s  "
+        f"peak {torch.cuda.max_memory_allocated() / GIGABYTE:5.2f} GB  -> {text['sound_url']}"
+    )
+    return "\n".join(lines)
