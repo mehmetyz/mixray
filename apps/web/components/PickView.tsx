@@ -23,6 +23,7 @@ export function PickView() {
     selectedIsolationId,
     selectIsolation,
     fallbackAlternative,
+    fallbackComparison,
     useDemucsCleaner,
     setUseDemucsCleaner,
     setMonitor,
@@ -202,6 +203,114 @@ export function PickView() {
           </div>
         ) : null}
 
+        {/* Describe a sound - prominent search/prompt box */}
+        <div className="space-y-2 rounded-well border border-line-2 bg-inset p-3">
+          <div className="flex items-center justify-between">
+            <label htmlFor="sound-prompt-input" className="eyebrow">
+              Describe a sound
+            </label>
+            <span className="mono-num rounded-icon border border-line-2 bg-surface-2 px-1.5 py-0.5 text-[10px] text-accent">
+              SAM AUDIO
+            </span>
+          </div>
+
+          <p className="text-[11px] leading-relaxed text-text-2">
+            Type any sound or instrument to isolate from the mix:
+          </p>
+
+          <form onSubmit={onPromptSubmit} className="space-y-1.5">
+            <div className="flex gap-1.5">
+              <input
+                id="sound-prompt-input"
+                type="text"
+                value={promptInput}
+                onChange={(event) => setPromptInput(event.target.value)}
+                placeholder="e.g. synth lead, piano chords, sub bass"
+                disabled={workingStage !== null}
+                className="mono-num h-9 flex-1 rounded-icon border border-line-2 bg-surface px-2.5 text-xs text-text placeholder:text-muted focus:border-accent focus:outline-none"
+              />
+              <button
+                type="submit"
+                disabled={workingStage !== null || promptInput.trim().length === 0}
+                className="h-9 cursor-pointer rounded-icon bg-text px-3.5 text-xs font-semibold text-bg transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Isolate
+              </button>
+            </div>
+
+            {promptInput.trim().length > 0 ? (
+              <p className="mono-num truncate text-[10px] text-muted">
+                Prompt: &quot;{promptInput.trim()}&quot;
+              </p>
+            ) : null}
+          </form>
+
+          {/* Muse Spark suggestion chips */}
+          {trackMap.suggestions.length > 0 ? (
+            <div className="border-t border-line-2 pt-2 space-y-1.5">
+              <span className="mono-num block text-[10px] text-muted uppercase tracking-wider">
+                Or pick a detected suggestion
+              </span>
+              <div className="flex flex-wrap gap-1.5">
+                {trackMap.suggestions.map((chip) => {
+                  const active =
+                    selectedIsolation !== undefined &&
+                    (selectedIsolation.prompt.toLowerCase() === chip.prompt.toLowerCase() ||
+                      selectedIsolation.label.toLowerCase() === chip.label.toLowerCase());
+                  return (
+                    <button
+                      key={chip.prompt}
+                      type="button"
+                      aria-pressed={active}
+                      disabled={workingStage !== null}
+                      onClick={() => {
+                        setPromptInput(chip.prompt);
+                        void runOrSelectPrompt(chip.prompt, chip.label);
+                      }}
+                      className={`cursor-pointer rounded-icon border px-2.5 py-1 text-xs font-medium transition ${
+                        active
+                          ? "border-accent bg-accent text-accent-ink font-semibold"
+                          : "border-line-2 bg-surface-2 text-text-2 hover:border-control hover:text-text"
+                      }`}
+                    >
+                      {chip.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ) : null}
+        </div>
+
+        {/* Progress Stepper */}
+        {workingStage !== null ? (
+          <div className="space-y-1.5 rounded-well border border-accent/40 bg-accent/10 p-3 text-xs">
+            <div className="mono-num flex items-center justify-between text-[11px]">
+              <span className="font-semibold text-accent uppercase">Isolating sound</span>
+              <span className="h-1.5 w-1.5 rounded-full bg-accent animate-ping" />
+            </div>
+            <div className="mono-num flex flex-wrap items-center gap-1.5">
+              {PROGRESS_STAGES.map((stage, idx) => (
+                <span key={stage} className="flex items-center gap-1.5">
+                  {idx > 0 ? <span className="text-muted">→</span> : null}
+                  <span
+                    className={`rounded-xs px-1.5 py-0.5 text-[10px] ${
+                      stage === workingStage
+                        ? "bg-accent font-semibold text-accent-ink"
+                        : "text-muted"
+                    }`}
+                  >
+                    {stage}
+                  </span>
+                </span>
+              ))}
+            </div>
+            <p className="text-[10px] text-text-2">
+              Typically ~15–20 seconds on GPU (instant if cached).
+            </p>
+          </div>
+        ) : null}
+
         {/* Ready Isolated Stems */}
         {trackMap.isolations.length > 0 ? (
           <div className="space-y-1.5">
@@ -247,77 +356,15 @@ export function PickView() {
           </div>
         ) : null}
 
-        {trackMap.suggestions.length > 0 ? (
-          <div>
-            <p className="mb-2 text-xs text-muted">Suggestions</p>
-            <div className="flex flex-wrap gap-1.5">
-              {trackMap.suggestions.map((chip) => {
-                const active =
-                  selectedIsolation !== undefined &&
-                  (selectedIsolation.prompt.toLowerCase() === chip.prompt.toLowerCase() ||
-                    selectedIsolation.label.toLowerCase() === chip.label.toLowerCase());
-                return (
-                  <button
-                    key={chip.prompt}
-                    type="button"
-                    aria-pressed={active}
-                    disabled={workingStage !== null}
-                    onClick={() => void runOrSelectPrompt(chip.prompt, chip.label)}
-                    className={`cursor-pointer rounded-icon border px-2.5 py-1 text-xs font-medium transition ${
-                      active
-                        ? "border-text bg-text text-bg"
-                        : "border-line-2 bg-bg text-text-2 hover:border-control hover:text-text"
-                    }`}
-                  >
-                    {chip.label}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        ) : null}
-
-        <form onSubmit={onPromptSubmit} className="space-y-2 border-t border-line pt-3">
-          <label htmlFor="sound-prompt-input" className="block text-xs text-muted">
-            Describe another sound
-          </label>
-          <div className="flex gap-1.5">
-            <input
-              id="sound-prompt-input"
-              type="text"
-              value={promptInput}
-              onChange={(event) => setPromptInput(event.target.value)}
-              placeholder="e.g. guitar, bass, cello"
-              className="mono-num h-8 flex-1 rounded-icon border border-line-2 bg-inset px-2.5 text-xs text-text placeholder:text-muted focus:border-text focus:outline-none"
-            />
-            <button
-              type="submit"
-              disabled={workingStage !== null || promptInput.trim().length === 0}
-              className="h-8 cursor-pointer rounded-icon border border-line-2 bg-surface-2 px-3 text-xs font-medium text-text hover:border-control disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              Go
-            </button>
-          </div>
-        </form>
-
-        {workingStage !== null ? (
-          <div className="space-y-1.5 rounded-well border border-line bg-inset p-3 text-xs">
-            <div className="mono-num flex flex-wrap items-center gap-1.5">
-              {PROGRESS_STAGES.map((stage, idx) => (
-                <span key={stage} className="flex items-center gap-1.5">
-                  {idx > 0 ? <span className="text-muted">→</span> : null}
-                  <span className={stage === workingStage ? "font-semibold text-accent" : "text-muted"}>
-                    {stage}
-                  </span>
-                </span>
-              ))}
-            </div>
-            <p className="text-[11px] text-muted">About 15–20 seconds on GPU (instant if cached).</p>
-          </div>
-        ) : null}
-
         {fallbackAlternative !== null ? (
-          <div className="border-t border-line pt-4">
+          <div className="space-y-2 rounded-well border border-line-2 bg-inset p-3">
+            <div className="flex items-center justify-between">
+              <span className="eyebrow">Cleaner Version</span>
+              <span className="mono-num rounded-icon border border-line-2 bg-surface-2 px-1.5 py-0.5 text-[10px] text-text-2">
+                {useDemucsCleaner ? "DEMUCS ACTIVE" : "SAM AUDIO ACTIVE"}
+              </span>
+            </div>
+
             <label className="flex cursor-pointer items-start gap-2.5">
               <input
                 type="checkbox"
@@ -325,15 +372,42 @@ export function PickView() {
                 onChange={(event) => setUseDemucsCleaner(event.target.checked)}
                 className="mt-0.5 h-3.5 w-3.5 rounded-icon border-control bg-bg accent-text"
               />
-              <span className="space-y-0.5 text-xs">
+              <div className="space-y-1 text-xs">
                 <span className="block font-medium text-text">
                   Cleaner version (Demucs {fallbackAlternative.name})
                 </span>
-                <span className="block text-muted">
-                  Standard instrument found, try both and keep the clearer one.
+                <span className="block text-[11px] leading-relaxed text-text-2">
+                  {fallbackComparison?.hasComparison
+                    ? fallbackComparison.reason
+                    : "Standard instrument found from Demucs fallback; switch to hear both versions."}
                 </span>
-              </span>
+              </div>
             </label>
+
+            {fallbackComparison?.hasComparison &&
+            fallbackComparison.samConfidence !== null &&
+            fallbackComparison.demucsConfidence !== null ? (
+              <div className="mono-num grid grid-cols-2 gap-2 border-t border-line-2 pt-2 text-[11px]">
+                <div
+                  className={`rounded-icon border px-2 py-1 text-center ${
+                    fallbackComparison.preferredMethod === "demucs"
+                      ? "border-accent bg-accent/15 font-semibold text-accent"
+                      : "border-line-2 bg-surface text-muted"
+                  }`}
+                >
+                  Demucs: {Math.round(fallbackComparison.demucsConfidence * 100)}%
+                </div>
+                <div
+                  className={`rounded-icon border px-2 py-1 text-center ${
+                    fallbackComparison.preferredMethod === "sam_audio"
+                      ? "border-accent bg-accent/15 font-semibold text-accent"
+                      : "border-line-2 bg-surface text-muted"
+                  }`}
+                >
+                  SAM: {Math.round(fallbackComparison.samConfidence * 100)}%
+                </div>
+              </div>
+            ) : null}
           </div>
         ) : null}
 

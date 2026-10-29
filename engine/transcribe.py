@@ -432,6 +432,35 @@ def transcribe_isolated_sound(wav_path: Path, trackmap: dict[str, object]) -> Tr
     }
 
 
+class CleanerVersionChoice(TypedDict):
+    """The outcome of comparing transcription confidence between two separation candidates."""
+
+    preferred: Literal["sam_audio", "demucs"]
+    confidence_difference: float
+    sam_confidence: float
+    demucs_confidence: float
+
+
+def compare_pitch_confidence(
+    sam_confidence: float, demucs_confidence: float
+) -> CleanerVersionChoice:
+    """Choose the cleaner version for transcription based on Basic Pitch confidence.
+
+    When Demucs yields higher mean pitch confidence, it is chosen as the preferred version
+    while still leaving both candidates selectable in the UI.
+    """
+    diff = round(abs(demucs_confidence - sam_confidence), ROUND_CONFIDENCE)
+    preferred: Literal["sam_audio", "demucs"] = (
+        "demucs" if demucs_confidence > sam_confidence else "sam_audio"
+    )
+    return {
+        "preferred": preferred,
+        "confidence_difference": diff,
+        "sam_confidence": round(sam_confidence, ROUND_CONFIDENCE),
+        "demucs_confidence": round(demucs_confidence, ROUND_CONFIDENCE),
+    }
+
+
 def apply_transcription(
     clip_id: str, isolation_id: str, cache_root: Path | None = None
 ) -> Transcription:

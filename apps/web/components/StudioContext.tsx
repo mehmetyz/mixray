@@ -14,10 +14,42 @@ import {
 } from "react";
 import { StemPlayer, type LoopRange, type StemName } from "@/lib/audio/player";
 import { resolvePlayableStems } from "@/lib/studio/demo-audio";
+import {
+  compareStemPitchConfidence,
+  type PitchConfidenceComparison,
+} from "@/lib/studio/fallback-choice";
 import { barRangeToSeconds, matchFallbackStem } from "@/lib/studio/format";
 import type { FallbackStem, Isolation, TrackMap } from "@/lib/trackmap/trackmap.generated";
 
-export type HandFilter = "right" | "left" | "both";
+import type {
+  CoachAction,
+  HandFilter,
+  MarkProblemBarAction,
+  MarkProblemBarArgs,
+  SetLoopAction,
+  SetLoopArgs,
+  SetTempoAction,
+  SetTempoArgs,
+  SimplifyBarAction,
+  SimplifyBarArgs,
+  SwitchHandAction,
+  SwitchHandArgs,
+} from "@/lib/coach";
+
+export type {
+  CoachAction,
+  HandFilter,
+  MarkProblemBarAction,
+  MarkProblemBarArgs,
+  SetLoopAction,
+  SetLoopArgs,
+  SetTempoAction,
+  SetTempoArgs,
+  SimplifyBarAction,
+  SimplifyBarArgs,
+  SwitchHandAction,
+  SwitchHandArgs,
+};
 
 export type BarLoop = {
   startBar: number;
@@ -28,61 +60,6 @@ export type ProblemBarMark = {
   bar: number;
   reason: string;
 };
-
-export type SetLoopArgs = {
-  start_bar: number;
-  end_bar: number;
-};
-
-export type SetTempoArgs = {
-  percent: number;
-};
-
-export type SwitchHandArgs = {
-  hand: HandFilter;
-};
-
-export type SimplifyBarArgs = {
-  bar: number;
-};
-
-export type MarkProblemBarArgs = {
-  bar: number;
-  reason: string;
-};
-
-export type SetLoopAction = {
-  name: "set_loop";
-  args: SetLoopArgs;
-};
-
-export type SetTempoAction = {
-  name: "set_tempo";
-  args: SetTempoArgs;
-};
-
-export type SwitchHandAction = {
-  name: "switch_hand";
-  args: SwitchHandArgs;
-};
-
-export type SimplifyBarAction = {
-  name: "simplify_bar";
-  args: SimplifyBarArgs;
-};
-
-export type MarkProblemBarAction = {
-  name: "mark_problem_bar";
-  args: MarkProblemBarArgs;
-};
-
-/** Fixed Coach tool contract from SPEC.md §3. */
-export type CoachAction =
-  | SetLoopAction
-  | SetTempoAction
-  | SwitchHandAction
-  | SimplifyBarAction
-  | MarkProblemBarAction;
 
 export type CoachActionEntry = {
   id: string;
@@ -95,6 +72,7 @@ export type StudioContextValue = {
   selectedIsolation: Isolation | undefined;
   selectedIsolationId: string;
   fallbackAlternative: FallbackStem | null;
+  fallbackComparison: PitchConfidenceComparison | null;
   useDemucsCleaner: boolean;
   isSynthesizedPreview: boolean;
   monitor: StemName;
@@ -194,6 +172,11 @@ export function StudioProvider({ clipId, initialTrackMap, children }: StudioProv
     [selectedIsolation, trackMap.fallback_stems],
   );
 
+  const fallbackComparison = useMemo(
+    () => compareStemPitchConfidence(selectedIsolation, fallbackAlternative, trackMap.isolations),
+    [selectedIsolation, fallbackAlternative, trackMap.isolations],
+  );
+
   const effectiveSoundUrl = useMemo(() => {
     if (useDemucsCleaner && fallbackAlternative !== null) {
       return fallbackAlternative.url;
@@ -291,12 +274,15 @@ export function StudioProvider({ clipId, initialTrackMap, children }: StudioProv
   const selectIsolation = useCallback(
     (isolationId: string) => {
       setRequestedIsoId(isolationId);
-      setUseDemucsCleaner(false);
+      const targetIso = trackMap.isolations.find((item) => item.id === isolationId);
+      const targetFallback = matchFallbackStem(targetIso, trackMap.fallback_stems);
+      const comp = compareStemPitchConfidence(targetIso, targetFallback, trackMap.isolations);
+      setUseDemucsCleaner(comp?.preferredMethod === "demucs");
       if (pathname !== null && pathname.length > 0) {
         router.replace(`${pathname}?iso=${encodeURIComponent(isolationId)}`, { scroll: false });
       }
     },
-    [pathname, router],
+    [pathname, router, trackMap.isolations, trackMap.fallback_stems],
   );
 
   const setMonitor = useCallback((stem: StemName) => {
@@ -413,6 +399,7 @@ export function StudioProvider({ clipId, initialTrackMap, children }: StudioProv
       selectedIsolation,
       selectedIsolationId,
       fallbackAlternative,
+      fallbackComparison,
       useDemucsCleaner,
       isSynthesizedPreview,
       monitor,
@@ -442,6 +429,7 @@ export function StudioProvider({ clipId, initialTrackMap, children }: StudioProv
       selectedIsolation,
       selectedIsolationId,
       fallbackAlternative,
+      fallbackComparison,
       useDemucsCleaner,
       isSynthesizedPreview,
       monitor,

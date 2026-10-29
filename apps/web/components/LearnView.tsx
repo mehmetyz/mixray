@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import { drawLearnPianoRoll, type PlayedNoteDot } from "@/lib/studio/canvas";
 import { midiToNoteName } from "@/lib/studio/format";
@@ -25,6 +24,7 @@ import {
 import type { Note } from "@/lib/trackmap/trackmap.generated";
 import { useStudio, type HandFilter } from "./StudioContext";
 import { TimelineRuler } from "./StudioShell";
+import { CoachPanel } from "./CoachPanel";
 
 type DifficultyLevel = "easy" | "intermediate";
 
@@ -124,7 +124,6 @@ export function LearnView() {
     problemBar,
     handFilter,
     simplifiedBars,
-    coachEntries,
     applyCoachAction,
     resetCoachOverrides,
   } = useStudio();
@@ -134,11 +133,6 @@ export function LearnView() {
   const [selectedMidiId, setSelectedMidiId] = useState<string>("qwerty");
   const [playedDots, setPlayedDots] = useState<PlayedNoteDot[]>([]);
   const [lastPlayedLabel, setLastPlayedLabel] = useState<string>("Ready · press A–L");
-  const [coachFeedback, setCoachFeedback] = useState<string>(
-    "Play along on A–L or a MIDI keyboard. Coach measures onset timing (±50 ms window) and pitch per bar.",
-  );
-  const [voicePromptOpen, setVoicePromptOpen] = useState<boolean>(false);
-  const [voiceCommandText, setVoiceCommandText] = useState<string>("");
 
   const rollCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const currentTimeRef = useRef<number>(currentTime);
@@ -264,7 +258,6 @@ export function LearnView() {
     const attemptedBars = scoreResult.bars.filter((bar) => bar.attempted);
     const firstAttemptedBar = attemptedBars[0];
     if (firstAttemptedBar === undefined) {
-      setCoachFeedback("No take recorded yet. Play a bar on A–L or a MIDI keyboard, then analyze it.");
       return;
     }
 
@@ -283,39 +276,6 @@ export function LearnView() {
     });
     applyCoachAction({ name: "set_loop", args: { start_bar: loopStart, end_bar: loopEnd } });
     applyCoachAction({ name: "set_tempo", args: { percent: 75 } });
-    const offsetDescription =
-      problem.meanOffsetMs === null ? "no matched notes" : `mean ${formatOffset(problem.meanOffsetMs)}`;
-    setCoachFeedback(
-      `Bar ${problemBarNumber}: ${formatPercent(problem.hitRate)} hits, ${formatPercent(problem.onTimeRate)} on time, ${offsetDescription}, ${problemDetails.reason}. Looped bars ${loopStart}–${loopEnd} at 75% tempo.`,
-    );
-  };
-
-  const applyVoicePhrase = () => {
-    const lower = voiceCommandText.trim().toLowerCase();
-    if (lower.length === 0) return;
-
-    const loopMatch = lower.match(/(\d+)\s*(?:to|-|–)\s*(\d+)/);
-    if (loopMatch !== null) {
-      const s = Math.max(1, Number(loopMatch[1]));
-      const e = Math.max(s + 1, Number(loopMatch[2]));
-      applyCoachAction({ name: "set_loop", args: { start_bar: s, end_bar: e } });
-      setCoachFeedback(`Voice command applied: looping bars ${s}–${e}.`);
-    } else if (lower.includes("slow") || lower.includes("%")) {
-      const numMatch = lower.match(/(\d{2,3})/);
-      const pct = numMatch !== null ? Math.max(40, Math.min(100, Number(numMatch[1]))) : 70;
-      applyCoachAction({ name: "set_tempo", args: { percent: pct } });
-      setCoachFeedback(`Voice command applied: playback rate set to ${pct}%.`);
-    } else if (lower.includes("left")) {
-      applyCoachAction({ name: "switch_hand", args: { hand: "left" } });
-      setCoachFeedback("Voice command applied: isolated left-hand accompaniment.");
-    } else if (lower.includes("right")) {
-      applyCoachAction({ name: "switch_hand", args: { hand: "right" } });
-      setCoachFeedback("Voice command applied: isolated right-hand lead.");
-    } else {
-      analyzeLastTake();
-    }
-    setVoiceCommandText("");
-    setVoicePromptOpen(false);
   };
 
   const scrubRoll = (event: MouseEvent<HTMLDivElement>) => {
@@ -498,123 +458,11 @@ export function LearnView() {
         </div>
       </section>
 
-      <aside className="flex w-full shrink-0 flex-col gap-4 border-t border-line bg-surface p-4 lg:w-80 lg:border-t-0 lg:border-l lg:overflow-y-auto">
-        <div className="flex items-center justify-between">
-          <span className="eyebrow">Coach</span>
-        </div>
-
-        <p className="rounded-well border border-line bg-inset p-3 text-xs leading-relaxed text-text">
-          {coachFeedback}
-        </p>
-
-        {coachEntries.length > 0 ? (
-          <div className="space-y-1">
-            <p className="eyebrow">Applied</p>
-            <div className="mono-num space-y-1 text-xs">
-              {coachEntries.map((entry) => (
-                <div
-                  key={entry.id}
-                  className="rounded-icon border border-line-2 bg-inset px-2.5 py-1.5 text-text"
-                >
-                  ✓ {entry.summary}
-                </div>
-              ))}
-            </div>
-          </div>
-        ) : null}
-
-        <div className="space-y-1.5">
-          <button
-            type="button"
-            onClick={analyzeLastTake}
-            className="h-8 w-full cursor-pointer rounded-icon border border-line-2 bg-surface-2 text-xs font-medium text-text hover:border-control"
-          >
-            Analyze take &amp; loop problem
-          </button>
-
-          <button
-            type="button"
-            aria-pressed={voicePromptOpen}
-            onClick={() => setVoicePromptOpen((prev) => !prev)}
-            className="h-8 w-full cursor-pointer rounded-icon bg-text text-xs font-semibold text-bg transition hover:opacity-90"
-          >
-            Voice command
-          </button>
-
-          {voicePromptOpen ? (
-            <div className="flex gap-1.5 pt-1">
-              <input
-                type="text"
-                value={voiceCommandText}
-                onChange={(event) => setVoiceCommandText(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") applyVoicePhrase();
-                }}
-                placeholder="e.g. loop bars 1 to 4, slow 70%"
-                className="mono-num h-8 flex-1 rounded-icon border border-line-2 bg-inset px-2 text-xs text-text placeholder:text-muted focus:border-text focus:outline-none"
-              />
-              <button
-                type="button"
-                onClick={applyVoicePhrase}
-                className="h-8 cursor-pointer rounded-icon border border-line-2 bg-surface-2 px-2.5 text-xs text-text"
-              >
-                Send
-              </button>
-            </div>
-          ) : null}
-        </div>
-
-        <div className="space-y-1.5 border-t border-line pt-3">
-          <p className="eyebrow">Accuracy per bar</p>
-          <div
-            role="img"
-            aria-label="Per-bar hit and on-time rate chart; bars without played notes are not played"
-            className="grid h-20 grid-cols-8 items-end gap-1.5 rounded-well border border-line bg-inset p-2"
-          >
-            {scoreResult.bars.slice(0, 8).map((bar) => {
-              const isProblem = problemBar !== null && problemBar.bar === bar.index + 1;
-              const rateLabel = bar.attempted
-                ? `${formatPercent(bar.hitRate)} / ${formatPercent(bar.onTimeRate)}`
-                : "not played";
-              return (
-                <div
-                  key={bar.index}
-                  title={`Bar ${bar.index + 1}: ${rateLabel}`}
-                  className="flex h-full flex-col items-center justify-end gap-1"
-                >
-                  <div
-                    style={{ height: `${bar.attempted ? Math.max(16, Math.round(bar.hitRate * 72)) : 16}%` }}
-                    className={`w-full rounded-xs ${
-                      bar.attempted
-                        ? isProblem
-                          ? "bg-you"
-                          : "bg-inactive"
-                        : "border border-dashed border-line-2 bg-transparent"
-                    }`}
-                  />
-                  <span
-                    className={`mono-num text-center text-[8px] leading-none ${
-                      isProblem ? "text-you" : "text-muted"
-                    }`}
-                  >
-                    {bar.index + 1} · {rateLabel}
-                  </span>
-                </div>
-              );
-            })}
-          </div>
-          <p className="mono-num text-[10px] text-muted">Bar height: hits · label: hits / on time</p>
-        </div>
-
-        <div className="mt-auto border-t border-line pt-3">
-          <Link
-            href={takeHref}
-            className="flex h-8 w-full items-center justify-center rounded-icon border border-line-2 bg-bg text-xs font-medium text-text-2 hover:border-control hover:text-text"
-          >
-            Export stems &amp; MIDI →
-          </Link>
-        </div>
-      </aside>
+      <CoachPanel
+        scoreResult={scoreResult}
+        takeHref={takeHref}
+        onAnalyzeTake={analyzeLastTake}
+      />
     </>
   );
 }

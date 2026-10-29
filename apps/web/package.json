@@ -10,6 +10,8 @@
     "typecheck": "tsc --noEmit",
     "test:score": "node lib/score.fixture.ts",
     "test:midi": "node lib/midi.fixture.ts",
+    "test:coach": "node lib/coach.fixture.ts",
+    "test:fallback": "node lib/studio/fallback-choice.fixture.ts",
     "gen:types": "json2ts --input ../../schema/trackmap.schema.json --output lib/trackmap/trackmap.generated.ts --additionalProperties false --bannerComment \"/* Generated from schema/trackmap.schema.json by 'pnpm gen:types'. Do not edit. */\""
   },
   "dependencies": {
