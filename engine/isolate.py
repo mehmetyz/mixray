@@ -769,3 +769,151 @@ def rerank(
     WEIGHTS_VOLUME.commit()
     say(f"wrote {2 * candidates} WAVs to {output_dir}")
     return "\n".join(lines)
+
+
+# Four performers in the test clip, as (label, text prompt, x, y, width, height) on a 448x252 frame:
+# a violinist, a cellist, a pianist and a singer, each clearly separated in the picture. The boxes
+# were checked against a rendered frame before use.
+# (label, text prompt, x, y, width, height)
+VisualTarget = tuple[str, str, int, int, int, int]
+VISUAL_TARGETS: list[VisualTarget] = [
+    ("violin", "violin", 7, 60, 60, 170),
+    ("cello", "cello", 75, 85, 80, 125),
+    ("piano", "piano", 180, 90, 70, 110),
+    ("voice", "woman singing", 340, 60, 62, 175),
+]
+VISUAL_FRAMES_FILE = "visual/orchestra_frames.pt"
+VISUAL_AUDIO_FILE = "visual/orchestra.wav"
+
+
+class VisualTrial(TypedDict):
+    """One separation of the same clip, prompted either by a mask or by text."""
+
+    label: str
+    mode: str
+    seconds: float
+    peak_vram_gb: float
+    sound_rms: float
+    rest_rms: float
+    reconstruction_error: float
+    error: str
+
+
+def _box_masked_frames(frames: "torch.Tensor", box: tuple[int, int, int, int]) -> "torch.Tensor":
+    """Build the mask `mask_videos` expects for one box.
+
+    `SAMAudioProcessor.mask_videos` computes `video * mask.eq(0)`, so it keeps the pixels where the
+    mask is **zero** and blanks the rest. A mask straight from a segmenter marks the object with
+    ones, which would hand the model the background instead; this inverts it, so the region inside
+    the box is what survives.
+    """
+    import torch
+
+    mask = torch.ones_like(frames)
+    x, y, width, height = box
+    mask[:, :, y : y + height, x : x + width] = 0
+    return mask
+
+
+def _visual_batch(
+    processor: "SAMAudioProcessor",
+    frames: "torch.Tensor",
+    clip: str,
+    mode: str,
+    target: VisualTarget,
+) -> "Batch":
+    """Build one trial's batch: a masked video for `mask`, a text description for `text`."""
+    _, prompt, x, y, width, height = target
+    if mode == "mask":
+        masked = processor.mask_videos(
+            [frames], [_box_masked_frames(frames, (x, y, width, height))]
+        )
+        return processor(audios=[clip], descriptions=[""], masked_videos=masked).to("cuda")
+    return processor(audios=[clip], descriptions=[prompt]).to("cuda")
+
+
+@app.function(
+    image=sam_audio_image,
+    gpu=MEASURE_GPU,
+    volumes={WEIGHTS_PATH: WEIGHTS_VOLUME},
+    secrets=[HF_SECRET],
+    timeout=MEASURE_TIMEOUT_SECONDS,
+)
+def visual_probe(model_id: str = DEFAULT_MODEL_ID) -> str:
+    """Separate the same clip by mask and by text, and compare.
+
+    Answers the question the product depends on: does pointing at a performer isolate that
+    performer, and does it beat simply typing what they play? Every trial writes its own WAV.
+    """
+    os.environ["HF_HOME"] = f"{WEIGHTS_PATH}/huggingface"
+
+    import torch
+    from sam_audio import SAMAudio, SAMAudioProcessor
+
+    logging.basicConfig(level=logging.INFO)
+    lines: list[str] = []
+
+    def say(text: str) -> None:
+        lines.append(text)
+        LOGGER.info(text)
+
+    output_dir = Path(WEIGHTS_PATH) / "visual_probe"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    clip = str(Path(WEIGHTS_PATH) / VISUAL_AUDIO_FILE)
+    frames = torch.load(Path(WEIGHTS_PATH) / VISUAL_FRAMES_FILE)
+
+    properties = torch.cuda.get_device_properties(0)
+    model = SAMAudio.from_pretrained(model_id, **RANKERS_OFF).eval().cuda()
+    processor = SAMAudioProcessor.from_pretrained(model_id)
+    sample_rate = int(processor.audio_sampling_rate)
+
+    say(f"{model_id} on {properties.name} ({properties.total_memory / GIGABYTE:.1f} GB)")
+    say(f"frames {tuple(frames.shape)} {frames.dtype}")
+    say(f"{'target':8} {'mode':7} {'secs':>6} {'peakGB':>7} {'target':>8} {'rest':>8} {'recon':>7}")
+
+    for visual_target in VISUAL_TARGETS:
+        label = visual_target[0]
+        for mode in ("mask", "text"):
+            trial: VisualTrial = {
+                "label": label,
+                "mode": mode,
+                "seconds": 0.0,
+                "peak_vram_gb": 0.0,
+                "sound_rms": 0.0,
+                "rest_rms": 0.0,
+                "reconstruction_error": 0.0,
+                "error": "",
+            }
+            torch.cuda.reset_peak_memory_stats()
+            started = time.perf_counter()
+            try:
+                batch = _visual_batch(processor, frames, clip, mode, visual_target)
+                with torch.inference_mode():
+                    separation = model.separate(batch, predict_spans=False, reranking_candidates=1)
+            except Exception as error:  # one failing mode must not end the comparison
+                trial["seconds"] = round(time.perf_counter() - started, 1)
+                trial["error"] = f"{type(error).__name__}: {error}"
+                say(f"{label:8} {mode:7} FAILED {trial['error'][:70]}")
+                torch.cuda.empty_cache()
+                continue
+
+            trial["seconds"] = round(time.perf_counter() - started, 1)
+            trial["peak_vram_gb"] = round(torch.cuda.max_memory_allocated() / GIGABYTE, 3)
+            mix = batch.audios.detach().float().flatten().cpu()
+            target = separation.target[0].detach().float().cpu()
+            residual = separation.residual[0].detach().float().cpu()
+            mix_rms = max(_rms(mix), 1e-9)
+            trial["sound_rms"] = round(_rms(target), 5)
+            trial["rest_rms"] = round(_rms(residual), 5)
+            trial["reconstruction_error"] = round(_rms(mix - (target + residual)) / mix_rms, 5)
+            _save_pcm16_wav(output_dir / f"{label}__{mode}__sound.wav", target, sample_rate)
+            say(
+                f"{label:8} {mode:7} {trial['seconds']:6.1f} {trial['peak_vram_gb']:7.2f} "
+                f"{trial['sound_rms']:8.5f} {trial['rest_rms']:8.5f} "
+                f"{trial['reconstruction_error']:7.3f}"
+            )
+            torch.cuda.empty_cache()
+
+    WEIGHTS_VOLUME.commit()
+    say(f"wrote WAVs to {output_dir}")
+    return "\n".join(lines)
