@@ -44,6 +44,7 @@ LOCAL_SOURCES = (
     "transcribe",
     "suggest",
     "track",
+    "label",
     "meta_api",
 )
 

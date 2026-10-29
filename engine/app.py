@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import modal
@@ -11,7 +12,7 @@ import modal
 from analyze import apply_analysis
 from fallback import run_fallback, stem_for_prompt
 from images import analyze_image, basic_pitch_image, demucs_image, sam_audio_image, web_image
-from ingest import DEFAULT_CACHE_PATH, cleanup_expired_clips, write_job
+from ingest import DEFAULT_CACHE_PATH, cleanup_expired_clips, isolation_id_for, write_job
 from isolate import (
     DEFAULT_MODEL_ID,
     HF_SECRET,
@@ -47,7 +48,7 @@ app = modal.App("mixray")
     image=sam_audio_image,
     gpu=MEASURE_GPU,
     volumes={WEIGHTS_PATH: WEIGHTS_VOLUME, DEFAULT_CACHE_PATH: CACHE_VOLUME},
-    secrets=[HF_SECRET],
+    secrets=[HF_SECRET, API_SECRET],
     timeout=ISOLATE_TIMEOUT_SECONDS,
     max_containers=MAX_ISOLATE_CONTAINERS,
     enable_memory_snapshot=True,
@@ -72,6 +73,15 @@ class IsolationWorker:
     def move_model_to_gpu(self) -> None:
         """Transfer weights after restore because GPU state is not part of the memory snapshot."""
         self.model = self.model.eval().cuda()
+
+    def _queue_follow_up(self, clip_id: str, iso_id: str, prompt: str) -> None:
+        """Queue optional post-isolation work after a successful isolation."""
+        try:
+            transcribe_worker.spawn(clip_id, iso_id)
+            if stem_for_prompt(prompt) is not None:
+                fallback_worker.spawn(clip_id)
+        except Exception:
+            LOGGER.exception("could not queue follow-up work for clip=%s", clip_id)
 
     @modal.method()
     def isolate(self, clip_id: str, iso_id: str, prompt: str, label: str) -> None:
@@ -101,18 +111,92 @@ class IsolationWorker:
                 }
             )
         else:
-            # Spawned outside the try above: the sound is already written and the job already says
-            # done, so a follow-up that cannot even be queued must not relabel a successful
-            # isolation as failed and tell the user to try another prompt.
-            try:
-                transcribe_worker.spawn(clip_id, iso_id)
-                # Deliberately narrows T1.3's per-clip fallback to prompts that map to a standard
-                # stem: Demucs has no equivalent for "supersaw lead", so running it would spend CPU
-                # on an alternative the UI could never offer.
-                if stem_for_prompt(prompt) is not None:
-                    fallback_worker.spawn(clip_id)
-            except Exception:
-                LOGGER.exception("could not queue follow-up work for clip=%s", clip_id)
+            self._queue_follow_up(clip_id, iso_id, prompt)
+        finally:
+            CACHE_VOLUME.commit()
+
+    @modal.method()
+    def track_and_isolate(self, clip_id: str, x: int, y: int, frame: int) -> None:
+        """Track a tap, name a visible mask crop, then separate with SAM Audio text prompting."""
+        from label import label_region
+        from meta_api import api_key
+        from track import TapRequest, label_target, name_track, save_track, track_point
+
+        logging.basicConfig(level=logging.INFO)
+        CACHE_VOLUME.reload()
+        iso_id: str | None = None
+        try:
+            write_job(
+                {
+                    "id": clip_id,
+                    "status": "running",
+                    "stage": "segmenting",
+                    "trackmap_url": f"/files/clips/{clip_id}/trackmap.json",
+                    "isolation_id": None,
+                    "cached": False,
+                    "error": None,
+                }
+            )
+            CACHE_VOLUME.commit()
+            tap: TapRequest = {"x": x, "y": y, "frame": frame, "label": "Tapped sound"}
+            track = track_point(clip_id, tap)
+            target = label_target(track, frame, Path(DEFAULT_CACHE_PATH) / "clips" / clip_id)
+
+            write_job(
+                {
+                    "id": clip_id,
+                    "status": "running",
+                    "stage": "naming",
+                    "trackmap_url": f"/files/clips/{clip_id}/trackmap.json",
+                    "isolation_id": None,
+                    "cached": False,
+                    "error": None,
+                }
+            )
+            CACHE_VOLUME.commit()
+            named = label_region(target["frame_path"], target["bounds"], api_key())
+            iso_id = isolation_id_for(clip_id, named["prompt"])
+            name_track(track, named["label"], named["prompt"])
+            save_track(Path(DEFAULT_CACHE_PATH) / "clips" / clip_id, track)
+
+            write_job(
+                {
+                    "id": clip_id,
+                    "status": "running",
+                    "stage": "isolating",
+                    "trackmap_url": f"/files/clips/{clip_id}/trackmap.json",
+                    "isolation_id": iso_id,
+                    "cached": False,
+                    "error": None,
+                }
+            )
+            CACHE_VOLUME.commit()
+            run_isolation(
+                clip_id=clip_id,
+                iso_id=iso_id,
+                prompt=named["prompt"],
+                label=named["label"],
+                model=self.model,
+                processor=self.processor,
+            )
+            name_track(track, named["label"], named["prompt"], iso_id)
+            save_track(Path(DEFAULT_CACHE_PATH) / "clips" / clip_id, track)
+        except Exception:
+            LOGGER.exception("tap isolation failed for clip=%s", clip_id)
+            write_job(
+                {
+                    "id": clip_id,
+                    "status": "error",
+                    "stage": "error",
+                    "trackmap_url": f"/files/clips/{clip_id}/trackmap.json",
+                    "isolation_id": iso_id,
+                    "cached": False,
+                    "error": "Could not isolate the selected sound. Please try again.",
+                }
+            )
+        else:
+            if iso_id is not None:
+                self._queue_follow_up(clip_id, iso_id, named["prompt"])
         finally:
             CACHE_VOLUME.commit()
 
@@ -218,6 +302,7 @@ def api() -> FastAPI:
 
     return create_api(
         spawn_isolation=IsolationWorker().isolate.spawn,
+        spawn_tap_isolation=IsolationWorker().track_and_isolate.spawn,
         spawn_analysis=analyze_worker.spawn,
         commit_volume=CACHE_VOLUME.commit,
         reload_volume=CACHE_VOLUME.reload,

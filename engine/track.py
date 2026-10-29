@@ -12,11 +12,12 @@ The mask payload is base85 in a variant the docs do not name, so decoding uses M
 import asyncio
 import json
 import logging
+import math
 import re
 import subprocess
 from collections.abc import AsyncIterator, Iterable, Iterator
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, TypedDict
+from typing import TYPE_CHECKING, Literal, NotRequired, TypedDict
 
 import modal
 
@@ -40,6 +41,7 @@ from meta_sam_parser import (
 import meta_api
 from images import web_image
 from ingest import VIDEO_FPS, clip_dir, get_cache_root
+from label import RegionBounds
 
 if TYPE_CHECKING:
     import torch
@@ -107,6 +109,14 @@ class TrackResult(TypedDict):
     frames: list[FramePolygons]
     visible: list[list[float]]
     masks: list[StoredMaskRecord]
+    isolation_id: NotRequired[str]
+
+
+class LabelTarget(TypedDict):
+    """A visible tracked frame and the full-frame rectangle to name."""
+
+    frame_path: Path
+    bounds: RegionBounds
 
 
 def point_prompt(width: int, height: int, x: int, y: int, frame: int) -> str:
@@ -378,6 +388,82 @@ class TapRequest(TypedDict):
     label: str
 
 
+def _video_dimensions(directory: Path) -> tuple[int, int]:
+    """Read the dimensions of the stored 720p video copy."""
+    metadata = json.loads((directory / "trackmap.json").read_text(encoding="utf-8"))
+    if not isinstance(metadata, dict):
+        raise RuntimeError("clip trackmap is not an object")
+    video = metadata.get("video")
+    if not isinstance(video, dict):
+        raise RuntimeError("tap isolation requires a video clip")
+    width, height = video.get("width"), video.get("height")
+    if isinstance(width, bool) or not isinstance(width, int) or width <= 0:
+        raise RuntimeError("clip video width is invalid")
+    if isinstance(height, bool) or not isinstance(height, int) or height <= 0:
+        raise RuntimeError("clip video height is invalid")
+    return width, height
+
+
+def _validate_tap(tap: TapRequest, size: tuple[int, int], directory: Path) -> None:
+    """Reject points and frame indices outside the video assets before calling SAM 3.1."""
+    x, y, frame = tap["x"], tap["y"], tap["frame"]
+    width, height = size
+    if x < 0 or x >= width or y < 0 or y >= height:
+        raise ValueError("Tap point is outside the video frame.")
+    if frame < 0 or not (directory / "frames" / f"frame_{frame + 1:04d}.jpg").is_file():
+        raise ValueError("Frame is outside the video clip.")
+
+
+def _track_path(directory: Path, track_id: str) -> Path:
+    return directory / "tracks" / f"{track_id}.json"
+
+
+def save_track(directory: Path, track: TrackResult) -> None:
+    """Atomically persist one tracking sidecar without mutating the base TrackMap."""
+    path = _track_path(directory, track["id"])
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(".json.tmp")
+    temporary.write_text(json.dumps(track), encoding="utf-8")
+    temporary.replace(path)
+
+
+def label_target(track: TrackResult, requested_frame: int, directory: Path) -> LabelTarget:
+    """Choose a visible frame nearest the tap and merge its mask bounds for the label crop."""
+    width, height = _video_dimensions(directory)
+    by_frame: dict[int, list[StoredMaskBounds]] = {}
+    for mask in track["masks"]:
+        by_frame.setdefault(mask["frame"], []).append(mask["bounds"])
+    if not by_frame:
+        raise RuntimeError("The selected object was not visible in the video.")
+
+    selected_frame = min(by_frame, key=lambda index: (abs(index - requested_frame), index))
+    bounds = by_frame[selected_frame]
+    left = max(0, math.floor(min(item["left"] for item in bounds)))
+    top = max(0, math.floor(min(item["top"] for item in bounds)))
+    right = min(width, math.ceil(max(item["right"] for item in bounds)))
+    bottom = min(height, math.ceil(max(item["bottom"] for item in bounds)))
+    if right <= left or bottom <= top:
+        raise RuntimeError("The selected object has invalid bounds.")
+
+    frame_path = directory / "frames" / f"frame_{selected_frame + 1:04d}.jpg"
+    if not frame_path.is_file():
+        raise FileNotFoundError("Selected video frame is unavailable.")
+    return {
+        "frame_path": frame_path,
+        "bounds": {"left": left, "top": top, "right": right, "bottom": bottom},
+    }
+
+
+def name_track(
+    track: TrackResult, label: str, prompt: str, isolation_id: str | None = None
+) -> None:
+    """Attach the named text-separation result to the tracking sidecar after it succeeds."""
+    track["label"] = label
+    track["prompt"] = prompt
+    if isolation_id is not None:
+        track["isolation_id"] = isolation_id
+
+
 def track_point(clip_id: str, tap: TapRequest, cache_root: Path | None = None) -> TrackResult:
     """Segment whatever was tapped, and write the result to the clip's own sidecar."""
     root = cache_root if cache_root is not None else get_cache_root()
@@ -386,13 +472,10 @@ def track_point(clip_id: str, tap: TapRequest, cache_root: Path | None = None) -
     if not video_path.exists():
         raise FileNotFoundError(f"clip {clip_id} has no video: {video_path}")
 
-    meta = json.loads((directory / "trackmap.json").read_text(encoding="utf-8"))
-    video_meta = meta.get("video")
-    if not isinstance(video_meta, dict):
-        raise RuntimeError(f"clip {clip_id} is not a video clip")
-    width, height = int(video_meta["width"]), int(video_meta["height"])
+    width, height = _video_dimensions(directory)
 
     x, y, frame = tap["x"], tap["y"], tap["frame"]
+    _validate_tap(tap, (width, height), directory)
     prompt = point_prompt(width, height, x, y, frame)
     segment_path = directory / "segment_input.mp4"
     segmentation_video(video_path, segment_path)
@@ -404,9 +487,7 @@ def track_point(clip_id: str, tap: TapRequest, cache_root: Path | None = None) -
 
     track_id = f"tap{x}x{y}f{frame}"
     track = build_track(result, track_id, tap["label"], f"tap@{x},{y}")
-    tracks_dir = directory / "tracks"
-    tracks_dir.mkdir(parents=True, exist_ok=True)
-    (tracks_dir / f"{track_id}.json").write_text(json.dumps(track), encoding="utf-8")
+    save_track(directory, track)
     LOGGER.info(
         "tracked %s: %d frames, %d visible span(s)",
         track_id,

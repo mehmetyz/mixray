@@ -49,7 +49,15 @@ ALLOWED_EXTENSIONS = AUDIO_EXTENSIONS | VIDEO_EXTENSIONS
 
 SourceKind = Literal["audio", "video"]
 JobStatus = Literal["queued", "running", "done", "error"]
-JobStage = Literal["listening", "isolating", "analyzing", "done", "error"]
+JobStage = Literal[
+    "listening",
+    "segmenting",
+    "naming",
+    "isolating",
+    "analyzing",
+    "done",
+    "error",
+]
 IsolationMethod = Literal["sam_audio_text", "sam_audio_visual", "demucs"]
 
 
@@ -649,6 +657,10 @@ def build_served_trackmap(clip_id: str, cache_root: Path | None = None) -> dict[
     _overlay_sidecar(trackmap, directory / "analysis.json", ANALYSIS_FIELDS)
     _overlay_sidecar(trackmap, directory / "suggest.json", SUGGEST_FIELDS)
 
+    video = trackmap.get("video")
+    if isinstance(video, dict):
+        video["tracks"] = _served_video_tracks(clip_id, directory)
+
     fallback_stems = _read_optional_json_array(directory / "fallback_stems.json")
     if fallback_stems is not None:
         trackmap["fallback_stems"] = fallback_stems
@@ -670,6 +682,42 @@ def build_served_trackmap(clip_id: str, cache_root: Path | None = None) -> dict[
             isolations.append(isolation)
     trackmap["isolations"] = isolations
     return trackmap
+
+
+def _served_video_tracks(clip_id: str, directory: Path) -> list[dict[str, object]]:
+    """Expose each tracking sidecar as a schema-compatible video track on read."""
+    tracks_dir = directory / "tracks"
+    if not tracks_dir.exists():
+        return []
+
+    tracks: list[dict[str, object]] = []
+    for path in sorted(tracks_dir.glob("*.json")):
+        track = _read_optional_json_object(path)
+        if track is None:
+            continue
+        track_id = track.get("id")
+        label = track.get("label")
+        visible = track.get("visible")
+        if (
+            not isinstance(track_id, str)
+            or not isinstance(label, str)
+            or not isinstance(visible, list)
+        ):
+            continue
+        served: dict[str, object] = {
+            "id": track_id,
+            "label": label,
+            "masks_url": f"/files/clips/{clip_id}/tracks/{path.name}",
+            "visible": visible,
+        }
+        prompt = track.get("prompt")
+        if isinstance(prompt, str):
+            served["prompt"] = prompt
+        isolation_id = track.get("isolation_id")
+        if isinstance(isolation_id, str):
+            served["isolation_id"] = isolation_id
+        tracks.append(served)
+    return tracks
 
 
 def cleanup_expired_clips(

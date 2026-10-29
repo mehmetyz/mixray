@@ -4,17 +4,19 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json
 import os
 import time
 from collections.abc import Callable
 from email.parser import BytesParser
 from email.policy import default as default_email_policy
+from pathlib import Path
 from typing import TypedDict
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StrictInt, ValidationError
 
 from ingest import (
     MAX_UPLOAD_BYTES,
@@ -57,6 +59,7 @@ MEDIA_TYPES: dict[str, str] = {
 }
 
 IsolationSpawner = Callable[[str, str, str, str], object]
+TapIsolationSpawner = Callable[[str, int, int, int], object]
 AnalysisSpawner = Callable[[str], object]
 VolumeHook = Callable[[], object]
 FileRoute = Callable[[str], Response]
@@ -74,6 +77,7 @@ class RuntimeHooks(TypedDict):
     """Modal volume and worker hooks injected into the FastAPI routes."""
 
     spawn_isolation: IsolationSpawner | None
+    spawn_tap_isolation: TapIsolationSpawner | None
     spawn_analysis: AnalysisSpawner | None
     commit: Callable[[], None]
     reload: Callable[[], None]
@@ -90,6 +94,14 @@ class IsolateRequest(BaseModel):
 
     prompt: str = Field(..., min_length=1, max_length=MAX_PROMPT_LEN)
     label: str | None = Field(default=None, max_length=MAX_PROMPT_LEN)
+
+
+class TrackRequest(BaseModel):
+    """Request body for POST /jobs/{job_id}/track."""
+
+    x: StrictInt = Field(..., ge=0)
+    y: StrictInt = Field(..., ge=0)
+    frame: StrictInt = Field(default=0, ge=0)
 
 
 class JobResponse(BaseModel):
@@ -321,6 +333,70 @@ def _start_or_reuse_isolation(
     return _to_job_response(running_record)
 
 
+def _validate_track_request(job_id: str, body: TrackRequest, root: Path) -> None:
+    """Confirm that a tap addresses a stored video frame before charging quota."""
+    trackmap_path = clip_dir(job_id, root) / TRACKMAP_FILE_NAME
+    if not trackmap_path.exists():
+        raise HTTPException(status_code=404, detail="Clip not found.")
+    try:
+        trackmap = json.loads(trackmap_path.read_text(encoding="utf-8"))
+        video = trackmap.get("video") if isinstance(trackmap, dict) else None
+        width = video.get("width") if isinstance(video, dict) else None
+        height = video.get("height") if isinstance(video, dict) else None
+    except (OSError, ValueError, json.JSONDecodeError) as error:
+        raise HTTPException(status_code=400, detail="Video clip is unavailable.") from error
+    if (
+        isinstance(width, bool)
+        or not isinstance(width, int)
+        or width <= 0
+        or isinstance(height, bool)
+        or not isinstance(height, int)
+        or height <= 0
+    ):
+        raise HTTPException(status_code=400, detail="Tap isolation requires a video clip.")
+    if body.x >= width or body.y >= height:
+        raise HTTPException(status_code=400, detail="Tap point is outside the video frame.")
+    frame_path = clip_dir(job_id, root) / "frames" / f"frame_{body.frame + 1:04d}.jpg"
+    if not frame_path.is_file():
+        raise HTTPException(status_code=400, detail="Frame is outside the video clip.")
+
+
+def _start_tap_isolation(
+    job_id: str, body: TrackRequest, client_ip: str, hooks: RuntimeHooks
+) -> JobResponse:
+    """Queue tap-to-text isolation after authenticating and charging the usual isolation quota."""
+    hooks["reload"]()
+    root = get_cache_root()
+    _validate_track_request(job_id, body, root)
+    try:
+        check_and_increment_quota(client_ip, "isolations", root)
+    except IngestError as error:
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+
+    trackmap_url = f"/files/clips/{job_id}/trackmap.json"
+    running_record = write_job(
+        {
+            "id": job_id,
+            "status": "running",
+            "stage": "segmenting",
+            "trackmap_url": trackmap_url,
+            "isolation_id": None,
+            "cached": False,
+            "error": None,
+        },
+        root,
+    )
+    hooks["commit"]()
+    spawner = hooks["spawn_tap_isolation"]
+    if spawner is not None:
+        spawner(job_id, body.x, body.y, body.frame)
+        hooks["reload"]()
+        latest = read_job(job_id, root)
+        if latest is not None:
+            return _to_job_response(latest)
+    return _to_job_response(running_record)
+
+
 def _start_analysis(record: JobRecord, hooks: RuntimeHooks) -> JobRecord:
     """Start analysis for a fresh clip and persist its running job state."""
     analysis_spawner = hooks["spawn_analysis"]
@@ -348,6 +424,7 @@ def get_health() -> HealthResponse:
 
 def create_api(
     spawn_isolation: IsolationSpawner | None = None,
+    spawn_tap_isolation: TapIsolationSpawner | None = None,
     spawn_analysis: AnalysisSpawner | None = None,
     commit_volume: VolumeHook | None = None,
     reload_volume: VolumeHook | None = None,
@@ -372,6 +449,7 @@ def create_api(
 
     hooks: RuntimeHooks = {
         "spawn_isolation": spawn_isolation,
+        "spawn_tap_isolation": spawn_tap_isolation,
         "spawn_analysis": spawn_analysis,
         "commit": _commit,
         "reload": _reload,
@@ -403,6 +481,17 @@ def create_api(
         _require_auth(request)
         return _start_or_reuse_isolation(job_id, body, _client_ip(request), hooks)
 
+    async def post_track(job_id: str, request: Request) -> JobResponse:
+        _require_auth(request)
+        try:
+            body = TrackRequest.model_validate(await request.json())
+        except (json.JSONDecodeError, ValidationError) as error:
+            raise HTTPException(
+                status_code=400,
+                detail="Tap needs integer x and y coordinates and an optional frame index.",
+            ) from error
+        return _start_tap_isolation(job_id, body, _client_ip(request), hooks)
+
     def get_job(job_id: str, request: Request) -> JobResponse:
         _require_auth(request)
         _reload()
@@ -415,6 +504,9 @@ def create_api(
     api.add_api_route("/jobs", post_job, methods=["POST"], response_model=JobResponse)
     api.add_api_route(
         "/jobs/{job_id}/isolate", post_isolate, methods=["POST"], response_model=JobResponse
+    )
+    api.add_api_route(
+        "/jobs/{job_id}/track", post_track, methods=["POST"], response_model=JobResponse
     )
     api.add_api_route("/jobs/{job_id}", get_job, methods=["GET"], response_model=JobResponse)
     api.add_api_route(
