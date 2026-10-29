@@ -627,17 +627,27 @@ def _read_optional_json_array(path: Path) -> list[object] | None:
     return loaded
 
 
+SUGGEST_FIELDS = ("suggestions", "summary")
+
+
+def _overlay_sidecar(trackmap: dict[str, object], path: Path, fields: tuple[str, ...]) -> None:
+    """Copy the fields a producer owns onto the trackmap, if that producer has written yet."""
+    sidecar = _read_optional_json_object(path)
+    if sidecar is None:
+        return
+    for field in fields:
+        if field in sidecar:
+            trackmap[field] = sidecar[field]
+
+
 def build_served_trackmap(clip_id: str, cache_root: Path | None = None) -> dict[str, object]:
     """Assemble a TrackMap from its ingest-time base and producer-owned sidecars."""
     root = cache_root if cache_root is not None else get_cache_root()
     directory = clip_dir(clip_id, root)
     trackmap = _read_json_object(trackmap_path(clip_id, root))
 
-    analysis = _read_optional_json_object(directory / "analysis.json")
-    if analysis is not None:
-        for field in ANALYSIS_FIELDS:
-            if field in analysis:
-                trackmap[field] = analysis[field]
+    _overlay_sidecar(trackmap, directory / "analysis.json", ANALYSIS_FIELDS)
+    _overlay_sidecar(trackmap, directory / "suggest.json", SUGGEST_FIELDS)
 
     fallback_stems = _read_optional_json_array(directory / "fallback_stems.json")
     if fallback_stems is not None:

@@ -33,7 +33,16 @@ PROTOBUF_PIN = "protobuf==3.20.3"
 # deploys cleanly, because Modal only serialises at deploy time, and then dies on import when a
 # request arrives, which looks like an unreachable endpoint rather than a missing file. Every module
 # here keeps its heavy dependencies inside its functions, so this costs only a few KB of source.
-LOCAL_SOURCES = ("images", "ingest", "isolate", "analyze", "web", "fallback", "transcribe")
+LOCAL_SOURCES = (
+    "images",
+    "ingest",
+    "isolate",
+    "analyze",
+    "web",
+    "fallback",
+    "transcribe",
+    "suggest",
+)
 
 
 def media_image() -> modal.Image:
