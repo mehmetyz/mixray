@@ -225,7 +225,8 @@ def _cors_origins() -> list[str]:
 
 def _trackmap_clip_id(file_path: str) -> str | None:
     """Return a clip ID only for the assembled TrackMap endpoint path."""
-    path_parts = file_path.split("/")
+    clean_path = file_path.strip("/")
+    path_parts = clean_path.split("/")
     if (
         len(path_parts) == TRACKMAP_PATH_PARTS
         and path_parts[0] == CLIPS_DIRECTORY
@@ -240,10 +241,11 @@ def _file_route(reload_volume: Callable[[], None]) -> FileRoute:
 
     def get_file(file_path: str) -> Response:
         root = get_cache_root().resolve()
-        candidate = (root / file_path).resolve()
+        clean_path = file_path.strip("/")
+        candidate = (root / clean_path).resolve()
         if not candidate.is_relative_to(root):
             raise HTTPException(status_code=400, detail="Invalid file path.")
-        trackmap_clip_id = _trackmap_clip_id(file_path)
+        trackmap_clip_id = _trackmap_clip_id(clean_path)
         if trackmap_clip_id is not None:
             reload_volume()
             try:
@@ -253,7 +255,7 @@ def _file_route(reload_volume: Callable[[], None]) -> FileRoute:
             return JSONResponse(
                 content=trackmap,
                 media_type=MEDIA_TYPES[".json"],
-                headers={"Cache-Control": "public, max-age=86400"},
+                headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
             )
         if not candidate.is_file():
             reload_volume()
@@ -299,6 +301,7 @@ def _start_or_reuse_isolation(
                 "isolation_id": iso_id,
                 "cached": True,
                 "error": None,
+                "updated_at": time.time(),
             },
             root,
         )
@@ -319,6 +322,7 @@ def _start_or_reuse_isolation(
             "isolation_id": iso_id,
             "cached": False,
             "error": None,
+            "updated_at": time.time(),
         },
         root,
     )
@@ -383,6 +387,7 @@ def _start_tap_isolation(
             "isolation_id": None,
             "cached": False,
             "error": None,
+            "updated_at": time.time(),
         },
         root,
     )
@@ -410,6 +415,7 @@ def _start_analysis(record: JobRecord, hooks: RuntimeHooks) -> JobRecord:
         "isolation_id": record["isolation_id"],
         "cached": False,
         "error": None,
+        "updated_at": time.time(),
     }
     updated_record = write_job(analyzing_record)
     hooks["commit"]()
@@ -445,7 +451,10 @@ def create_api(
 
     def _reload() -> None:
         if reload_volume is not None:
-            reload_volume()
+            try:
+                reload_volume()
+            except Exception:
+                LOGGER.warning("Volume reload failed; proceeding with local disk cache.")
 
     hooks: RuntimeHooks = {
         "spawn_isolation": spawn_isolation,
@@ -495,7 +504,7 @@ def create_api(
     def get_job(job_id: str, request: Request) -> JobResponse:
         _require_auth(request)
         _reload()
-        record = read_job(job_id)
+        record = read_job(job_id, get_cache_root())
         if record is None:
             raise HTTPException(status_code=404, detail="Job not found.")
         return _to_job_response(record)

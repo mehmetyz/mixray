@@ -42,6 +42,7 @@ BEATS_PER_BAR = 4
 SECONDS_PER_MINUTE = 60.0
 ENERGY_HOP_SECONDS = 0.25
 HASH_PREFIX_LEN = 16
+DEFAULT_JOB_TIMEOUT_SECONDS = 600.0
 
 AUDIO_EXTENSIONS = frozenset({".mp3", ".wav", ".flac", ".m4a", ".aac", ".ogg"})
 VIDEO_EXTENSIONS = frozenset({".mp4", ".mov", ".webm", ".m4v"})
@@ -107,6 +108,7 @@ class JobRecord(TypedDict):
     isolation_id: str | None
     cached: bool
     error: str | None
+    updated_at: float | None
 
 
 class IpQuotaCounter(TypedDict):
@@ -202,25 +204,63 @@ def isolation_id_for(clip_id: str, prompt: str) -> str:
     return digest[:HASH_PREFIX_LEN]
 
 
-def read_job(clip_id: str, cache_root: Path | None = None) -> JobRecord | None:
-    """Load the job status record for a clip if it exists."""
+def read_job(
+    clip_id: str,
+    cache_root: Path | None = None,
+    *,
+    timeout_seconds: float = DEFAULT_JOB_TIMEOUT_SECONDS,
+) -> JobRecord | None:
+    """Load the job status record for a clip if it exists, auto-expiring stalled jobs."""
     path = job_file(clip_id, cache_root)
     if not path.exists():
         return None
-    raw = json.loads(path.read_text(encoding="utf-8"))
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+
+    status: JobStatus = raw.get("status", "running")
+    stage: JobStage = raw.get("stage", "listening")
+    mtime = path.stat().st_mtime
+    updated_at = float(raw.get("updated_at", mtime))
+
+    if status in ("running", "queued") and (time.time() - updated_at) > timeout_seconds:
+        LOGGER.warning(
+            "job %s stalled in stage %s for %.1fs (limit %.1fs); expiring to error",
+            clip_id,
+            stage,
+            time.time() - updated_at,
+            timeout_seconds,
+        )
+        expired_record: JobRecord = {
+            "id": str(raw["id"]),
+            "status": "error",
+            "stage": "error",
+            "trackmap_url": str(raw["trackmap_url"]),
+            "isolation_id": raw.get("isolation_id"),
+            "cached": False,
+            "error": "Operation timed out. Please try again.",
+            "updated_at": time.time(),
+        }
+        write_job(expired_record, cache_root)
+        return expired_record
+
     return {
         "id": str(raw["id"]),
-        "status": raw["status"],
-        "stage": raw["stage"],
+        "status": status,
+        "stage": stage,
         "trackmap_url": str(raw["trackmap_url"]),
         "isolation_id": raw.get("isolation_id"),
         "cached": bool(raw.get("cached", False)),
         "error": raw.get("error"),
+        "updated_at": updated_at,
     }
 
 
 def write_job(record: JobRecord, cache_root: Path | None = None) -> JobRecord:
     """Atomically write a job status record."""
+    if "updated_at" not in record:
+        record["updated_at"] = time.time()
     path = job_file(record["id"], cache_root)
     tmp_path = path.with_suffix(".json.tmp")
     tmp_path.write_text(json.dumps(record), encoding="utf-8")
@@ -591,6 +631,7 @@ def ingest_upload(params: IngestParams, cache_root: Path | None = None) -> JobRe
         "isolation_id": None,
         "cached": False,
         "error": None,
+        "updated_at": time.time(),
     }
     return write_job(job, root)
 
@@ -658,8 +699,17 @@ def build_served_trackmap(clip_id: str, cache_root: Path | None = None) -> dict[
     _overlay_sidecar(trackmap, directory / "suggest.json", SUGGEST_FIELDS)
 
     video = trackmap.get("video")
+    tracks = _served_video_tracks(clip_id, directory)
     if isinstance(video, dict):
-        video["tracks"] = _served_video_tracks(clip_id, directory)
+        video["tracks"] = tracks
+    elif tracks:
+        trackmap["video"] = {
+            "url": f"/files/clips/{clip_id}/video.mp4",
+            "fps": VIDEO_FPS,
+            "width": 1280,
+            "height": 720,
+            "tracks": tracks,
+        }
 
     fallback_stems = _read_optional_json_array(directory / "fallback_stems.json")
     if fallback_stems is not None:

@@ -300,6 +300,7 @@ def _cached_isolation(
             "isolation_id": iso_id,
             "cached": True,
             "error": None,
+            "updated_at": time.time(),
         },
         cache_root,
     )
@@ -344,6 +345,7 @@ def _persist_isolation(  # noqa: PLR0913
             "isolation_id": iso_id,
             "cached": False,
             "error": None,
+            "updated_at": time.time(),
         },
         cache_root,
     )
@@ -373,6 +375,7 @@ def _persist_isolation(  # noqa: PLR0913
         "isolation_id": iso_id,
         "cached": False,
         "error": None,
+        "updated_at": time.time(),
     }
     write_job(done_job, cache_root)
     return entry

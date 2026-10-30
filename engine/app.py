@@ -12,7 +12,15 @@ import modal
 from analyze import apply_analysis
 from fallback import run_fallback, stem_for_prompt
 from images import analyze_image, basic_pitch_image, demucs_image, sam_audio_image, web_image
-from ingest import DEFAULT_CACHE_PATH, cleanup_expired_clips, isolation_id_for, write_job
+from ingest import (
+    DEFAULT_CACHE_PATH,
+    IngestError,
+    cleanup_expired_clips,
+    clip_dir,
+    get_cache_root,
+    isolation_id_for,
+    write_job,
+)
 from isolate import (
     DEFAULT_MODEL_ID,
     HF_SECRET,
@@ -123,8 +131,11 @@ class IsolationWorker:
         from track import TapRequest, label_target, name_track, save_track, track_point
 
         logging.basicConfig(level=logging.INFO)
+        root = get_cache_root()
+        directory = clip_dir(clip_id, root)
         CACHE_VOLUME.reload()
         iso_id: str | None = None
+        named_prompt: str | None = None
         try:
             write_job(
                 {
@@ -135,12 +146,13 @@ class IsolationWorker:
                     "isolation_id": None,
                     "cached": False,
                     "error": None,
-                }
+                },
+                root,
             )
             CACHE_VOLUME.commit()
             tap: TapRequest = {"x": x, "y": y, "frame": frame, "label": "Tapped sound"}
-            track = track_point(clip_id, tap)
-            target = label_target(track, frame, Path(DEFAULT_CACHE_PATH) / "clips" / clip_id)
+            track = track_point(clip_id, tap, root)
+            target = label_target(track, frame, directory)
 
             write_job(
                 {
@@ -151,13 +163,15 @@ class IsolationWorker:
                     "isolation_id": None,
                     "cached": False,
                     "error": None,
-                }
+                },
+                root,
             )
             CACHE_VOLUME.commit()
             named = label_region(target["frame_path"], target["bounds"], api_key())
-            iso_id = isolation_id_for(clip_id, named["prompt"])
-            name_track(track, named["label"], named["prompt"])
-            save_track(Path(DEFAULT_CACHE_PATH) / "clips" / clip_id, track)
+            named_prompt = named["prompt"]
+            iso_id = isolation_id_for(clip_id, named_prompt)
+            name_track(track, named["label"], named_prompt)
+            save_track(directory, track)
 
             write_job(
                 {
@@ -168,21 +182,41 @@ class IsolationWorker:
                     "isolation_id": iso_id,
                     "cached": False,
                     "error": None,
-                }
+                },
+                root,
             )
             CACHE_VOLUME.commit()
             run_isolation(
                 clip_id=clip_id,
                 iso_id=iso_id,
-                prompt=named["prompt"],
+                prompt=named_prompt,
                 label=named["label"],
                 model=self.model,
                 processor=self.processor,
+                cache_root=root,
             )
-            name_track(track, named["label"], named["prompt"], iso_id)
-            save_track(Path(DEFAULT_CACHE_PATH) / "clips" / clip_id, track)
-        except Exception:
-            LOGGER.exception("tap isolation failed for clip=%s", clip_id)
+            name_track(track, named["label"], named_prompt, iso_id)
+            save_track(directory, track)
+
+            write_job(
+                {
+                    "id": clip_id,
+                    "status": "done",
+                    "stage": "done",
+                    "trackmap_url": f"/files/clips/{clip_id}/trackmap.json",
+                    "isolation_id": iso_id,
+                    "cached": False,
+                    "error": None,
+                },
+                root,
+            )
+        except Exception as err:
+            LOGGER.exception("tap isolation failed for clip=%s: %s", clip_id, err)
+            error_message = (
+                str(err).strip()
+                if isinstance(err, (ValueError, IngestError)) and str(err).strip()
+                else "Could not isolate the selected sound. Please try again."
+            )
             write_job(
                 {
                     "id": clip_id,
@@ -191,12 +225,13 @@ class IsolationWorker:
                     "trackmap_url": f"/files/clips/{clip_id}/trackmap.json",
                     "isolation_id": iso_id,
                     "cached": False,
-                    "error": "Could not isolate the selected sound. Please try again.",
-                }
+                    "error": error_message,
+                },
+                root,
             )
         else:
-            if iso_id is not None:
-                self._queue_follow_up(clip_id, iso_id, named["prompt"])
+            if iso_id is not None and named_prompt is not None:
+                self._queue_follow_up(clip_id, iso_id, named_prompt)
         finally:
             CACHE_VOLUME.commit()
 
