@@ -18,15 +18,17 @@ assumed:
 
 import json
 import logging
+import re
 import subprocess
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from typing import TypedDict
+from typing import TypedDict, TypeGuard
 
 import modal
 
 import meta_api
 from images import web_image
-from ingest import clip_dir, get_cache_root
+from ingest import build_served_trackmap, clip_dir, get_cache_root
 
 LOGGER = logging.getLogger(__name__)
 
@@ -52,6 +54,16 @@ WAVEFORM_SIZE = "320x180"
 WAVEFORM_RATE = 5
 MIN_SUGGESTIONS = 3
 MAX_SUGGESTIONS = 6
+SUMMARY_ATTEMPTS = 2
+MIDI_PITCHES_PER_OCTAVE = 12
+MIDI_OCTAVE_OFFSET = 1
+MIDI_MAX = 127
+MIDI_NOTE_NAMES = ("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B")
+
+# The numeric matcher deliberately includes the octave in a note name such as C4. The note-name
+# check below then ensures the complete spelling is one supplied by the TrackMap.
+NUMBER_PATTERN = re.compile(r"(?<![\d.])-?\d+(?:\.\d+)?(?!\d)")
+NOTE_NAME_PATTERN = re.compile(r"(?<![A-Za-z#b])([A-G](?:#|b)?-?\d+)(?![A-Za-z])")
 
 # Lowercase noun phrases, because SAM Audio was trained on them: its README asks for "thunder"
 # rather than "thunder can be heard in the background".
@@ -101,6 +113,21 @@ class ClipSuggestions(TypedDict):
 
     suggestions: list[Suggestion]
     summary: str
+
+
+class SoundSummaryFacts(TypedDict):
+    """The complete, TrackMap-derived material Muse may use in a sound summary."""
+
+    label: str
+    key: str
+    tempo_bpm: float
+    duration_seconds: float
+    low_midi: int
+    low_note: str
+    high_midi: int
+    high_note: str
+    entry_bar: int
+    note_count: int
 
 
 SUGGESTION_SCHEMA: dict[str, object] = {
@@ -240,6 +267,217 @@ def parse_suggestions(raw: str) -> ClipSuggestions:
     if len(suggestions) < MIN_SUGGESTIONS:
         raise RuntimeError(f"only {len(suggestions)} usable suggestions came back")
     return {"suggestions": suggestions[:MAX_SUGGESTIONS], "summary": summary.strip()}
+
+
+def _is_json_object(value: object) -> TypeGuard[dict[str, object]]:
+    """Narrow JSON objects before reading untrusted sidecars."""
+    return isinstance(value, dict) and all(isinstance(key, str) for key in value)
+
+
+def _required_string(value: object, field: str) -> str:
+    """Read a non-empty string from a TrackMap field."""
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"trackmap {field} must be a non-empty string")
+    return value.strip()
+
+
+def _required_number(value: object, field: str) -> float:
+    """Read a finite JSON number without accepting bools."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"trackmap {field} must be a number")
+    number = float(value)
+    if not Decimal(str(number)).is_finite():
+        raise ValueError(f"trackmap {field} must be finite")
+    return number
+
+
+def _required_int(value: object, field: str) -> int:
+    """Read a JSON integer without accepting bools."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"trackmap {field} must be an integer")
+    return value
+
+
+def _required_json_object(value: object, field: str) -> dict[str, object]:
+    """Read a JSON object from a required TrackMap field."""
+    if not _is_json_object(value):
+        raise ValueError(f"trackmap {field} is missing")
+    return value
+
+
+def _required_nonempty_list(value: object, field: str) -> list[object]:
+    """Read a non-empty JSON array from a required TrackMap field."""
+    if not isinstance(value, list) or not value:
+        raise ValueError(f"trackmap {field} is missing")
+    return value
+
+
+def _summary_isolation(isolations: list[object], isolation_id: str) -> dict[str, object]:
+    """Find the requested isolation in an assembled TrackMap."""
+    for candidate in isolations:
+        if _is_json_object(candidate) and candidate.get("id") == isolation_id:
+            return candidate
+    raise ValueError(f"trackmap isolation is missing: {isolation_id}")
+
+
+def _summary_range(isolation: dict[str, object]) -> tuple[int, int]:
+    """Read and validate the isolation range used as sound-summary material."""
+    note_range = _required_json_object(isolation.get("range"), "isolation range")
+    low_midi = _required_int(note_range.get("low"), "isolation range low")
+    high_midi = _required_int(note_range.get("high"), "isolation range high")
+    if not 0 <= low_midi <= high_midi <= MIDI_MAX:
+        raise ValueError("isolation range is invalid")
+    return low_midi, high_midi
+
+
+def _earliest_note_start(isolation: dict[str, object]) -> tuple[float, int]:
+    """Return the isolation's first note time and its TrackMap note count."""
+    notes = _required_nonempty_list(isolation.get("notes"), "isolation notes")
+    note_starts: list[float] = []
+    for index, note in enumerate(notes):
+        note_object = _required_json_object(note, f"isolation notes[{index}]")
+        note_starts.append(
+            _required_number(note_object.get("start"), f"isolation notes[{index}].start")
+        )
+    return min(note_starts), len(notes)
+
+
+def _entry_bar(downbeats: list[object], entry_time: float) -> int:
+    """Return the one-based displayed bar containing an isolation's first note."""
+    entry_bar = 1
+    for index, raw_downbeat in enumerate(downbeats, start=1):
+        downbeat = _required_number(raw_downbeat, f"downbeats[{index - 1}]")
+        if downbeat > entry_time:
+            break
+        entry_bar = index
+    return entry_bar
+
+
+def midi_note_name(pitch: int) -> str:
+    """Return the schema-compatible sharp spelling for one MIDI pitch."""
+    if not 0 <= pitch <= MIDI_MAX:
+        raise ValueError(f"MIDI pitch is outside range: {pitch}")
+    name = MIDI_NOTE_NAMES[pitch % MIDI_PITCHES_PER_OCTAVE]
+    octave = pitch // MIDI_PITCHES_PER_OCTAVE - MIDI_OCTAVE_OFFSET
+    return f"{name}{octave}"
+
+
+def isolation_summary_facts(trackmap: dict[str, object], isolation_id: str) -> SoundSummaryFacts:
+    """Collect only facts already held by the assembled TrackMap for one isolation."""
+    tempo = _required_json_object(trackmap.get("tempo"), "tempo")
+    key = _required_json_object(trackmap.get("key"), "key")
+    downbeats = _required_nonempty_list(trackmap.get("downbeats"), "downbeats")
+    isolations = _required_nonempty_list(trackmap.get("isolations"), "isolations")
+    isolation = _summary_isolation(isolations, isolation_id)
+    low_midi, high_midi = _summary_range(isolation)
+    entry_time, note_count = _earliest_note_start(isolation)
+    tonic = _required_string(key.get("tonic"), "key tonic")
+    mode = _required_string(key.get("mode"), "key mode")
+    return {
+        "label": _required_string(isolation.get("label"), "isolation label"),
+        "key": f"{tonic} {mode}",
+        "tempo_bpm": _required_number(tempo.get("bpm"), "tempo bpm"),
+        "duration_seconds": _required_number(trackmap.get("duration"), "duration"),
+        "low_midi": low_midi,
+        "low_note": midi_note_name(low_midi),
+        "high_midi": high_midi,
+        "high_note": midi_note_name(high_midi),
+        "entry_bar": _entry_bar(downbeats, entry_time),
+        "note_count": note_count,
+    }
+
+
+def _decimal(value: int | float) -> Decimal:
+    """Normalise a JSON number for exact comparison with a generated numeral."""
+    return Decimal(str(value))
+
+
+def allowed_summary_numbers(facts: SoundSummaryFacts) -> set[Decimal]:
+    """Return every numeral a summary may use from its supplied TrackMap facts."""
+    # The MIDI pitch numbers are deliberately NOT allowed, although they are true. Offering them
+    # made the first live summary read "entering at 1 between 36 and 71": every number correct and
+    # the sentence unusable, because a screen that shows a musician raw MIDI integers is showing
+    # them the inside of the program. The octave digits of the note names carry the same fact in
+    # the form a player reads.
+    allowed = {
+        _decimal(facts["tempo_bpm"]),
+        _decimal(facts["duration_seconds"]),
+        _decimal(facts["entry_bar"]),
+        _decimal(facts["note_count"]),
+    }
+    for note_name in (facts["low_note"], facts["high_note"]):
+        octave = NUMBER_PATTERN.search(note_name)
+        if octave is not None:
+            allowed.add(Decimal(octave.group()))
+    return allowed
+
+
+def summary_numbers_are_allowed(summary: str, facts: SoundSummaryFacts) -> bool:
+    """True only when every numeral and note spelling is present in supplied TrackMap facts."""
+    if not summary.strip():
+        return False
+    allowed_numbers = allowed_summary_numbers(facts)
+    for match in NUMBER_PATTERN.finditer(summary):
+        try:
+            number = Decimal(match.group())
+        except InvalidOperation:
+            return False
+        if not number.is_finite() or number not in allowed_numbers:
+            return False
+
+    allowed_notes = {facts["low_note"], facts["high_note"]}
+    return all(match.group(1) in allowed_notes for match in NOTE_NAME_PATTERN.finditer(summary))
+
+
+def isolation_summary_prompt(facts: SoundSummaryFacts) -> str:
+    """Ask Muse for a readable sentence whose factual material is completely bounded."""
+    facts_json = json.dumps(facts, sort_keys=True)
+    return (
+        "Write exactly one short sentence a musician would want to read about this isolated sound, "
+        'in the shape of this example: "A detuned supersaw lead in A minor, mostly eighth notes '
+        'between A4 and E5, entering on bar 9." Write flowing prose, not a list of values. Name '
+        'pitches by their note names and never as MIDI numbers. Say "bar" before a bar number. '
+        "Use only the JSON facts below; they are the complete source of truth. If you use a digit, "
+        "it must be one of the numbers shown in those facts. Do not infer or introduce a rhythm "
+        "value, interval, bar, pitch, duration, count, tempo, or any other number. Use a note name "
+        "only exactly as shown. Do not mention these instructions.\n\n"
+        f"Facts:\n{facts_json}"
+    )
+
+
+def request_isolation_summary(facts: SoundSummaryFacts, api_key: str) -> str:
+    """Request a bounded sound summary, retrying once when its numerals are not verifiable."""
+    payload: dict[str, object] = {
+        "model": LISTEN_MODEL,
+        "max_output_tokens": MAX_OUTPUT_TOKENS,
+        "input": [
+            {
+                "role": "user",
+                "content": [{"type": "input_text", "text": isolation_summary_prompt(facts)}],
+            }
+        ],
+    }
+    for attempt in range(1, SUMMARY_ATTEMPTS + 1):
+        summary = meta_api.output_text(meta_api.post_responses(payload, api_key)).strip()
+        if "\n" not in summary and summary_numbers_are_allowed(summary, facts):
+            return summary
+        LOGGER.warning(
+            "sound summary attempt %d/%d carried unsupported facts", attempt, SUMMARY_ATTEMPTS
+        )
+    raise RuntimeError(f"Muse Spark returned no safe summary after {SUMMARY_ATTEMPTS} attempts")
+
+
+def write_isolation_summary(clip_id: str, isolation_id: str, cache_root: Path | None = None) -> str:
+    """Write an optional per-isolation summary sidecar without mutating the base TrackMap."""
+    root = cache_root if cache_root is not None else get_cache_root()
+    facts = isolation_summary_facts(build_served_trackmap(clip_id, root), isolation_id)
+    summary = request_isolation_summary(facts, meta_api.api_key())
+    path = clip_dir(clip_id, root) / "isolations" / isolation_id / "summary.json"
+    temporary_path = path.with_suffix(".json.tmp")
+    temporary_path.write_text(json.dumps({"summary": summary}), encoding="utf-8")
+    temporary_path.replace(path)
+    LOGGER.info("wrote summary for clip=%s isolation=%s", clip_id, isolation_id)
+    return summary
 
 
 def suggest_clip(

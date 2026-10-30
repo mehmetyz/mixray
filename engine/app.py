@@ -30,6 +30,7 @@ from isolate import (
     run_isolation,
 )
 from recipe import write_recipe
+from suggest import suggest_clip, write_isolation_summary
 from transcribe import apply_transcription
 
 if TYPE_CHECKING:
@@ -44,6 +45,8 @@ ANALYZE_TIMEOUT_SECONDS = 300
 TRANSCRIBE_TIMEOUT_SECONDS = 300
 FALLBACK_TIMEOUT_SECONDS = 900
 RECIPE_TIMEOUT_SECONDS = 180
+SUGGEST_TIMEOUT_SECONDS = 300
+SUMMARY_TIMEOUT_SECONDS = 120
 CLEANUP_TIMEOUT_SECONDS = 300
 MAX_ISOLATE_CONTAINERS = 2
 
@@ -261,6 +264,12 @@ def analyze_worker(clip_id: str) -> None:
     logging.basicConfig(level=logging.INFO)
     CACHE_VOLUME.reload()
     try:
+        try:
+            # This worker is only started for a fresh ingest, so suggestions begin before Pick.
+            suggest_worker.spawn(clip_id)
+        except Exception:
+            # The clip remains usable with its default suggestions if Muse is unavailable.
+            LOGGER.exception("could not queue suggestions for clip=%s", clip_id)
         apply_analysis(clip_id)
     except Exception:
         # Failure only degrades harmony view; the playable, isolatable clip never blocks.
@@ -293,6 +302,14 @@ def transcribe_worker(clip_id: str, isolation_id: str) -> None:
     try:
         # Basic Pitch handles a 30-second clip on CPU without reserving a GPU.
         apply_transcription(clip_id, isolation_id)
+        CACHE_VOLUME.commit()
+        try:
+            summary_worker.spawn(clip_id, isolation_id)
+        except Exception:
+            # The notes remain usable when a text-only summary cannot be queued.
+            LOGGER.exception(
+                "could not queue summary for clip=%s isolation=%s", clip_id, isolation_id
+            )
     except Exception:
         # Failure only removes an optional enhancement; the playable isolation must not break.
         LOGGER.exception("transcription failed for clip=%s isolation=%s", clip_id, isolation_id)
@@ -316,6 +333,46 @@ def recipe_worker(clip_id: str, isolation_id: str) -> None:
     except Exception:
         # The isolated WAV and its notes stay usable when partner inference is unavailable.
         LOGGER.exception("recipe failed for clip=%s isolation=%s", clip_id, isolation_id)
+    finally:
+        CACHE_VOLUME.commit()
+
+
+@app.function(
+    image=web_image,
+    volumes={DEFAULT_CACHE_PATH: CACHE_VOLUME},
+    secrets=[API_SECRET],
+    timeout=SUGGEST_TIMEOUT_SECONDS,
+    gpu=None,
+)
+def suggest_worker(clip_id: str) -> None:
+    """Generate optional Muse Spark chips without reserving a GPU or blocking the clip."""
+    logging.basicConfig(level=logging.INFO)
+    CACHE_VOLUME.reload()
+    try:
+        suggest_clip(clip_id)
+    except Exception:
+        # Suggestion failure only leaves the ingest-time fallback chips in place.
+        LOGGER.exception("suggest failed for clip=%s", clip_id)
+    finally:
+        CACHE_VOLUME.commit()
+
+
+@app.function(
+    image=web_image,
+    volumes={DEFAULT_CACHE_PATH: CACHE_VOLUME},
+    secrets=[API_SECRET],
+    timeout=SUMMARY_TIMEOUT_SECONDS,
+    gpu=None,
+)
+def summary_worker(clip_id: str, isolation_id: str) -> None:
+    """Write an optional, fact-checked Muse summary after transcription has produced its facts."""
+    logging.basicConfig(level=logging.INFO)
+    CACHE_VOLUME.reload()
+    try:
+        write_isolation_summary(clip_id, isolation_id)
+    except Exception:
+        # An isolation without a summary remains fully playable and learnable.
+        LOGGER.exception("summary failed for clip=%s isolation=%s", clip_id, isolation_id)
     finally:
         CACHE_VOLUME.commit()
 

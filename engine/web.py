@@ -260,15 +260,25 @@ def _file_route(reload_volume: Callable[[], None]) -> FileRoute:
                 media_type=MEDIA_TYPES[".json"],
                 headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
             )
-        if not candidate.is_file():
+        # A sidecar can be rewritten after it was first served - a summary is regenerated, a
+        # recipe arrives late, a track is re-tracked - and the container's view of the Volume does
+        # not move on its own. Reloading only when the file is MISSING served a stale summary for a
+        # file that had already been overwritten, so a rewritable file is reloaded every time and
+        # never cached. Media keeps the long cache: an isolation's id is derived from its content,
+        # so its audio never changes under the same URL.
+        rewritable = candidate.suffix.lower() == ".json"
+        if rewritable or not candidate.is_file():
             reload_volume()
         if not candidate.is_file():
             raise HTTPException(status_code=404, detail="File not found.")
         media_type = MEDIA_TYPES.get(candidate.suffix.lower(), "application/octet-stream")
+        cache_control = (
+            "no-cache, no-store, must-revalidate" if rewritable else "public, max-age=86400"
+        )
         return FileResponse(
             path=candidate,
             media_type=media_type,
-            headers={"Cache-Control": "public, max-age=86400"},
+            headers={"Cache-Control": cache_control},
         )
 
     return get_file
