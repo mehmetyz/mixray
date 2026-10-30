@@ -150,7 +150,12 @@ export function StudioProvider({ clipId, initialTrackMap, children }: StudioProv
   const [problemBar, setProblemBar] = useState<ProblemBarMark | null>(null);
   const [handFilter, setHandFilter] = useState<HandFilter>("both");
   const [simplifiedBars, setSimplifiedBars] = useState<number[]>([]);
-  const [useDemucsCleaner, setUseDemucsCleaner] = useState<boolean>(false);
+  const [useDemucsCleaner, setUseDemucsCleaner] = useState<boolean>(() => {
+    const firstIso = trackMap.isolations[0];
+    const firstFallback = matchFallbackStem(firstIso, trackMap.fallback_stems);
+    const firstComp = compareStemPitchConfidence(firstIso, firstFallback, trackMap.isolations);
+    return firstComp?.preferredMethod === "demucs";
+  });
   const [isSynthesizedPreview, setIsSynthesizedPreview] = useState<boolean>(false);
   const [coachEntries, setCoachEntries] = useState<CoachActionEntry[]>([]);
 
@@ -202,11 +207,16 @@ export function StudioProvider({ clipId, initialTrackMap, children }: StudioProv
   const handleIsoParam = useCallback(
     (iso: string | null) => {
       if (iso !== null && iso.length > 0) {
-        const exists = trackMap.isolations.some((item) => item.id === iso);
-        if (exists) setRequestedIsoId(iso);
+        const targetIso = trackMap.isolations.find((item) => item.id === iso);
+        if (targetIso !== undefined) {
+          setRequestedIsoId(iso);
+          const targetFallback = matchFallbackStem(targetIso, trackMap.fallback_stems);
+          const comp = compareStemPitchConfidence(targetIso, targetFallback, trackMap.isolations);
+          setUseDemucsCleaner(comp?.preferredMethod === "demucs");
+        }
       }
     },
-    [trackMap.isolations],
+    [trackMap.isolations, trackMap.fallback_stems],
   );
 
   useEffect(() => {

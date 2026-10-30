@@ -86,6 +86,31 @@ function testPitchConfidenceComparison() {
   assert.equal(compareStemPitchConfidence(undefined, fallbackPianoStem), null);
   assert.equal(compareStemPitchConfidence(samPianoIso, null), null);
 
+  // Case 5: Unpitched drums defaults to Demucs (+9.5 dB vs SAM Audio degradation)
+  const drumIso: Isolation = {
+    id: "sam-drums-1",
+    label: "Drums",
+    prompt: "four on the floor drums",
+    method: "sam_audio_text",
+    sound_url: "/files/drums.mp3",
+    rest_url: "/files/drums-rest.mp3",
+    peaks: [0.8, 0.9],
+    range: { low: 0, high: 0 },
+    notes: [],
+    arrangements: { easy: [] },
+  };
+  const fallbackDrumStem: FallbackStem = {
+    name: "drums",
+    url: "/files/drums.mp3",
+    level: 0.9,
+  };
+  const compDrum = compareStemPitchConfidence(drumIso, fallbackDrumStem, [drumIso]);
+  assert.notEqual(compDrum, null);
+  assert.equal(compDrum?.hasComparison, true);
+  assert.equal(compDrum?.preferredMethod, "demucs");
+  assert.equal(compDrum?.samConfidence, null);
+  assert.equal(compDrum?.demucsConfidence, null);
+
   console.log("PASS testPitchConfidenceComparison all cases");
 }
 

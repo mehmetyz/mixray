@@ -285,6 +285,16 @@ export function LearnView() {
               </button>
             </div>
 
+            {selectedIsolation?.pitch_confidence !== undefined &&
+            selectedIsolation.pitch_confidence < 0.65 ? (
+              <span
+                title="Complex or detuned timbre. Notes are approximate."
+                className="mono-num rounded-xs border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-500"
+              >
+                Approximate ({Math.round(selectedIsolation.pitch_confidence * 100)}% confidence)
+              </span>
+            ) : null}
+
             <div
               role="group"
               aria-label="Practice backing audio"

@@ -49,6 +49,9 @@ export function XRayView() {
 
   const rangeText = formatPitchRange(selectedIsolation?.range, notes);
   const entersText = firstSoundingBar(notes, trackMap.downbeats);
+  const confidence = selectedIsolation?.pitch_confidence;
+  const isApproximateReading = confidence !== undefined && confidence < 0.65;
+  const confidencePct = confidence !== undefined ? Math.round(confidence * 100) : null;
   const summaryText =
     selectedIsolation?.summary ??
     trackMap.summary ??
@@ -151,8 +154,22 @@ export function XRayView() {
 
         <div className="flex h-36 items-stretch border-b border-line">
           <div className="flex w-36 shrink-0 flex-col justify-between border-r border-line bg-surface p-3 sm:w-48">
-            <span className="mono-num text-xs text-muted">Notes</span>
-            <span className="mono-num text-[11px] text-text-2">{notes.length} notes</span>
+            <div>
+              <span className="mono-num block text-xs text-muted">Notes</span>
+              {isApproximateReading ? (
+                <span className="mt-1 inline-block rounded-xs border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-500">
+                  Approximate reading
+                </span>
+              ) : null}
+            </div>
+            <div className="mono-num text-[11px] text-text-2">
+              <span>{notes.length} notes</span>
+              {confidencePct !== null ? (
+                <span className="block text-[10px] text-muted">
+                  {confidencePct}% confidence
+                </span>
+              ) : null}
+            </div>
           </div>
           <div onClick={scrubCanvas} className="relative flex-1 cursor-pointer bg-inset">
             <canvas
@@ -184,6 +201,15 @@ export function XRayView() {
       </section>
 
       <aside className="flex w-full shrink-0 flex-col gap-4 border-t border-line bg-surface p-4 lg:w-80 lg:border-t-0 lg:border-l lg:overflow-y-auto">
+        {isApproximateReading ? (
+          <div className="rounded-well border border-amber-500/30 bg-amber-500/10 p-3 text-xs leading-relaxed text-amber-500">
+            <strong className="block font-medium">Approximate reading ({confidencePct}% confidence)</strong>
+            <span className="block mt-0.5 text-text-2">
+              Complex or detuned timbre detected. Pitch reading is approximate for keyboard learning.
+            </span>
+          </div>
+        ) : null}
+
         <div>
           <span className="eyebrow mb-1.5 block">Summary</span>
           <p className="rounded-well border border-line bg-inset p-3 text-xs leading-relaxed text-text">

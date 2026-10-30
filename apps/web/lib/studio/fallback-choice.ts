@@ -10,6 +10,12 @@ export interface PitchConfidenceComparison {
   reason: string;
 }
 
+const UNPITCHED_STEMS = new Set(["drums"]);
+
+export function isUnpitchedStem(stemName: string): boolean {
+  return UNPITCHED_STEMS.has(stemName.toLowerCase());
+}
+
 export function compareStemPitchConfidence(
   isolation: Isolation | undefined,
   fallbackStem: FallbackStem | null,
@@ -19,11 +25,26 @@ export function compareStemPitchConfidence(
     return null;
   }
 
+  const stemNameLower = fallbackStem.name.toLowerCase();
+
+  // Unpitched stems (e.g. drums) have no meaningful pitch confidence; Demucs provides
+  // strictly superior separation (+9.52 dB over mix vs SAM Audio's -2.20 dB degradation).
+  if (isUnpitchedStem(stemNameLower)) {
+    return {
+      stem: fallbackStem,
+      hasComparison: true,
+      samConfidence: null,
+      demucsConfidence: null,
+      preferredMethod: "demucs",
+      confidenceDelta: 0,
+      reason: "Demucs defaults for drums (+9.5 dB separation vs SAM Audio degradation)",
+    };
+  }
+
   const samConfidence =
     isolation.method !== "demucs" ? (isolation.pitch_confidence ?? null) : null;
 
   // Search for a matching Demucs isolation for this stem if available
-  const stemNameLower = fallbackStem.name.toLowerCase();
   const demucsIso = allIsolations?.find(
     (iso) =>
       iso.method === "demucs" &&

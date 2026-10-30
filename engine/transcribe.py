@@ -54,6 +54,24 @@ ROUND_CONFIDENCE = 3
 # Two consecutive detected beats are the minimum evidence needed to derive an eighth-note interval.
 MIN_BEATS_FOR_EIGHTH_GRID = 2
 
+# Basic Pitch inference parameters tuned for acoustic accuracy and note-boundary stability.
+BASIC_PITCH_ONSET_THRESHOLD = 0.55
+BASIC_PITCH_FRAME_THRESHOLD = 0.35
+BASIC_PITCH_MIN_NOTE_LENGTH_MS = 60.0
+
+# Notes below this amplitude or duration represent noise floor or sub-transient triggers.
+MIN_NOTE_AMPLITUDE = 0.15
+MIN_NOTE_DURATION_SECONDS = 0.050
+
+# Harmonic overtone intervals (+1 octave, +1 octave + fifth, +2 octaves) and suppression ratio.
+HARMONIC_INTERVALS = frozenset({12, 19, 24})
+HARMONIC_TIME_TOLERANCE_SECONDS = 0.040
+HARMONIC_AMPLITUDE_RATIO = 0.55
+
+# Pitches below Ab3 (MIDI 56) in chord/melody/lead parts represent foundation bleed from bass.
+PITCH_FLOOR_NON_BASS = 56
+BASS_KEYWORDS = frozenset({"bass", "sub", "subbass", "kick", "contrabass", "808"})
+
 Hand = Literal["right", "left"]
 RawNoteEvent: TypeAlias = tuple[float, float, int, float, list[int] | None]
 
@@ -181,36 +199,89 @@ def _velocity(amplitude: float) -> int:
     return min(MIDI_VELOCITY_MAX, max(MIDI_VELOCITY_MIN, scaled))
 
 
+def _is_bass_sound(prompt: str, label: str) -> bool:
+    """Return True if prompt or label explicitly names a bass instrument."""
+    text = f"{prompt} {label}".strip().lower()
+    return bool(text) and any(keyword in text for keyword in BASS_KEYWORDS)
+
+
+def _should_filter_sub_bass(prompt: str, label: str) -> bool:
+    """True when the sound is known to be a chord/melody/lead part rather than bass."""
+    text = f"{prompt} {label}".strip().lower()
+    if not text:
+        return False
+    return not any(keyword in text for keyword in BASS_KEYWORDS)
+
+
+def filter_harmonic_overtones(
+    notes: list[Note],
+    time_tolerance: float = HARMONIC_TIME_TOLERANCE_SECONDS,
+    amplitude_ratio: float = HARMONIC_AMPLITUDE_RATIO,
+) -> list[Note]:
+    """Suppress high harmonic overtones that coincide with a louder fundamental note."""
+    suppressed: set[int] = set()
+    for index_h, note_h in enumerate(notes):
+        for index_f, note_f in enumerate(notes):
+            if index_h == index_f:
+                continue
+            interval = note_h["pitch"] - note_f["pitch"]
+            if interval in HARMONIC_INTERVALS:
+                coincident = abs(note_h["start"] - note_f["start"]) <= time_tolerance
+                weaker = note_h["velocity"] <= round(note_f["velocity"] * amplitude_ratio)
+                if coincident and weaker:
+                    suppressed.add(index_h)
+                    break
+    return [note for index, note in enumerate(notes) if index not in suppressed]
+
+
 def _basic_pitch_events(wav_path: Path) -> list[RawNoteEvent]:
     """Run the model only after the Modal image has loaded its heavyweight inference runtime."""
     # Basic Pitch 0.4.0 ships no type information, so this targeted suppression is required for
     # mypy's strict mode; its documented `predict` result supplies the tuple below.
     from basic_pitch.inference import predict  # type: ignore[import-not-found]
 
-    _, _, events = predict(str(wav_path))
+    _, _, events = predict(
+        str(wav_path),
+        onset_threshold=BASIC_PITCH_ONSET_THRESHOLD,
+        frame_threshold=BASIC_PITCH_FRAME_THRESHOLD,
+        minimum_note_length=BASIC_PITCH_MIN_NOTE_LENGTH_MS,
+    )
     return [
         (float(start), float(end), int(pitch), float(amplitude), pitch_bends)
         for start, end, pitch, amplitude, pitch_bends in events
     ]
 
 
-def _notes_from_events(events: list[RawNoteEvent]) -> tuple[list[Note], list[float]]:
-    """Convert Basic Pitch events faithfully while retaining amplitudes for confidence scoring."""
-    notes: list[Note] = []
+def _notes_from_events(
+    events: list[RawNoteEvent],
+    *,
+    filter_sub_bass: bool = False,
+) -> tuple[list[Note], list[float]]:
+    """Convert Basic Pitch events faithfully while filtering noise floor and register bleed."""
+    candidate_notes: list[Note] = []
     amplitudes: list[float] = []
     for start, end, pitch, amplitude, _ in events:
         if start < 0.0 or end <= start:
             continue
-        notes.append(
+        if amplitude < MIN_NOTE_AMPLITUDE:
+            continue
+        if (end - start) < MIN_NOTE_DURATION_SECONDS:
+            continue
+        clamped_pitch = _clamp_midi(pitch)
+        if filter_sub_bass and clamped_pitch < PITCH_FLOOR_NON_BASS:
+            continue
+        candidate_notes.append(
             {
                 "start": round(start, ROUND_SECONDS),
                 "end": round(end, ROUND_SECONDS),
-                "pitch": _clamp_midi(pitch),
+                "pitch": clamped_pitch,
                 "velocity": _velocity(amplitude),
             }
         )
         amplitudes.append(min(1.0, max(0.0, amplitude)))
-    return notes, amplitudes
+
+    clean_notes = filter_harmonic_overtones(candidate_notes)
+    return clean_notes, amplitudes
 
 
 def _pitch_range(notes: list[Note]) -> PitchRange:
@@ -411,15 +482,36 @@ def _intermediate(
     )
 
 
-def transcribe_isolated_sound(wav_path: Path, trackmap: dict[str, object]) -> Transcription:
+def transcribe_isolated_sound(
+    wav_path: Path,
+    trackmap: dict[str, object],
+    *,
+    prompt: str = "",
+    label: str = "",
+) -> Transcription:
     """Transcribe one isolated WAV and derive its easy and intermediate keyboard arrangements."""
     if not wav_path.is_file():
         raise FileNotFoundError(f"isolated WAV not found: {wav_path}")
 
+    # Inspect sibling isolation.json if prompt and label were omitted by the caller.
+    if not prompt and not label:
+        iso_json = wav_path.parent / "isolation.json"
+        if iso_json.is_file():
+            try:
+                data = json.loads(iso_json.read_text(encoding="utf-8"))
+                if isinstance(data, dict):
+                    prompt = str(data.get("prompt", "")).strip().lower()
+                    label = str(data.get("label", "")).strip().lower()
+            except (OSError, json.JSONDecodeError):
+                pass
+
     beats = _time_grid(trackmap, "beats")
     downbeats = _time_grid(trackmap, "downbeats")
     chords = _chords(trackmap)
-    notes, amplitudes = _notes_from_events(_basic_pitch_events(wav_path))
+    filter_sub_bass = _should_filter_sub_bass(prompt, label)
+    notes, amplitudes = _notes_from_events(
+        _basic_pitch_events(wav_path), filter_sub_bass=filter_sub_bass
+    )
     easy = transpose_easy_part(snap_to_eighths(top_voice(notes), beats), downbeats)
     left_hand = left_hand_accompaniment(chords, downbeats, easy)
     return {
@@ -467,7 +559,19 @@ def apply_transcription(
     """Read one cached isolation and write its producer-owned transcription sidecar."""
     root = cache_root if cache_root is not None else get_cache_root()
     wav_path = clip_dir(clip_id, root) / "isolations" / isolation_id / "sound.wav"
-    transcription = transcribe_isolated_sound(wav_path, build_served_trackmap(clip_id, root))
+    iso_json_path = clip_dir(clip_id, root) / "isolations" / isolation_id / "isolation.json"
+    prompt, label = "", ""
+    if iso_json_path.is_file():
+        try:
+            iso_data = json.loads(iso_json_path.read_text(encoding="utf-8"))
+            if isinstance(iso_data, dict):
+                prompt = str(iso_data.get("prompt", "")).strip().lower()
+                label = str(iso_data.get("label", "")).strip().lower()
+        except (OSError, json.JSONDecodeError):
+            pass
+    transcription = transcribe_isolated_sound(
+        wav_path, build_served_trackmap(clip_id, root), prompt=prompt, label=label
+    )
     path = wav_path.parent / "transcription.json"
     tmp_path = path.with_suffix(".json.tmp")
     tmp_path.write_text(json.dumps(transcription), encoding="utf-8")

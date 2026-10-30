@@ -80,7 +80,13 @@ LISTEN_INSTRUCTION = (
 # Image Only". These are the words those failures use; seeing any of them means the model never
 # heard the clip, and the only fix is to ask again.
 DEAF_MARKERS = (
-    "waveform",
+    "waveform image only",
+    "waveform only",
+    "only a waveform",
+    "just a waveform",
+    "silent waveform",
+    "waveform with no audio",
+    "waveform without audio",
     "no audible",
     "no audio",
     "cannot hear",
@@ -179,10 +185,18 @@ def waveform_mp4(wav_path: Path, mp4_path: Path) -> None:
     subprocess.run(argv, check=True, capture_output=True)
 
 
+def deaf_marker_in_description(description: str) -> str | None:
+    """Return the first refusal marker found in description, if any."""
+    lowered = description.lower()
+    for marker in DEAF_MARKERS:
+        if marker in lowered:
+            return marker
+    return None
+
+
 def heard_audio(description: str) -> bool:
     """True when the reply describes sound rather than denying there was any."""
-    lowered = description.lower()
-    return not any(marker in lowered for marker in DEAF_MARKERS)
+    return deaf_marker_in_description(description) is None
 
 
 def listen_to_clip(mp4_path: Path, api_key: str, model: str = LISTEN_MODEL) -> str:
@@ -207,14 +221,24 @@ def listen_to_clip(mp4_path: Path, api_key: str, model: str = LISTEN_MODEL) -> s
             }
         ],
     }
+    last_marker = ""
     for attempt in range(1, meta_api.ATTEMPTS + 1):
         description = meta_api.output_text(meta_api.post_responses(payload, api_key))
-        if heard_audio(description):
+        fired_marker = deaf_marker_in_description(description)
+        if fired_marker is None:
             return description
+        last_marker = fired_marker
         LOGGER.warning(
-            "attempt %d/%d did not hear the clip: %s", attempt, meta_api.ATTEMPTS, description[:120]
+            "attempt %d/%d rejected because deaf marker %r fired. Reply was:\n%s",
+            attempt,
+            meta_api.ATTEMPTS,
+            fired_marker,
+            description,
         )
-    raise RuntimeError(f"Muse Spark did not hear the clip in {meta_api.ATTEMPTS} attempts")
+    raise RuntimeError(
+        f"Muse Spark did not hear the clip in {meta_api.ATTEMPTS} attempts "
+        f"(last marker: {last_marker!r})"
+    )
 
 
 def structure_description(
