@@ -10,6 +10,8 @@ export interface CoachPanelProps {
   scoreResult: ScoreResult;
   takeHref: string;
   onAnalyzeTake: () => void;
+  coachMessage: string | null;
+  isCoachThinking: boolean;
 }
 
 interface SpeechRecognitionResultItem {
@@ -61,7 +63,13 @@ function formatOffsetMs(offsetMs: number): string {
   return `${rounded >= 0 ? "+" : ""}${rounded} ms ${rounded >= 0 ? "late" : "early"}`;
 }
 
-export function CoachPanel({ scoreResult, takeHref, onAnalyzeTake }: CoachPanelProps) {
+export function CoachPanel({
+  scoreResult,
+  takeHref,
+  onAnalyzeTake,
+  coachMessage,
+  isCoachThinking,
+}: CoachPanelProps) {
   const {
     problemBar,
     ratePercent,
@@ -222,6 +230,12 @@ export function CoachPanel({ scoreResult, takeHref, onAnalyzeTake }: CoachPanelP
           </p>
         )}
 
+        {coachMessage !== null ? (
+          <p className="rounded-icon border border-line-2 bg-surface-2 px-2 py-1 text-[11px] leading-relaxed text-text">
+            {coachMessage}
+          </p>
+        ) : null}
+
         {voiceNotice !== null ? (
           <div className="mono-num rounded-icon border border-accent/40 bg-accent/10 px-2 py-1 text-[11px] text-accent">
             {voiceNotice}
@@ -234,9 +248,10 @@ export function CoachPanel({ scoreResult, takeHref, onAnalyzeTake }: CoachPanelP
         <button
           type="button"
           onClick={onAnalyzeTake}
+          disabled={isCoachThinking}
           className="h-8 w-full cursor-pointer rounded-icon border border-line-2 bg-surface-2 text-xs font-semibold text-text transition hover:border-control hover:bg-surface"
         >
-          Analyze take &amp; loop problem
+          {isCoachThinking ? "Asking the Coach…" : "Analyze take & loop problem"}
         </button>
 
         {/* Hold to talk push-to-talk button */}

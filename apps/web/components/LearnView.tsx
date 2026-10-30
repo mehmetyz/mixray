@@ -3,9 +3,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import { drawLearnPianoRoll, type PlayedNoteDot } from "@/lib/studio/canvas";
 import { midiToNoteName } from "@/lib/studio/format";
+import { requestCoach } from "@/lib/coach";
 import {
   scorePerformance,
-  type ScoreBar,
   type ScoreInput,
   type ScoreNote,
   type ScoreResult,
@@ -28,10 +28,6 @@ import { CoachPanel } from "./CoachPanel";
 import { useThemeListener } from "./ThemeToggle";
 
 type DifficultyLevel = "easy" | "intermediate";
-
-type ProblemBarDetails = {
-  reason: string;
-};
 
 const WHITE_KEYS = TWO_OCTAVE_KEYS.filter((k) => !k.isSharp);
 
@@ -70,44 +66,6 @@ function toScoreReferenceNotes(notes: Note[]): ScoreNote[] {
 
 function toScorePlayedNotes(notes: PlayedNoteDot[]): ScoreNote[] {
   return notes.map((note) => ({ onsetSeconds: note.time, pitch: note.pitch }));
-}
-
-function formatPercent(rate: number): string {
-  return `${Math.round(rate * 100)}%`;
-}
-
-function formatOffset(offsetMs: number): string {
-  const rounded = Math.round(offsetMs);
-  return `${rounded >= 0 ? "+" : ""}${rounded} ms ${rounded >= 0 ? "late" : "early"}`;
-}
-
-function describeProblemBar(bar: ScoreBar): ProblemBarDetails {
-  if (bar.wrongPitch > 0) {
-    return { reason: `${bar.wrongPitch} wrong pitch${bar.wrongPitch === 1 ? "" : "es"}` };
-  }
-  if (bar.missed > 0) {
-    return { reason: `${bar.missed} missed note${bar.missed === 1 ? "" : "s"}` };
-  }
-  if (bar.meanOffsetMs !== null && Math.abs(bar.meanOffsetMs) > 50) {
-    return { reason: formatOffset(bar.meanOffsetMs) };
-  }
-  if (bar.extra > 0) {
-    return { reason: `${bar.extra} extra note${bar.extra === 1 ? "" : "s"}` };
-  }
-  return { reason: `${formatPercent(bar.onTimeRate)} on time` };
-}
-
-function isWorseProblemBar(candidate: ScoreBar, current: ScoreBar): boolean {
-  if (candidate.onTimeRate !== current.onTimeRate) {
-    return candidate.onTimeRate < current.onTimeRate;
-  }
-  if (candidate.hitRate !== current.hitRate) {
-    return candidate.hitRate < current.hitRate;
-  }
-  const candidateErrors = candidate.missed + candidate.wrongPitch + candidate.extra;
-  const currentErrors = current.missed + current.wrongPitch + current.extra;
-  if (candidateErrors !== currentErrors) return candidateErrors > currentErrors;
-  return candidate.index < current.index;
 }
 
 export function LearnView() {
@@ -256,28 +214,30 @@ export function LearnView() {
     });
   }, [activeNotes, playedDots, currentTime, duration, trackMap.downbeats, loopRange, problemBar, themeTick]);
 
-  const analyzeLastTake = () => {
-    const attemptedBars = scoreResult.bars.filter((bar) => bar.attempted);
-    const firstAttemptedBar = attemptedBars[0];
-    if (firstAttemptedBar === undefined) {
-      return;
-    }
+  const [coachMessage, setCoachMessage] = useState<string | null>(null);
+  const [isCoachThinking, setIsCoachThinking] = useState<boolean>(false);
 
-    let problem = firstAttemptedBar;
-    for (const bar of attemptedBars.slice(1)) {
-      if (isWorseProblemBar(bar, problem)) problem = bar;
-    }
-
-    const problemDetails = describeProblemBar(problem);
-    const problemBarNumber = problem.index + 1;
-    const loopStart = Math.max(1, problemBarNumber - 1);
-    const loopEnd = Math.min(16, problemBarNumber + 2);
-    applyCoachAction({
-      name: "mark_problem_bar",
-      args: { bar: problemBarNumber, reason: problemDetails.reason },
+  const analyzeLastTake = async () => {
+    if (activeNotes.length === 0 || scoreResult.bars.length === 0) return;
+    setIsCoachThinking(true);
+    setCoachMessage(null);
+    const reply = await requestCoach({
+      score: scoreResult.bars,
+      barCount: scoreResult.bars.length,
+      notes: activeNotes.map((note) => ({
+        start: note.start,
+        end: note.end,
+        pitch: note.pitch,
+        velocity: note.velocity,
+        bar: note.bar,
+        hand: note.hand,
+      })),
     });
-    applyCoachAction({ name: "set_loop", args: { start_bar: loopStart, end_bar: loopEnd } });
-    applyCoachAction({ name: "set_tempo", args: { percent: 75 } });
+    for (const action of reply.actions) {
+      applyCoachAction(action);
+    }
+    setCoachMessage(reply.message);
+    setIsCoachThinking(false);
   };
 
   const scrubRoll = (event: MouseEvent<HTMLDivElement>) => {
@@ -466,6 +426,8 @@ export function LearnView() {
         scoreResult={scoreResult}
         takeHref={takeHref}
         onAnalyzeTake={analyzeLastTake}
+        coachMessage={coachMessage}
+        isCoachThinking={isCoachThinking}
       />
     </>
   );
