@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import logging
 import os
 import time
 from collections.abc import Callable
@@ -34,6 +35,8 @@ from ingest import (
     read_job,
     write_job,
 )
+
+LOGGER = logging.getLogger(__name__)
 
 CORS_ENV = "MIXRAY_CORS_ORIGINS"
 API_KEY_ENV = "MIXRAY_API_KEY"

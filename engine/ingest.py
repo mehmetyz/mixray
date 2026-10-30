@@ -14,7 +14,7 @@ import tempfile
 import time
 import wave
 from pathlib import Path
-from typing import Literal, TypedDict
+from typing import Literal, NotRequired, TypedDict
 
 LOGGER = logging.getLogger(__name__)
 
@@ -108,7 +108,7 @@ class JobRecord(TypedDict):
     isolation_id: str | None
     cached: bool
     error: str | None
-    updated_at: float | None
+    updated_at: NotRequired[float]
 
 
 class IpQuotaCounter(TypedDict):
