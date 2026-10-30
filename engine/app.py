@@ -136,6 +136,12 @@ class IsolationWorker:
                 }
             )
         else:
+            # The commit has to happen BEFORE the follow-ups are queued. They reload the Volume as
+            # they start and read this isolation's `sound.wav`; queued first, they raced the commit
+            # and lost it, and because each failure is swallowed as optional the isolation looked
+            # fine while every clip arrived with no notes to learn. It only worked earlier because
+            # importing TensorFlow took long enough for the commit to land.
+            CACHE_VOLUME.commit()
             self._queue_follow_up(clip_id, iso_id, prompt)
         finally:
             CACHE_VOLUME.commit()
@@ -248,6 +254,9 @@ class IsolationWorker:
             )
         else:
             if iso_id is not None and named_prompt is not None:
+                # Committed first, for the same reason as the text path: the follow-ups read this
+                # isolation's output as they start.
+                CACHE_VOLUME.commit()
                 self._queue_follow_up(clip_id, iso_id, named_prompt)
         finally:
             CACHE_VOLUME.commit()

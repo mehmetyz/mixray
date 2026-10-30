@@ -152,6 +152,37 @@ class ChordMatch(TypedDict):
     strength: float
 
 
+# Beat-tracker starting hints, spread across the range dance and pop music is written in.
+TEMPO_SEARCH_STARTS = (70.0, 85.0, 100.0, 115.0, 128.0, 140.0, 155.0, 170.0)
+# Each tracker result is also offered at these multiples of its period.
+METRICAL_FACTORS = (0.5, 2.0)
+# Onset-peak spacing is offered as a beat, a half-beat, a two-beat and a four-beat period.
+SPACING_FACTORS = (0.5, 1.0, 2.0, 4.0)
+PHASE_SEARCH_STEPS = 24
+# How much of each bar to skip before reading its chord, so the previous chord's decay does
+# not outweigh the new chord's attack.
+BAR_SETTLE_FRACTION = 0.125
+
+# Harmonic change needs a previous frame to compare against.
+MIN_FRAMES_FOR_NOVELTY = 2
+MIN_PEAKS_FOR_SPACING = 4
+# The tempo prior: music clusters here, which is what keeps a grid at a fifth of the real tempo
+# from winning on alignment alone.
+PRIOR_CENTRE_BPM = 125.0
+PRIOR_OCTAVES = 0.9
+# How close a rival tempo must be to half, equal or double to count as the same reading.
+OCTAVE_TOLERANCE = 0.02
+
+# A lead-in at least this long, counted in bars, is reported as a bar of its own.
+MIN_LEAD_IN_BARS = 0.5
+
+# Two keys whose triad votes differ by less than this are treated as tied.
+TIE_EPSILON = 1e-6
+
+# How far a beat may sit from the fitted line before the clip counts as not metronomic.
+FIT_TOLERANCE_BEATS = 0.25
+
+
 def _fold_into_range(bpm: float) -> float:
     """Halve or double a tempo until it lands in the range dance music is actually written in."""
     folded = bpm
@@ -162,25 +193,162 @@ def _fold_into_range(bpm: float) -> float:
     return min(max(folded, SCHEMA_MIN_BPM), SCHEMA_MAX_BPM)
 
 
-def _beat_grid(onset_envelope: "np.ndarray", sample_rate: int) -> tuple[list[float], float]:
-    """Detect beat times and the tempo implied by their spacing.
+class BeatGrid(TypedDict):
+    """The beat positions, the tempo they imply, and how sure of it the detection is."""
 
-    The tempo is taken from the median gap between detected beats instead of from the tracker's own
-    estimate, so the number shown to the user and the grid drawn under it can never disagree.
+    beats: list[float]
+    bpm: float
+    confidence: float
+
+
+def _grid_alignment(
+    onset_envelope: "np.ndarray", sample_rate: int, period: float, offset: float, duration: float
+) -> float:
+    """How strongly a uniform grid at this period lands on the clip's onsets.
+
+    The mean onset strength under the grid, divided by the mean of the whole envelope, so a grid
+    that hits accents scores above one and a grid that falls between them scores below. The tempo
+    prior then pulls the answer towards the range music is written in, which is what stops a grid
+    at half or a fifth of the real tempo from winning on alignment alone.
     """
     import librosa
     import numpy as np
 
-    beat_frames = librosa.beat.beat_track(
-        onset_envelope=onset_envelope, sr=sample_rate, units="frames"
-    )[1]
-    beats = librosa.frames_to_time(beat_frames, sr=sample_rate)
-    if beats.size < MIN_BEATS_FOR_TEMPO:
-        return [], _fold_into_range(0.0)
+    if period <= 0.0:
+        return 0.0
+    times = np.arange(offset % period, duration, period)
+    if times.size == 0:
+        return 0.0
+    frames = np.clip(librosa.time_to_frames(times, sr=sample_rate), 0, onset_envelope.size - 1)
+    envelope_mean = float(onset_envelope.mean()) or 1.0
+    strength = float(onset_envelope[frames].mean()) / envelope_mean
+    bpm = SECONDS_PER_MINUTE / period
+    prior = float(np.exp(-0.5 * (np.log2(bpm / PRIOR_CENTRE_BPM) / PRIOR_OCTAVES) ** 2))
+    return strength * prior
 
-    median_gap = float(np.median(np.diff(beats)))
-    bpm = _fold_into_range(SECONDS_PER_MINUTE / median_gap) if median_gap > 0.0 else MIN_BPM
-    return [round(float(time), ROUND_SECONDS) for time in beats], bpm
+
+def _fit_period(beats: "np.ndarray") -> tuple[float, float]:
+    """Fit beat time against beat index; the slope is the beat period."""
+    import numpy as np
+
+    indices = np.arange(beats.size, dtype=float)
+    period, offset = (float(value) for value in np.polyfit(indices, beats, 1))
+    return period, offset
+
+
+def _tempo_candidates(
+    onset_envelope: "np.ndarray", sample_rate: int, duration: float
+) -> dict[float, tuple[float, float, float]]:
+    """Propose beat grids from several independent estimators, keyed by tempo.
+
+    No single estimator is reliable across material, measured on the evaluation set: the beat
+    tracker locked onto exactly five sixteenth notes on a dense drum piece and read 113 where the
+    truth was 140, while the spacing of picked onset peaks is quantised to the analysis hop and
+    cannot express 140 at all. Proposing from all of them and then judging the proposals against
+    the onsets gets 140 from the same audio.
+    """
+    import librosa
+    import numpy as np
+
+    candidates: dict[float, tuple[float, float, float]] = {}
+
+    def offer(period: float, offset: float) -> None:
+        if period <= 0.0:
+            return
+        bpm = SECONDS_PER_MINUTE / period
+        if not MIN_BPM <= bpm <= MAX_BPM:
+            return
+        key = round(bpm, 2)
+        if key in candidates:
+            return
+        score = _grid_alignment(onset_envelope, sample_rate, period, offset, duration)
+        candidates[key] = (score, period, offset)
+
+    for start_bpm in TEMPO_SEARCH_STARTS:
+        frames = librosa.beat.beat_track(
+            onset_envelope=onset_envelope, sr=sample_rate, units="frames", start_bpm=start_bpm
+        )[1]
+        beats = librosa.frames_to_time(frames, sr=sample_rate)
+        if beats.size < MIN_BEATS_FOR_TEMPO:
+            continue
+        period, offset = _fit_period(beats)
+        offer(period, offset)
+        for factor in METRICAL_FACTORS:
+            offer(period * factor, offset)
+
+    # The tracker proposes nothing usable for material with no percussive onsets, so these two add
+    # a tempo without beat positions; the phase is then searched on a fine grid.
+    loose: list[float] = [
+        float(
+            np.atleast_1d(librosa.feature.tempo(onset_envelope=onset_envelope, sr=sample_rate))[0]
+        )
+    ]
+    peaks = librosa.util.peak_pick(
+        onset_envelope, pre_max=3, post_max=3, pre_avg=5, post_avg=5, delta=0.2, wait=2
+    )
+    if peaks.size > MIN_PEAKS_FOR_SPACING:
+        gaps = np.diff(librosa.frames_to_time(peaks, sr=sample_rate))
+        spacing = float(np.median(gaps))
+        if spacing > 0.0:
+            loose.extend(SECONDS_PER_MINUTE / (spacing * factor) for factor in SPACING_FACTORS)
+    for bpm in loose:
+        if not MIN_BPM <= bpm <= MAX_BPM or round(bpm, 2) in candidates:
+            continue
+        period = SECONDS_PER_MINUTE / bpm
+        best_offset, best_score = 0.0, -1.0
+        for offset in np.linspace(0.0, period, PHASE_SEARCH_STEPS, endpoint=False):
+            score = _grid_alignment(onset_envelope, sample_rate, period, float(offset), duration)
+            if score > best_score:
+                best_offset, best_score = float(offset), score
+        candidates[round(bpm, 2)] = (best_score, period, best_offset)
+
+    return candidates
+
+
+def _tempo_confidence(ranked: list[tuple[float, tuple[float, float, float]]]) -> float:
+    """How clearly the winning tempo beat the alternatives.
+
+    A rival at half or double the winner is the same reading of the music at another metrical
+    level, so it is not counted as competition; a rival at an unrelated tempo is. Material whose
+    only onsets are chord changes genuinely admits several tempi, and this is what says so.
+    """
+    if not ranked:
+        return 0.0
+    best_bpm, (best_score, _, _) = ranked[0]
+    if best_score <= 0.0:
+        return 0.0
+    for bpm, (score, _, _) in ranked[1:]:
+        ratio = bpm / best_bpm
+        if any(abs(ratio - factor) < OCTAVE_TOLERANCE for factor in (0.5, 1.0, 2.0)):
+            continue
+        return round(best_score / (best_score + score), 3)
+    return 1.0
+
+
+def _beat_grid(onset_envelope: "np.ndarray", sample_rate: int, duration: float) -> BeatGrid:
+    """Detect the tempo by proposing beat grids and judging them against the onsets.
+
+    Two measured findings shape this. A detected beat can only land on an onset frame, so every
+    gap between beats is quantised to the hop and the median gap inherits that error from a single
+    gap: on a clip authored at exactly 128 BPM it read 129.20, outside our own acceptance limit.
+    Fitting a line through the beat times spreads the quantisation across every beat and reads
+    128.00. And no single estimator is right across material, so the tempo is chosen by evidence
+    rather than by trusting one of them.
+    """
+    import numpy as np
+
+    candidates = _tempo_candidates(onset_envelope, sample_rate, duration)
+    if not candidates:
+        return {"beats": [], "bpm": _fold_into_range(0.0), "confidence": 0.0}
+
+    ranked = sorted(candidates.items(), key=lambda item: item[1][0], reverse=True)
+    bpm, (_, period, offset) = ranked[0]
+    beats = np.arange(offset % period, duration, period)
+    return {
+        "beats": [round(float(time), ROUND_SECONDS) for time in beats],
+        "bpm": _fold_into_range(bpm),
+        "confidence": _tempo_confidence(ranked),
+    }
 
 
 def _beat_confidence(beats: list[float]) -> float:
@@ -201,21 +369,51 @@ def _beat_confidence(beats: list[float]) -> float:
     return round(max(0.0, min(1.0, 1.0 - spread)), 3)
 
 
-def _downbeat_phase(beats: list[float], onset_envelope: "np.ndarray", sample_rate: int) -> int:
+def _chroma_novelty(chroma: "np.ndarray") -> "np.ndarray":
+    """How much the harmony changes from each analysis frame to the next."""
+    import numpy as np
+
+    if chroma.shape[1] < MIN_FRAMES_FOR_NOVELTY:
+        return np.zeros(chroma.shape[1], dtype=float)
+    change = np.abs(np.diff(chroma, axis=1)).sum(axis=0)
+    return np.concatenate(([0.0], change))
+
+
+def _downbeat_phase(
+    beats: list[float],
+    onset_envelope: "np.ndarray",
+    chroma: "np.ndarray",
+    sample_rate: int,
+) -> int:
     """Pick which of the four beats in a bar carries the bar line.
 
-    Assumes 4/4 and scores each phase by the onset strength landing on it: the first beat of a bar
-    is where the kick and the chord change go, so the phase with the most accent wins.
+    Assumes 4/4 and judges each phase on two kinds of evidence, because accent alone is not
+    enough: onset strength, since the kick lands on the bar line, and harmonic change, since the
+    chord changes there too. Measured on the evaluation set, scoring by accent alone put the bar
+    lines a beat out on a clip where a lead sits in the same register as the piano and dropped
+    chord agreement from 100 % to 75 %, while the chord changes were in the right place all along.
+
+    The two are summed after each is divided by its own mean, so neither scale dominates.
     """
     import librosa
     import numpy as np
 
     if not beats:
         return 0
-    frames = librosa.time_to_frames(np.asarray(beats, dtype=float), sr=sample_rate)
-    frames = np.clip(frames, 0, onset_envelope.size - 1)
-    strengths = onset_envelope[frames]
-    scores = [float(strengths[phase::BEATS_PER_BAR].mean()) for phase in range(BEATS_PER_BAR)]
+    times = np.asarray(beats, dtype=float)
+    onset_frames = np.clip(
+        librosa.time_to_frames(times, sr=sample_rate), 0, onset_envelope.size - 1
+    )
+    novelty = _chroma_novelty(chroma)
+    chroma_frames = np.clip(librosa.time_to_frames(times, sr=sample_rate), 0, novelty.size - 1)
+
+    accent = onset_envelope[onset_frames]
+    change = novelty[chroma_frames]
+    accent_mean = float(accent.mean()) or 1.0
+    change_mean = float(change.mean()) or 1.0
+    evidence = accent / accent_mean + change / change_mean
+
+    scores = [float(evidence[phase::BEATS_PER_BAR].mean()) for phase in range(BEATS_PER_BAR)]
     return int(np.argmax(scores))
 
 
@@ -264,11 +462,25 @@ def _match_chord(chroma: "np.ndarray", templates: "np.ndarray") -> ChordMatch:
 
 
 def _bar_bounds(downbeats: list[float], duration: float) -> list[tuple[float, float]]:
-    """Turn bar starts into (start, end) pairs, the last one running to the end of the clip."""
+    """Turn bar starts into (start, end) pairs, covering the whole clip.
+
+    The music before the first detected downbeat gets a bar of its own. The downbeat phase picks
+    which of four beats carries the bar line, so a clip that begins on a downbeat still loses its
+    opening bar whenever the phase is not zero, and that bar then has no chord at all. Measured on
+    a clip authored with sixteen bars: the engine reported fifteen and the X-Ray screen would have
+    opened on a blank. A lead-in shorter than half a bar is left alone, because that is a fragment
+    of a bar rather than a bar.
+    """
     if not downbeats:
         return [(0.0, duration)]
     ends = [*downbeats[1:], duration]
-    return [(start, end) for start, end in zip(downbeats, ends, strict=True) if end > start]
+    bounds = [(start, end) for start, end in zip(downbeats, ends, strict=True) if end > start]
+    first_start = downbeats[0]
+    if len(downbeats) > 1:
+        bar_length = downbeats[1] - downbeats[0]
+        if first_start >= bar_length * MIN_LEAD_IN_BARS:
+            bounds.insert(0, (0.0, first_start))
+    return bounds
 
 
 def _chords_per_bar(
@@ -276,11 +488,22 @@ def _chords_per_bar(
     frame_times: "np.ndarray",
     bars: list[tuple[float, float]],
 ) -> list[ChordSpan]:
-    """Average the chroma inside each bar and name the chord it spells."""
+    """Average the chroma inside each bar and name the chord it spells.
+
+    The opening slice of each bar is skipped. A sustained chord rings across the bar line, so the
+    first moments of a bar carry the previous chord's decay as much as the new chord's attack, and
+    averaging the whole bar lets the old chord win. Measured on a clip where a piano and a lead
+    share an octave, four of sixteen bars were named with the chord of the bar before; skipping the
+    opening eighth is what separates an attack from a decay without assuming anything about tempo.
+    If the skip would leave no frames, the whole bar is used rather than dropping the bar.
+    """
     templates = _chord_templates()
     chords: list[ChordSpan] = []
     for index, (start, end) in enumerate(bars):
-        window = (frame_times >= start) & (frame_times < end)
+        settled = start + (end - start) * BAR_SETTLE_FRACTION
+        window = (frame_times >= settled) & (frame_times < end)
+        if not bool(window.any()):
+            window = (frame_times >= start) & (frame_times < end)
         if not bool(window.any()):
             continue
         match = _match_chord(chroma[:, window].mean(axis=1), templates)
@@ -296,7 +519,26 @@ def _chords_per_bar(
     return chords
 
 
-def _key_from_chords(chords: list[ChordSpan]) -> KeyInfo:
+# Krumhansl-Kessler key profiles: how much each pitch class is heard in a major and a minor key.
+# These are what separate a key from its relative, because the two share every diatonic triad but
+# weight the twelve pitch classes differently.
+MAJOR_PROFILE = (6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88)
+MINOR_PROFILE = (6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17)
+
+
+def _profile_correlation(observed: list[float], tonic: int, mode: str) -> float:
+    """Pearson correlation between the pitch classes heard and a key's expected weighting."""
+    import numpy as np
+
+    profile = MINOR_PROFILE if mode == "minor" else MAJOR_PROFILE
+    expected = np.roll(np.asarray(profile, dtype=float), tonic)
+    heard = np.asarray(observed, dtype=float)
+    if heard.std() == 0.0 or expected.std() == 0.0:
+        return 0.0
+    return float(np.corrcoef(heard, expected)[0, 1])
+
+
+def _key_from_chords(chords: list[ChordSpan], pitch_classes: list[float]) -> KeyInfo:
     """Vote for the key whose diatonic triads cover the most bar time.
 
     Deriving the key from the chords rather than from raw chroma keeps the two consistent, so the
@@ -316,23 +558,45 @@ def _key_from_chords(chords: list[ChordSpan]) -> KeyInfo:
     if total <= 0.0:
         return {"tonic": PITCH_NAMES[0], "mode": "major", "confidence": 0.0}
 
-    best_score = -1.0
-    best_tonic = 0
-    best_mode = "major"
+    scored: list[tuple[float, int, str]] = []
     for tonic in range(PITCH_CLASS_COUNT):
         for mode, degrees in (("major", MAJOR_KEY_TRIADS), ("minor", MINOR_KEY_TRIADS)):
             score = sum(
                 weights.get(((tonic + offset) % PITCH_CLASS_COUNT, is_minor), 0.0)
                 for offset, is_minor in degrees
             )
-            if score > best_score:
-                best_score, best_tonic, best_mode = score, tonic, mode
+            scored.append((score, tonic, mode))
+
+    best_score = max(score for score, _, _ in scored)
+    tied = [(tonic, mode) for score, tonic, mode in scored if score >= best_score - TIE_EPSILON]
+    best_tonic, best_mode = _resolve_key_tie(tied, pitch_classes)
 
     return {
         "tonic": PITCH_NAMES[best_tonic],
         "mode": best_mode,
         "confidence": round(min(1.0, best_score / total), 3),
     }
+
+
+def _resolve_key_tie(tied: list[tuple[int, str]], pitch_classes: list[float]) -> tuple[int, str]:
+    """Choose between keys the triad vote cannot separate.
+
+    A minor key and its relative major are built from the same seven triads, so the vote scores
+    them identically and whichever the loop reached first won. That is why A minor was read as
+    C major and E minor as G major: an iteration order, not a musical judgement.
+
+    Two cheaper rules were tried against the evaluation set and both failed. Ranking by the tonic
+    triad's bar time does not separate the pair at all - in Am-F-C-G both Am and C hold four bars -
+    and it turned three correct minor keys into their relative majors. Preferring the key the
+    progression opens on fixed two and broke a third, because the first DETECTED bar is not the
+    first musical bar: the downbeat phase can drop bar one, so the rule reads the wrong chord.
+
+    What does separate them is the pitch content itself. The relative pair shares its triads but
+    not its emphasis, which is what a key profile measures.
+    """
+    if len(tied) == 1:
+        return tied[0]
+    return max(tied, key=lambda candidate: _profile_correlation(pitch_classes, *candidate))
 
 
 def _section_count(duration: float) -> int:
@@ -427,6 +691,22 @@ def _energy_curve(samples: "np.ndarray", sample_rate: int, duration: float) -> E
     }
 
 
+def _pitch_class_weights(chroma: "np.ndarray", rms: "np.ndarray") -> list[float]:
+    """How much each of the twelve pitch classes is heard, weighted by how loud the frame was.
+
+    A quiet frame says little about the key, so weighting by level keeps a fade or a gap from
+    counting as much as the loudest bar.
+    """
+    import numpy as np
+
+    level = np.asarray(rms, dtype=float)
+    frames = min(chroma.shape[1], level.size)
+    if frames == 0:
+        return [0.0] * PITCH_CLASS_COUNT
+    weighted = chroma[:, :frames] * level[:frames]
+    return [float(value) for value in weighted.sum(axis=1)]
+
+
 def analyze_wav(wav_path: Path) -> TrackAnalysis:
     """Read one mono WAV and return every musical field a trackmap needs."""
     import librosa
@@ -438,10 +718,6 @@ def analyze_wav(wav_path: Path) -> TrackAnalysis:
     duration = float(librosa.get_duration(y=samples, sr=sample_rate))
 
     onset_envelope = librosa.onset.onset_strength(y=samples, sr=sample_rate)
-    beats, bpm = _beat_grid(onset_envelope, sample_rate)
-    phase = _downbeat_phase(beats, onset_envelope, sample_rate)
-    downbeats = beats[phase::BEATS_PER_BAR]
-
     chroma = librosa.feature.chroma_cqt(y=samples, sr=sample_rate)
     frame_times = librosa.times_like(chroma, sr=sample_rate)
     rms = librosa.feature.rms(y=samples)[0][: chroma.shape[1]]
@@ -449,16 +725,21 @@ def analyze_wav(wav_path: Path) -> TrackAnalysis:
         chroma = chroma[:, : rms.size]
         frame_times = frame_times[: rms.size]
 
+    grid = _beat_grid(onset_envelope, sample_rate, duration)
+    beats = grid["beats"]
+    phase = _downbeat_phase(beats, onset_envelope, chroma, sample_rate)
+    downbeats = beats[phase::BEATS_PER_BAR]
+
     chords = _chords_per_bar(chroma, frame_times, _bar_bounds(downbeats, duration))
     return {
         "tempo": {
-            "bpm": round(bpm, 2),
+            "bpm": round(grid["bpm"], 2),
             "time_signature": TIME_SIGNATURE,
-            "confidence": _beat_confidence(beats),
+            "confidence": grid["confidence"],
         },
         "beats": beats,
         "downbeats": downbeats,
-        "key": _key_from_chords(chords),
+        "key": _key_from_chords(chords, _pitch_class_weights(chroma, rms)),
         "chords": chords,
         "sections": _sections(chroma, rms, frame_times, duration),
         "energy": _energy_curve(samples, sample_rate, duration),
