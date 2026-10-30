@@ -168,6 +168,13 @@ ANALYSIS_FIELDS: tuple[str, ...] = (
     "sections",
     "energy",
 )
+# Per-isolation sidecars, as (file, field). A producer writes its own file and the assembler
+# overlays it on read, because three containers read-modify-writing one trackmap lost results once.
+# A file holding only its own field is unwrapped; anything else is taken whole.
+ISOLATION_SIDECARS: tuple[tuple[str, str], ...] = (
+    ("recipe.json", "recipe"),
+    ("summary.json", "summary"),
+)
 TRANSCRIPTION_FIELDS: tuple[str, ...] = (
     "notes",
     "arrangements",
@@ -729,12 +736,12 @@ def build_served_trackmap(clip_id: str, cache_root: Path | None = None) -> dict[
                 for field in TRANSCRIPTION_FIELDS:
                     if field in transcription:
                         isolation[field] = transcription[field]
-            # The recipe is written by its own producer and is allowed to be missing: it comes from
-            # a partner-hosted model and arrives after the sound and its notes, which are the
-            # product. A clip without one still serves.
-            recipe = _read_optional_json_object(isolation_dir / "recipe.json")
-            if recipe is not None:
-                isolation["recipe"] = recipe
+            # Each of these is written by its own producer, arrives after the sound and its notes,
+            # and is allowed to be missing: a clip without a recipe or a summary still serves.
+            for filename, field in ISOLATION_SIDECARS:
+                extra = _read_optional_json_object(isolation_dir / filename)
+                if extra is not None:
+                    isolation[field] = extra.get(field, extra)
             isolations.append(isolation)
     trackmap["isolations"] = isolations
     return trackmap
