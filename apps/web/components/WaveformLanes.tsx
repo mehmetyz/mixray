@@ -5,6 +5,7 @@ import type { StemName } from "@/lib/audio/player";
 import { drawWaveformLane } from "@/lib/studio/canvas";
 import { deriveMixPeaks, methodBadgeLabel } from "@/lib/studio/format";
 import { useStudio } from "./StudioContext";
+import { useThemeListener } from "./ThemeToggle";
 
 type SingleLaneProps = {
   title: string;
@@ -26,6 +27,7 @@ function WaveformLaneRow({
   showAccentDot = false,
 }: SingleLaneProps) {
   const { currentTime, duration, trackMap, monitor, setMonitor, loopRange, seek } = useStudio();
+  const themeTick = useThemeListener();
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const draggingRef = useRef<boolean>(false);
 
@@ -42,7 +44,7 @@ function WaveformLaneRow({
       tone,
       loop: loopRange,
     });
-  }, [peaks, currentTime, duration, trackMap.downbeats, audible, tone, loopRange]);
+  }, [peaks, currentTime, duration, trackMap.downbeats, audible, tone, loopRange, themeTick]);
 
   const scrubAtClientX = (clientX: number, element: HTMLElement) => {
     const rect = element.getBoundingClientRect();

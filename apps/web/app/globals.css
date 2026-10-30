@@ -1,32 +1,61 @@
 @import "tailwindcss";
 
 :root {
-  --bg: #131417;
-  --surface: #16181c;
-  --surface-2: #1e2027;
-  --inset: #0e0f12;
-  --line: #24262d;
-  --line-2: #2c303a;
-  --control: #383c47;
-  --inactive: #454954;
-  --muted-wave: #23252c;
+  --bg: #111215;
+  --surface: #17191e;
+  --surface-2: #20232b;
+  --inset: #0c0d10;
+  --line: #22252e;
+  --line-2: #2a2e39;
+  --control: #3a404f;
+  --inactive: #4d5464;
+  --muted-wave: #1e2129;
 
-  --text: #eaecef;
-  --text-2: #b4bac6;
-  --text-muted: #8b919e;
+  --text: #edf0f5;
+  --text-2: #b2b8c6;
+  --text-muted: #828a9b;
 
   --accent: #ff6a1a;
-  --accent-ink: #131417;
+  --accent-ink: #111215;
   --accent-hover: #ff8542;
   --you: #f5b971;
 
-  --rest: #b8bdc7;
+  --rest: #9aa1b0;
   --left-hand: #7c8599;
   --left-hand-2: #636b7d;
-  --key-white: #e4e6ea;
-  --key-white-ink: #131417;
-  --key-black: #1b1d23;
+  --key-white: #e8ebf0;
+  --key-white-ink: #111215;
+  --key-black: #1b1d24;
 }
+
+[data-theme="light"] {
+  --bg: #f7f8fa;
+  --surface: #ffffff;
+  --surface-2: #eff1f5;
+  --inset: #e6e9ee;
+  --line: #e1e5eb;
+  --line-2: #d3d8e2;
+  --control: #bec4d0;
+  --inactive: #9ea5b3;
+  --muted-wave: #e2e6ec;
+
+  --text: #0e1117;
+  --text-2: #434a58;
+  --text-muted: #6e7788;
+
+  --accent: #ff6a1a;
+  --accent-ink: #ffffff;
+  --accent-hover: #e55a0f;
+  --you: #d97706;
+
+  --rest: #64748b;
+  --left-hand: #94a3b8;
+  --left-hand-2: #64748b;
+  --key-white: #ffffff;
+  --key-white-ink: #0e1117;
+  --key-black: #1a1e26;
+}
+
 
 @theme inline {
   --color-*: initial;

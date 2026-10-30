@@ -1,33 +1,38 @@
 import Link from "next/link";
 import type { NavState } from "@/lib/steps";
 import { StepNav } from "./StepNav";
+import { ThemeToggle } from "./ThemeToggle";
 
 type AppHeaderProps = {
   nav: NavState;
-  clipMeta?: string;
 };
 
-export function AppHeader({ nav, clipMeta }: AppHeaderProps) {
+export function AppHeader({ nav }: AppHeaderProps) {
+  const isClipView = nav.current !== "add";
+
   return (
-    <header className="flex h-11 shrink-0 items-center justify-between gap-4 border-b border-line bg-surface px-4">
-      <div className="flex min-w-0 items-center gap-4">
+    <header className="flex h-13 shrink-0 items-center justify-between gap-4 border-b border-line bg-surface/90 px-4 backdrop-blur-md">
+      <div className="flex min-w-0 items-center">
         <Link
           href="/"
-          className="flex shrink-0 items-center gap-2 text-sm font-bold lowercase tracking-tight text-text"
+          className="flex shrink-0 items-center gap-1.5 text-base font-bold lowercase tracking-tight text-text transition hover:opacity-85"
         >
           <span>
             mi<span className="text-accent">x</span>ray
           </span>
         </Link>
-        {clipMeta !== undefined ? (
-          <div className="hidden min-w-0 items-center gap-2 border-l border-line pl-3 text-xs text-text-2 md:flex">
-            <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-accent" />
-            <span className="mono-num truncate">{clipMeta}</span>
-          </div>
-        ) : null}
       </div>
 
-      <StepNav nav={nav} variant="mobile" />
+      {isClipView ? (
+        <div className="hidden sm:flex items-center justify-center">
+          <StepNav nav={nav} variant="header" />
+        </div>
+      ) : null}
+
+      <div className="flex items-center gap-2.5">
+        {isClipView ? <StepNav nav={nav} variant="mobile" /> : null}
+        <ThemeToggle />
+      </div>
     </header>
   );
 }

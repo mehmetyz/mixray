@@ -67,6 +67,7 @@ export function ClipPicker() {
   const [isScrubbing, setIsScrubbing] = useState<boolean>(false);
 
   const [promptInput, setPromptInput] = useState<string>("");
+  const [projectTitle, setProjectTitle] = useState<string>("");
   const [rightsChecked, setRightsChecked] = useState<boolean>(true);
   const [dragActive, setDragActive] = useState<boolean>(false);
   const [uploadState, setUploadState] = useState<UploadState>("idle");
@@ -191,6 +192,7 @@ export function ClipPicker() {
       setSelectedFile(file);
       setPreview(inspected);
       setWindowRange(initialWindow);
+      setProjectTitle(stripExtension(file.name));
       if (inspected.kind === "video") {
         setVideoObjectUrl(URL.createObjectURL(file));
       } else {
@@ -323,7 +325,7 @@ export function ClipPicker() {
     setElapsedSeconds(0);
 
     try {
-      const title = stripExtension(selectedFile.name);
+      const title = (projectTitle.trim() || stripExtension(selectedFile.name)).trim();
       let job;
 
       if (preview.kind === "audio") {
@@ -448,12 +450,12 @@ export function ClipPicker() {
       : 100;
 
   return (
-    <div className="max-w-3xl space-y-3">
+    <div className="w-full max-w-3xl mx-auto space-y-4">
       <ScreenHeading
         step="add"
         title="Point at a sound. Hear it alone."
       >
-        <p className="text-xs text-text-2">
+        <p className="text-sm text-text-2">
           Add audio or video, select your 30s section, and isolate any instrument or player.
         </p>
       </ScreenHeading>
@@ -485,11 +487,11 @@ export function ClipPicker() {
           }}
           onDragLeave={() => setDragActive(false)}
           onDrop={onDrop}
-          className={`rounded-card border border-dashed p-8 text-center transition ${
-            dragActive ? "border-accent bg-surface" : "border-control bg-inset hover:border-text-2"
+          className={`rounded-card border border-dashed p-10 text-center transition ${
+            dragActive ? "border-accent bg-surface" : "border-control bg-surface-2/40 hover:border-text-2"
           }`}
         >
-          <p className="text-sm font-medium text-text">
+          <p className="text-base font-semibold text-text">
             {uploadState === "inspecting"
               ? "Reading media..."
               : "Drop your song or video here"}
@@ -497,10 +499,10 @@ export function ClipPicker() {
           <p className="mono-num mt-1 text-xs text-muted">
             MP3 · WAV · FLAC · MP4 · MOV · up to 50 MB
           </p>
-          <div className="mt-4">
+          <div className="mt-5">
             <label
               htmlFor="media-upload-input"
-              className="inline-flex h-8 cursor-pointer items-center rounded-icon bg-text px-4 text-xs font-semibold text-bg transition hover:opacity-90"
+              className="inline-flex h-10 cursor-pointer items-center rounded-full bg-text px-5 text-sm font-semibold text-bg shadow-sm transition hover:opacity-90 active:scale-[0.98]"
             >
               Choose file
             </label>
@@ -845,36 +847,69 @@ export function ClipPicker() {
             </div>
           </div>
 
-          {/* Sound Prompt Input */}
-          <div className="space-y-1.5 border-t border-line pt-2.5">
-            <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
-              <label htmlFor="target-sound-input" className="text-xs font-medium text-text">
-                What sound do you want to isolate?
-              </label>
-              <div className="flex flex-wrap gap-1">
-                {SUGGESTION_QUICK_PRESETS.slice(0, 6).map((preset) => (
-                  <button
-                    key={preset}
-                    type="button"
-                    disabled={busy}
-                    onClick={() => setPromptInput(preset)}
-                    className="cursor-pointer rounded-icon border border-line-2 bg-bg px-2 py-0.5 text-[10px] text-text-2 hover:border-control hover:text-text disabled:opacity-50"
-                  >
-                    {preset}
-                  </button>
-                ))}
+          {/* Project Details Section */}
+          <div className="space-y-3 border-t border-line pt-3">
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] font-semibold uppercase tracking-wider text-muted">
+                Project Details
+              </span>
+              <span className="mono-num text-[11px] text-muted">
+                Customizable · Used in Studio
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              {/* Project Name Input */}
+              <div className="space-y-1">
+                <label htmlFor="project-title-input" className="block text-xs font-medium text-text">
+                  Project Name
+                </label>
+                <input
+                  id="project-title-input"
+                  type="text"
+                  value={projectTitle}
+                  onChange={(event) => setProjectTitle(event.target.value)}
+                  placeholder="e.g. My New Song"
+                  disabled={busy}
+                  className="mono-num h-9 w-full rounded-card border border-line-2 bg-inset px-3 text-xs text-text placeholder:text-muted focus:border-text focus:outline-none"
+                />
+              </div>
+
+              {/* Target Sound / Isolation Input */}
+              <div className="space-y-1">
+                <label htmlFor="target-sound-input" className="block text-xs font-medium text-text">
+                  Sound to Isolate <span className="text-muted font-normal">(optional)</span>
+                </label>
+                <input
+                  id="target-sound-input"
+                  type="text"
+                  value={promptInput}
+                  onChange={(event) => setPromptInput(event.target.value)}
+                  placeholder="e.g. piano chords, synth lead, vocals"
+                  disabled={busy}
+                  className="mono-num h-9 w-full rounded-card border border-line-2 bg-inset px-3 text-xs text-text placeholder:text-muted focus:border-text focus:outline-none"
+                />
               </div>
             </div>
-            <div className="flex gap-2">
-              <input
-                id="target-sound-input"
-                type="text"
-                value={promptInput}
-                onChange={(event) => setPromptInput(event.target.value)}
-                placeholder="e.g. piano chords, synth lead, vocals, bass"
-                disabled={busy}
-                className="mono-num h-7 flex-1 rounded-icon border border-line-2 bg-inset px-2.5 text-xs text-text placeholder:text-muted focus:border-text focus:outline-none"
-              />
+
+            {/* Quick Suggestion Chips for Sound */}
+            <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
+              <span className="text-[11px] text-muted">Preset sounds:</span>
+              {SUGGESTION_QUICK_PRESETS.map((preset) => (
+                <button
+                  key={preset}
+                  type="button"
+                  disabled={busy}
+                  onClick={() => setPromptInput(preset)}
+                  className={`cursor-pointer rounded-full border px-2.5 py-0.5 text-xs transition disabled:opacity-50 ${
+                    promptInput === preset
+                      ? "border-control bg-surface-2 font-medium text-text shadow-xs"
+                      : "border-line-2 bg-bg text-text-2 hover:border-control hover:text-text"
+                  }`}
+                >
+                  {preset}
+                </button>
+              ))}
             </div>
           </div>
         </div>
@@ -898,9 +933,9 @@ export function ClipPicker() {
             type="button"
             disabled={selectedFile === null || !rightsChecked || busy}
             onClick={() => void handleSubmit()}
-            className="mono-num flex h-7 shrink-0 cursor-pointer items-center justify-center gap-2 rounded-icon bg-text px-4 text-xs font-semibold text-bg transition hover:opacity-90 disabled:cursor-not-allowed disabled:bg-surface-2 disabled:text-muted"
+            className="mono-num flex h-8 shrink-0 cursor-pointer items-center justify-center gap-2 rounded-icon bg-text px-4 text-xs font-semibold text-bg transition hover:opacity-90 disabled:cursor-not-allowed disabled:bg-surface-2 disabled:text-muted"
           >
-            {promptInput.trim().length > 0 ? "Isolate & Analyze →" : "Analyze Track →"}
+            {promptInput.trim().length > 0 ? "Create Project & Isolate →" : "Create Studio Project →"}
           </button>
         </div>
       ) : null}

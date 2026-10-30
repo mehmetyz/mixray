@@ -25,6 +25,7 @@ import type { Note } from "@/lib/trackmap/trackmap.generated";
 import { useStudio, type HandFilter } from "./StudioContext";
 import { TimelineRuler } from "./StudioShell";
 import { CoachPanel } from "./CoachPanel";
+import { useThemeListener } from "./ThemeToggle";
 
 type DifficultyLevel = "easy" | "intermediate";
 
@@ -133,6 +134,7 @@ export function LearnView() {
   const [selectedMidiId, setSelectedMidiId] = useState<string>("qwerty");
   const [playedDots, setPlayedDots] = useState<PlayedNoteDot[]>([]);
   const [lastPlayedLabel, setLastPlayedLabel] = useState<string>("Ready · press A–L");
+  const themeTick = useThemeListener();
 
   const rollCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const currentTimeRef = useRef<number>(currentTime);
@@ -252,7 +254,7 @@ export function LearnView() {
       loop: loopRange,
       problemBarZeroBased: problemBar !== null ? problemBar.bar - 1 : null,
     });
-  }, [activeNotes, playedDots, currentTime, duration, trackMap.downbeats, loopRange, problemBar]);
+  }, [activeNotes, playedDots, currentTime, duration, trackMap.downbeats, loopRange, problemBar, themeTick]);
 
   const analyzeLastTake = () => {
     const attemptedBars = scoreResult.bars.filter((bar) => bar.attempted);
@@ -402,14 +404,15 @@ export function LearnView() {
           />
         </div>
 
-        <div className="flex flex-col gap-2 bg-surface p-4">
-          <div className="flex items-center justify-between text-xs text-muted">
-            <span className="mono-num">C4 – B5 · Click keys, press A–L, or connect USB MIDI</span>
-            <span className="mono-num text-text-2">{lastPlayedLabel}</span>
-          </div>
+        <div className="bg-surface p-4">
+          <div className="mx-auto flex w-full max-w-4xl flex-col gap-2">
+            <div className="flex items-center justify-between text-xs text-muted">
+              <span className="mono-num">C4 – B5 · Click keys, press A–L, or connect USB MIDI</span>
+              <span className="mono-num text-text-2">{lastPlayedLabel}</span>
+            </div>
 
-          <div className="relative h-32 w-full select-none overflow-x-auto rounded-well border border-line bg-inset p-1.5">
-            <div className="relative flex h-full min-w-[560px] gap-1">
+            <div className="relative h-32 w-full select-none overflow-x-auto rounded-card border border-line-2 bg-inset p-1.5 shadow-xs">
+              <div className="relative flex h-full min-w-[560px] gap-1">
               {WHITE_KEYS.map((keySpec) => {
                 const active = soundingMidis.has(keySpec.midi);
                 return (
@@ -456,7 +459,8 @@ export function LearnView() {
             </div>
           </div>
         </div>
-      </section>
+      </div>
+    </section>
 
       <CoachPanel
         scoreResult={scoreResult}

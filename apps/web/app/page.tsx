@@ -14,7 +14,7 @@ export default async function AddPage() {
   const inspector = (
     <div className="space-y-4 text-xs">
       <div>
-        <span className="eyebrow mb-2 block">Precomputed Demo</span>
+        <span className="eyebrow mb-2 block">Demo Projects</span>
         <div className="space-y-2">
           {demos.map(({ id, trackMap }) => {
             if (trackMap === null) return null;
@@ -55,7 +55,7 @@ export default async function AddPage() {
                 ) : null}
 
                 <div className="mt-2 flex items-center justify-between text-[11px] font-medium text-text group-hover:text-accent">
-                  <span>Open Demo Studio</span>
+                  <span>Open Studio Project</span>
                   <span className="transition-transform group-hover:translate-x-0.5">→</span>
                 </div>
               </Link>
@@ -65,19 +65,19 @@ export default async function AddPage() {
       </div>
 
       <div className="space-y-1.5 border-t border-line pt-3">
-        <span className="eyebrow block">Capabilities</span>
+        <span className="eyebrow block">Studio Workspaces</span>
         <div className="space-y-1.5 text-[11px] text-text-2">
           <div className="rounded-well border border-line-2 bg-inset px-2.5 py-1.5">
-            <span className="font-semibold text-text">01 · Isolate</span>
-            <p className="text-muted leading-tight">Tap any player in video or enter text prompt.</p>
+            <span className="font-semibold text-text">Isolate</span>
+            <p className="text-muted leading-tight">Tap any sound or enter text prompt to separate audio.</p>
           </div>
           <div className="rounded-well border border-line-2 bg-inset px-2.5 py-1.5">
-            <span className="font-semibold text-text">02 · X-Ray</span>
-            <p className="text-muted leading-tight">Tempo, key, chords, and piano roll notes.</p>
+            <span className="font-semibold text-text">Analyze (X-Ray)</span>
+            <p className="text-muted leading-tight">Tempo, key, chords, and piano roll note transcription.</p>
           </div>
           <div className="rounded-well border border-line-2 bg-inset px-2.5 py-1.5">
-            <span className="font-semibold text-text">03 · Learn</span>
-            <p className="text-muted leading-tight">Interactive keys &amp; AI coach scoring.</p>
+            <span className="font-semibold text-text">Practice &amp; Learn</span>
+            <p className="text-muted leading-tight">Interactive keyboard with real-time AI coach feedback.</p>
           </div>
         </div>
       </div>

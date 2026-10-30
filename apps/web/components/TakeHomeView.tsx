@@ -152,7 +152,7 @@ export function TakeHomeView() {
       <section className="flex min-w-0 flex-1 flex-col bg-bg lg:overflow-y-auto">
         <TimelineRuler />
 
-        <div className="max-w-3xl space-y-6 p-5 md:p-8">
+        <div className="w-full max-w-3xl mx-auto space-y-6 p-5 md:p-8">
           <ScreenHeading step="take" title="Rebuild it in your DAW.">
             <p className="text-xs text-text-2">
               Aligned at {Math.round(trackMap.tempo.bpm)} BPM in {trackMap.key.tonic}{" "}

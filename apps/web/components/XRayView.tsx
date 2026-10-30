@@ -7,10 +7,12 @@ import { firstSoundingBar, formatPitchRange } from "@/lib/studio/format";
 import { RecipeCard } from "./RecipeCard";
 import { useStudio } from "./StudioContext";
 import { TimelineRuler } from "./StudioShell";
+import { useThemeListener } from "./ThemeToggle";
 
 export function XRayView() {
   const { clipId, trackMap, selectedIsolation, selectedIsolationId, currentTime, duration, seek } =
     useStudio();
+  const themeTick = useThemeListener();
 
   const notesCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const energyCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -36,7 +38,7 @@ export function XRayView() {
         downbeats: trackMap.downbeats,
       });
     }
-  }, [notes, currentTime, duration, trackMap.downbeats, trackMap.energy.values]);
+  }, [notes, currentTime, duration, trackMap.downbeats, trackMap.energy.values, themeTick]);
 
   const scrubCanvas = (event: MouseEvent<HTMLDivElement>) => {
     const rect = event.currentTarget.getBoundingClientRect();

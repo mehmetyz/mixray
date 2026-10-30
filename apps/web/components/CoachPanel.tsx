@@ -368,14 +368,14 @@ export function CoachPanel({ scoreResult, takeHref, onAnalyzeTake }: CoachPanelP
       </div>
 
       {/* Applied Tool Calls Log */}
-      <div className="space-y-1.5 border-t border-line pt-3">
+      <div className="space-y-2 border-t border-line/70 pt-3">
         <div className="flex items-center justify-between">
-          <span className="eyebrow">Applied Tool Calls</span>
+          <span className="text-xs font-semibold text-text">Applied Coach Overrides</span>
           {coachEntries.length > 0 ? (
             <button
               type="button"
               onClick={resetCoachOverrides}
-              className="mono-num text-[10px] text-muted hover:text-text underline cursor-pointer"
+              className="text-[11px] text-muted hover:text-text underline cursor-pointer"
             >
               Reset all
             </button>
@@ -383,37 +383,37 @@ export function CoachPanel({ scoreResult, takeHref, onAnalyzeTake }: CoachPanelP
         </div>
 
         {coachEntries.length > 0 ? (
-          <div className="mono-num space-y-1 text-xs">
+          <div className="space-y-1 text-xs">
             {coachEntries.map((entry) => (
               <div
                 key={entry.id}
-                className="flex items-center justify-between rounded-icon border border-line-2 bg-inset px-2.5 py-1.5 text-text"
+                className="flex items-center justify-between rounded-card border border-line-2 bg-surface-2/60 px-3 py-1.5 text-text shadow-xs"
               >
-                <div className="flex items-center gap-1.5 truncate">
+                <div className="flex items-center gap-2 truncate">
                   <span className="text-accent font-semibold">✓</span>
-                  <span className="truncate">{entry.summary}</span>
+                  <span className="truncate text-xs">{entry.summary}</span>
                 </div>
               </div>
             ))}
           </div>
         ) : (
-          <div className="mono-num rounded-icon border border-dashed border-line-2 bg-inset/50 px-2.5 py-2 text-[11px] text-muted">
+          <div className="rounded-card border border-dashed border-line-2 bg-surface-2/20 px-3 py-2 text-[11px] text-muted">
             No active coach overrides (100% tempo, full arrangement).
           </div>
         )}
       </div>
 
       {/* Per-Bar Accuracy 8-Bar Chart */}
-      <div className="space-y-1.5 border-t border-line pt-3">
+      <div className="space-y-2 border-t border-line/70 pt-3">
         <div className="flex items-center justify-between">
-          <span className="eyebrow">Per-Bar Accuracy</span>
+          <span className="text-xs font-semibold text-text">Per-Bar Accuracy</span>
           <span className="mono-num text-[10px] text-muted">8-BAR STRIP</span>
         </div>
 
         <div
           role="img"
           aria-label="Per-bar hit and on-time rate chart; bars without played notes are unattempted"
-          className="grid h-20 grid-cols-8 items-end gap-1.5 rounded-well border border-line bg-inset p-2 select-none"
+          className="grid h-20 grid-cols-8 items-end gap-1.5 rounded-card border border-line-2 bg-surface-2/40 p-2.5 select-none shadow-xs"
         >
           {scoreResult.bars.slice(0, 8).map((bar) => {
             const isProblem = problemBar !== null && problemBar.bar === bar.index + 1;

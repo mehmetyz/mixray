@@ -4,19 +4,19 @@ export type StepId = (typeof STEP_IDS)[number];
 export type ClipStepId = Exclude<StepId, "add">;
 
 export const STEP_LABELS: Record<StepId, string> = {
-  add: "Add",
-  pick: "Pick a sound",
-  xray: "X-Ray",
-  learn: "Learn",
-  take: "Take home",
+  add: "Add Media",
+  pick: "Isolate",
+  xray: "Analyze",
+  learn: "Practice",
+  take: "Export",
 };
 
 const STEP_EYEBROWS: Record<StepId, string> = {
-  add: "Add media",
-  pick: "Pick a sound",
-  xray: "X-Ray",
-  learn: "Learn",
-  take: "Take home",
+  add: "Add Media",
+  pick: "Isolate Sound",
+  xray: "Analyze Audio",
+  learn: "Interactive Practice",
+  take: "Export Package",
 };
 
 export type AddNavState = {
