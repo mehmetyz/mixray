@@ -29,6 +29,7 @@ from isolate import (
     WEIGHTS_VOLUME,
     run_isolation,
 )
+from recipe import recipe_worker
 from transcribe import apply_transcription
 
 if TYPE_CHECKING:
@@ -85,10 +86,20 @@ class IsolationWorker:
         """Queue optional post-isolation work after a successful isolation."""
         try:
             transcribe_worker.spawn(clip_id, iso_id)
-            if stem_for_prompt(prompt) is not None:
-                fallback_worker.spawn(clip_id)
         except Exception:
-            LOGGER.exception("could not queue follow-up work for clip=%s", clip_id)
+            LOGGER.exception(
+                "could not queue transcription for clip=%s isolation=%s", clip_id, iso_id
+            )
+        try:
+            recipe_worker.spawn(clip_id, iso_id)
+        except Exception:
+            # Partner inference is an optional Take-home enhancement, never an isolation failure.
+            LOGGER.exception("could not queue recipe for clip=%s isolation=%s", clip_id, iso_id)
+        if stem_for_prompt(prompt) is not None:
+            try:
+                fallback_worker.spawn(clip_id)
+            except Exception:
+                LOGGER.exception("could not queue fallback for clip=%s", clip_id)
 
     @modal.method()
     def isolate(self, clip_id: str, iso_id: str, prompt: str, label: str) -> None:

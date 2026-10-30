@@ -64,7 +64,7 @@ export function TimelineRuler({ rightSlot }: TimelineRulerProps) {
 
   return (
     <div className="flex h-9 shrink-0 select-none items-center border-b border-line bg-surface/90">
-      <div className="mono-num flex w-28 shrink-0 items-center justify-between border-r border-line px-3 text-xs text-muted sm:w-36">
+      <div className="mono-num flex w-36 shrink-0 items-center justify-between border-r border-line px-3 text-xs text-muted sm:w-48">
         <span className="text-[11px] font-medium tracking-wide">BARS</span>
         <span className="font-semibold text-text">{formatClockSeconds(currentTime)}</span>
       </div>

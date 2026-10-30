@@ -88,7 +88,7 @@ export function XRayView() {
         </div>
 
         <div className="flex h-10 items-stretch border-b border-line">
-          <div className="mono-num flex w-28 shrink-0 items-center border-r border-line bg-surface px-3 text-xs text-muted sm:w-36">
+          <div className="mono-num flex w-36 shrink-0 items-center border-r border-line bg-surface px-3 text-xs text-muted sm:w-48">
             Sections
           </div>
           <div className="relative flex flex-1 divide-x divide-line bg-inset">
@@ -120,7 +120,7 @@ export function XRayView() {
         </div>
 
         <div className="flex h-10 items-stretch border-b border-line">
-          <div className="mono-num flex w-28 shrink-0 items-center border-r border-line bg-surface px-3 text-xs text-muted sm:w-36">
+          <div className="mono-num flex w-36 shrink-0 items-center border-r border-line bg-surface px-3 text-xs text-muted sm:w-48">
             Chords
           </div>
           <div
@@ -150,7 +150,7 @@ export function XRayView() {
         </div>
 
         <div className="flex h-36 items-stretch border-b border-line">
-          <div className="flex w-28 shrink-0 flex-col justify-between border-r border-line bg-surface p-3 sm:w-36">
+          <div className="flex w-36 shrink-0 flex-col justify-between border-r border-line bg-surface p-3 sm:w-48">
             <span className="mono-num text-xs text-muted">Notes</span>
             <span className="mono-num text-[11px] text-text-2">{notes.length} notes</span>
           </div>
@@ -167,7 +167,7 @@ export function XRayView() {
         </div>
 
         <div className="flex h-20 items-stretch border-b border-line">
-          <div className="mono-num flex w-28 shrink-0 items-center border-r border-line bg-surface px-3 text-xs text-muted sm:w-36">
+          <div className="mono-num flex w-36 shrink-0 items-center border-r border-line bg-surface px-3 text-xs text-muted sm:w-48">
             Energy
           </div>
           <div onClick={scrubCanvas} className="relative flex-1 cursor-pointer bg-inset">

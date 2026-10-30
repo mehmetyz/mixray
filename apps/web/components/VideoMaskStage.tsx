@@ -425,7 +425,7 @@ export function VideoMaskStage({
       {/* On-Screen Visibility Lane */}
       {activeTarget !== undefined ? (
         <div className="flex h-8 items-center border-t border-line bg-surface">
-          <div className="mono-num flex w-28 shrink-0 items-center justify-between border-r border-line px-3 text-[11px] font-medium text-muted sm:w-36">
+          <div className="mono-num flex w-36 shrink-0 items-center justify-between border-r border-line px-3 text-[11px] font-medium text-muted sm:w-48">
             <span>ON SCREEN</span>
             <span className="mono-num text-[10px] font-semibold text-accent uppercase">{activeTarget.label}</span>
           </div>

@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useRef, type PointerEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
 import type { StemName } from "@/lib/audio/player";
 import { drawWaveformLane } from "@/lib/studio/canvas";
-import { deriveMixPeaks, methodBadgeLabel } from "@/lib/studio/format";
+import { deriveMixPeaks, formatClockSeconds, methodBadgeLabel } from "@/lib/studio/format";
 import { useStudio } from "./StudioContext";
 import { useThemeListener } from "./ThemeToggle";
 
@@ -15,6 +15,7 @@ type SingleLaneProps = {
   audible: boolean;
   tone: "accent" | "rest";
   showAccentDot?: boolean;
+  badge?: string;
 };
 
 function WaveformLaneRow({
@@ -25,15 +26,52 @@ function WaveformLaneRow({
   audible,
   tone,
   showAccentDot = false,
+  badge,
 }: SingleLaneProps) {
-  const { currentTime, duration, trackMap, monitor, setMonitor, loopRange, seek } = useStudio();
+  const { currentTime, duration, trackMap, monitor, setMonitor, loopRange, seek, playing } =
+    useStudio();
   const themeTick = useThemeListener();
+
+  const containerRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const draggingRef = useRef<boolean>(false);
 
+  const [canvasSize, setCanvasSize] = useState<{ width: number; height: number }>({
+    width: 1200,
+    height: 104,
+  });
+  const [hoverRatio, setHoverRatio] = useState<number | null>(null);
+
+  // ResizeObserver for razor-sharp Retina/4K rendering at any viewport width
+  useEffect(() => {
+    const container = containerRef.current;
+    if (container === null) return;
+
+    const ro = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      if (!entry) return;
+      const { width, height } = entry.contentRect;
+      if (width > 0 && height > 0) {
+        setCanvasSize({
+          width: Math.round(width),
+          height: Math.round(height),
+        });
+      }
+    });
+
+    ro.observe(container);
+    return () => ro.disconnect();
+  }, []);
+
+  // Redraw whenever peaks, time, size, audio state or theme changes
   useEffect(() => {
     const canvas = canvasRef.current;
     if (canvas === null) return;
+    const dpr = typeof window !== "undefined" ? Math.min(window.devicePixelRatio || 1, 3) : 1;
+
+    canvas.width = Math.round(canvasSize.width * dpr);
+    canvas.height = Math.round(canvasSize.height * dpr);
+
     drawWaveformLane({
       canvas,
       peaks,
@@ -43,8 +81,19 @@ function WaveformLaneRow({
       audible,
       tone,
       loop: loopRange,
+      dpr,
     });
-  }, [peaks, currentTime, duration, trackMap.downbeats, audible, tone, loopRange, themeTick]);
+  }, [
+    peaks,
+    currentTime,
+    duration,
+    trackMap.downbeats,
+    audible,
+    tone,
+    loopRange,
+    themeTick,
+    canvasSize,
+  ]);
 
   const scrubAtClientX = (clientX: number, element: HTMLElement) => {
     const rect = element.getBoundingClientRect();
@@ -60,6 +109,11 @@ function WaveformLaneRow({
   };
 
   const onPointerMove = (event: PointerEvent<HTMLDivElement>) => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    if (rect.width > 0) {
+      const ratio = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
+      setHoverRatio(ratio);
+    }
     if (!draggingRef.current) return;
     scrubAtClientX(event.clientX, event.currentTarget);
   };
@@ -68,48 +122,144 @@ function WaveformLaneRow({
     draggingRef.current = false;
   };
 
+  const onPointerLeave = () => {
+    if (!draggingRef.current) {
+      setHoverRatio(null);
+    }
+  };
+
   const isSolo = monitor === stem;
+  const hoverTime = hoverRatio !== null ? hoverRatio * duration : 0;
 
   return (
-    <div className="flex h-20 items-stretch border-b border-line">
-      <div className="flex w-28 shrink-0 flex-col justify-between border-r border-line bg-surface p-2.5 sm:w-36">
-        <div className="flex items-center justify-between gap-1">
-          <span className="flex min-w-0 items-center gap-1.5 truncate text-xs font-medium text-text">
-            {showAccentDot ? <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-accent" /> : null}
-            <span className="truncate">{title}</span>
-          </span>
-          <button
-            type="button"
-            aria-label={`Solo ${title}`}
-            aria-pressed={isSolo}
-            onClick={() => setMonitor(stem)}
-            className={`mono-num shrink-0 cursor-pointer rounded-icon border px-1.5 py-0.5 text-[10px] transition ${
-              isSolo
-                ? "border-text bg-text font-semibold text-bg"
-                : "border-line-2 text-muted hover:border-control hover:text-text"
-            }`}
-          >
-            S
-          </button>
+    <div className="group/lane relative flex h-24 sm:h-27 items-stretch border-b border-line/70 bg-surface/30 transition-colors hover:bg-surface/50">
+      {/* Left Track Mixer & Info Strip */}
+      <div className="flex w-36 sm:w-48 shrink-0 flex-col justify-between border-r border-line bg-surface/80 p-2.5 sm:p-3 backdrop-blur-xs select-none">
+        {/* Track Title, Stem Icon & Activity */}
+        <div className="space-y-1">
+          <div className="flex items-center justify-between gap-1.5">
+            <span className="flex min-w-0 items-center gap-1.5 truncate text-xs sm:text-sm font-semibold tracking-tight text-text">
+              {showAccentDot ? (
+                <span className="relative flex h-2 w-2 shrink-0">
+                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-accent opacity-75" />
+                  <span className="relative inline-flex h-2 w-2 rounded-full bg-accent shadow-xs shadow-accent/60" />
+                </span>
+              ) : (
+                <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-text-2/40" />
+              )}
+              <span className="truncate">{title}</span>
+            </span>
+
+            {/* Mini VU Meter Activity Graphic */}
+            <div className="flex items-end gap-0.5 h-3 shrink-0" title={audible ? "Track audible" : "Track muted"}>
+              <span
+                className={`w-0.5 rounded-full transition-all duration-300 ${
+                  playing && audible ? "h-3 bg-accent animate-pulse" : "h-1 bg-inactive/60"
+                }`}
+              />
+              <span
+                className={`w-0.5 rounded-full transition-all duration-200 ${
+                  playing && audible ? "h-2 bg-accent" : "h-1 bg-inactive/60"
+                }`}
+              />
+              <span
+                className={`w-0.5 rounded-full transition-all duration-300 ${
+                  playing && audible ? "h-2.5 bg-accent" : "h-1 bg-inactive/60"
+                }`}
+              />
+            </div>
+          </div>
+
+          <div className="flex items-center gap-1.5">
+            {badge !== undefined ? (
+              <span className="mono-num shrink-0 rounded-xs border border-line-2 bg-surface-2 px-1 py-0.2 text-[9px] font-semibold tracking-wider text-accent uppercase">
+                {badge}
+              </span>
+            ) : null}
+            <span className="mono-num truncate text-[10px] text-muted">{subtitle}</span>
+          </div>
         </div>
-        <span className="mono-num truncate text-[11px] text-muted">{subtitle}</span>
+
+        {/* Solo [S] and Mute [M] Control Buttons */}
+        <div className="flex items-center justify-between pt-1 border-t border-line/40">
+          <div className="flex items-center gap-1">
+            {/* Solo Button */}
+            <button
+              type="button"
+              aria-label={`Solo ${title}`}
+              aria-pressed={isSolo}
+              onClick={(e) => {
+                e.stopPropagation();
+                setMonitor(isSolo ? "mix" : stem);
+              }}
+              className={`mono-num flex h-5.5 w-6 cursor-pointer items-center justify-center rounded-xs text-[10px] font-bold transition ${
+                isSolo
+                  ? "bg-accent text-accent-ink shadow-xs shadow-accent/50 scale-105"
+                  : "bg-surface-2/80 text-muted hover:border-control hover:bg-surface-2 hover:text-text"
+              }`}
+              title={isSolo ? "Deactivate Solo (play full mix)" : `Solo ${title}`}
+            >
+              S
+            </button>
+
+            {/* Mute Button */}
+            <button
+              type="button"
+              aria-label={`Mute ${title}`}
+              aria-pressed={!audible}
+              onClick={(e) => {
+                e.stopPropagation();
+                if (stem === "sound") setMonitor(audible ? "rest" : "mix");
+                else if (stem === "rest") setMonitor(audible ? "sound" : "mix");
+                else setMonitor(audible ? "sound" : "mix");
+              }}
+              className={`mono-num flex h-5.5 w-6 cursor-pointer items-center justify-center rounded-xs text-[10px] font-bold transition ${
+                !audible
+                  ? "border border-red-500/50 bg-red-500/20 text-red-400 font-bold"
+                  : "bg-surface-2/80 text-muted hover:border-control hover:bg-surface-2 hover:text-text"
+              }`}
+              title={!audible ? "Unmute track" : "Mute track"}
+            >
+              M
+            </button>
+          </div>
+
+          <span className="mono-num text-[10px] text-muted/70">
+            {audible ? (isSolo ? "SOLO" : "ACTIVE") : "MUTED"}
+          </span>
+        </div>
       </div>
 
+      {/* Center Waveform Canvas Area */}
       <div
+        ref={containerRef}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
         onPointerCancel={onPointerUp}
-        className="relative flex-1 cursor-pointer touch-none bg-inset"
+        onPointerLeave={onPointerLeave}
+        className="relative flex-1 cursor-crosshair touch-none bg-inset/50 overflow-hidden"
       >
         <canvas
           ref={canvasRef}
-          width={960}
-          height={80}
           role="img"
           aria-label={`${title} waveform (${audible ? "audible" : "muted"})`}
-          className="h-full w-full block"
+          style={{ width: `${canvasSize.width}px`, height: `${canvasSize.height}px` }}
+          className="block h-full w-full pointer-events-none"
         />
+
+        {/* Floating Hover Timeline Guide & Timestamp Bubble */}
+        {hoverRatio !== null ? (
+          <div
+            style={{ left: `${hoverRatio * 100}%` }}
+            className="pointer-events-none absolute inset-y-0 z-20 flex flex-col items-center"
+          >
+            <div className="mono-num -mt-0.5 rounded-full border border-line-2 bg-text px-1.5 py-0.2 text-[9px] font-semibold text-bg shadow-sm">
+              {formatClockSeconds(hoverTime)}
+            </div>
+            <div className="w-px flex-1 border-r border-dashed border-text/40" />
+          </div>
+        ) : null}
       </div>
     </div>
   );
@@ -134,31 +284,34 @@ export function WaveformLanes() {
       : "No sound picked yet";
 
   return (
-    <div className="divide-y-0">
+    <div className="w-full flex flex-col border-b border-line bg-surface/20">
       <WaveformLaneRow
         title="Full mix"
-        subtitle="Original clip"
+        subtitle="Original audio clip"
         stem="mix"
         peaks={mixPeaks}
         audible={monitor === "mix"}
         tone="rest"
+        badge="MASTER"
       />
       <WaveformLaneRow
-        title={selectedIsolation?.label ?? "Picked sound"}
+        title={selectedIsolation?.label ?? "Isolated stem"}
         subtitle={soundSubtitle}
         stem="sound"
         peaks={soundPeaks}
         audible={monitor === "sound" || monitor === "mix"}
         tone="accent"
         showAccentDot
+        badge={selectedIsolation?.method === "demucs" ? "DEMUCS" : "SAM 3.1"}
       />
       <WaveformLaneRow
         title="Rest of mix"
-        subtitle="Residual backing"
+        subtitle="Residual accompaniment"
         stem="rest"
         peaks={restPeaks}
         audible={monitor === "rest" || monitor === "mix"}
         tone="rest"
+        badge="BACKING"
       />
     </div>
   );
