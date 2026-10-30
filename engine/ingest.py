@@ -729,6 +729,12 @@ def build_served_trackmap(clip_id: str, cache_root: Path | None = None) -> dict[
                 for field in TRANSCRIPTION_FIELDS:
                     if field in transcription:
                         isolation[field] = transcription[field]
+            # The recipe is written by its own producer and is allowed to be missing: it comes from
+            # a partner-hosted model and arrives after the sound and its notes, which are the
+            # product. A clip without one still serves.
+            recipe = _read_optional_json_object(isolation_dir / "recipe.json")
+            if recipe is not None:
+                isolation["recipe"] = recipe
             isolations.append(isolation)
     trackmap["isolations"] = isolations
     return trackmap
