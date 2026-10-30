@@ -45,6 +45,7 @@ LOCAL_SOURCES = (
     "suggest",
     "track",
     "label",
+    "recipe",
     "meta_api",
 )
 

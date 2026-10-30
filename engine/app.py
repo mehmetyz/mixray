@@ -29,7 +29,7 @@ from isolate import (
     WEIGHTS_VOLUME,
     run_isolation,
 )
-from recipe import recipe_worker
+from recipe import write_recipe
 from transcribe import apply_transcription
 
 if TYPE_CHECKING:
@@ -43,11 +43,15 @@ ISOLATE_TIMEOUT_SECONDS = 300
 ANALYZE_TIMEOUT_SECONDS = 300
 TRANSCRIBE_TIMEOUT_SECONDS = 300
 FALLBACK_TIMEOUT_SECONDS = 900
+RECIPE_TIMEOUT_SECONDS = 180
 CLEANUP_TIMEOUT_SECONDS = 300
 MAX_ISOLATE_CONTAINERS = 2
 
 CACHE_VOLUME = modal.Volume.from_name("mixray-cache", create_if_missing=True)
 API_SECRET = modal.Secret.from_name("mixray-secrets")
+# Its own secret, following `mixray-hf`: adding a key to `mixray-secrets` means
+# `modal secret create --force`, which replaces the whole secret.
+BASETEN_SECRET = modal.Secret.from_name("mixray-baseten")
 
 app = modal.App("mixray")
 
@@ -292,6 +296,26 @@ def transcribe_worker(clip_id: str, isolation_id: str) -> None:
     except Exception:
         # Failure only removes an optional enhancement; the playable isolation must not break.
         LOGGER.exception("transcription failed for clip=%s isolation=%s", clip_id, isolation_id)
+    finally:
+        CACHE_VOLUME.commit()
+
+
+@app.function(
+    image=analyze_image,
+    volumes={DEFAULT_CACHE_PATH: CACHE_VOLUME},
+    secrets=[BASETEN_SECRET],
+    timeout=RECIPE_TIMEOUT_SECONDS,
+    gpu=None,
+)
+def recipe_worker(clip_id: str, isolation_id: str) -> None:
+    """Build the optional partner-hosted recipe. Muse Spark Open is an HTTP call, so no GPU."""
+    logging.basicConfig(level=logging.INFO)
+    CACHE_VOLUME.reload()
+    try:
+        write_recipe(clip_id, isolation_id)
+    except Exception:
+        # The isolated WAV and its notes stay usable when partner inference is unavailable.
+        LOGGER.exception("recipe failed for clip=%s isolation=%s", clip_id, isolation_id)
     finally:
         CACHE_VOLUME.commit()
 

@@ -16,6 +16,7 @@ from typing import TypedDict, TypeGuard
 
 import modal
 
+from images import analyze_image
 from ingest import DEFAULT_CACHE_PATH, build_served_trackmap, clip_dir, get_cache_root
 
 LOGGER = logging.getLogger(__name__)
@@ -498,10 +499,7 @@ def write_recipe(clip_id: str, isolation_id: str, cache_root: Path | None = None
 
 
 @app.function(
-    image=modal.Image.debian_slim(python_version="3.11")
-    .apt_install("ffmpeg")
-    .uv_sync(groups=["analyze"])
-    .add_local_python_source("recipe", "ingest"),
+    image=analyze_image,
     volumes={DEFAULT_CACHE_PATH: CACHE_VOLUME},
     secrets=[BASETEN_SECRET],
     timeout=RECIPE_TIMEOUT_SECONDS,
