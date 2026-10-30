@@ -16,6 +16,26 @@ const parseCoachModelReply = coachModule.parseCoachModelReply;
 const invalidCoachReplyMessage = coachModule.INVALID_COACH_REPLY_MESSAGE;
 
 function testVoiceCommandParsing() {
+  // Spoken numbers. Muse Voice Transcribe writes them as words, so these are the transcripts the
+  // Coach actually receives; before this was handled they parsed to null and the command vanished
+  // while the screen showed the phrase heard correctly.
+  assert.deepEqual(parseVoiceCoachCommand("loop bars five to eight."), {
+    name: "set_loop",
+    args: { start_bar: 5, end_bar: 8 },
+  });
+  assert.deepEqual(parseVoiceCoachCommand("simplify bar six."), {
+    name: "simplify_bar",
+    args: { bar: 6 },
+  });
+  assert.deepEqual(parseVoiceCoachCommand("slow it down to sixty percent"), {
+    name: "set_tempo",
+    args: { percent: 60 },
+  });
+  assert.deepEqual(parseVoiceCoachCommand("slow it down to seventy five percent"), {
+    name: "set_tempo",
+    args: { percent: 75 },
+  });
+
   // Loop range
   const loop1 = parseVoiceCoachCommand("loop bars 1 to 4");
   assert.deepEqual(loop1, {

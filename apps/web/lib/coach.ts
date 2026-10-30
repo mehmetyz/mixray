@@ -170,9 +170,69 @@ export function parseCoachModelReply(reply: unknown, barCount: number): CoachRep
   return { message: messageFromOutput(reply.output) ?? DEFAULT_COACH_MESSAGE, actions };
 }
 
+const ONES: Record<string, number> = {
+  one: 1,
+  two: 2,
+  three: 3,
+  four: 4,
+  five: 5,
+  six: 6,
+  seven: 7,
+  eight: 8,
+  nine: 9,
+  ten: 10,
+  eleven: 11,
+  twelve: 12,
+  thirteen: 13,
+  fourteen: 14,
+  fifteen: 15,
+  sixteen: 16,
+  seventeen: 17,
+  eighteen: 18,
+  nineteen: 19,
+};
+
+const TENS: Record<string, number> = {
+  twenty: 20,
+  thirty: 30,
+  forty: 40,
+  fifty: 50,
+  sixty: 60,
+  seventy: 70,
+  eighty: 80,
+  ninety: 90,
+};
+
+/** Rewrite spoken numbers as digits before the command patterns run.
+ *
+ * Muse Voice Transcribe writes numbers as words, so a transcript reads "loop bars five to eight"
+ * while every pattern below matches digits. Measured on the first live call: the phrase came back
+ * exactly right and the command was dropped anyway, which is worse than mishearing because nothing
+ * on screen says why.
+ */
+function digitsFromWords(text: string): string {
+  let result = text;
+  for (const [tens, tensValue] of Object.entries(TENS)) {
+    for (const [ones, onesValue] of Object.entries(ONES)) {
+      if (onesValue > 9) continue;
+      result = result.replace(
+        new RegExp(`\\b${tens}[\\s-]+${ones}\\b`, "g"),
+        String(tensValue + onesValue),
+      );
+    }
+    result = result.replace(new RegExp(`\\b${tens}\\b`, "g"), String(tensValue));
+  }
+  result = result.replace(/\bone hundred\b|\ba hundred\b|\bhundred\b/g, "100");
+  for (const [word, value] of Object.entries(ONES)) {
+    result = result.replace(new RegExp(`\\b${word}\\b`, "g"), String(value));
+  }
+  return result;
+}
+
 export function parseVoiceCoachCommand(phrase: string): CoachAction | null {
-  const lower = phrase.trim().toLowerCase();
-  if (lower.length === 0) return null;
+  const spoken = phrase.trim().toLowerCase();
+  if (spoken.length === 0) return null;
+  const lower = digitsFromWords(spoken);
 
   const loopMatch = lower.match(/(?:loop|bars?)\s*(\d+)\s*(?:to|-|–|and)\s*(\d+)/i);
   if (loopMatch?.[1] !== undefined && loopMatch[2] !== undefined) {

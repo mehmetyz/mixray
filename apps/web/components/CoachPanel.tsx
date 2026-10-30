@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
+import { VoiceRecordingError, startVoiceRecording, type VoiceRecording } from "@/lib/audio/voice";
 import { parseVoiceCoachCommand, type CoachAction } from "@/lib/coach";
 import type { ScoreBar, ScoreResult } from "@/lib/score";
 import { useStudio } from "./StudioContext";
@@ -14,45 +15,26 @@ export interface CoachPanelProps {
   isCoachThinking: boolean;
 }
 
-interface SpeechRecognitionResultItem {
+type JsonRecord = Record<string, unknown>;
+
+type VoiceResponse = {
   transcript: string;
+};
+
+const VOICE_ENDPOINT = "/api/voice";
+
+function isRecord(value: unknown): value is JsonRecord {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-interface SpeechRecognitionResultList {
-  [index: number]: SpeechRecognitionResultItem[];
-  length: number;
+function messageFromResponse(value: unknown): string | null {
+  return isRecord(value) && typeof value.message === "string" ? value.message : null;
 }
 
-interface SpeechRecognitionEventLike {
-  results: SpeechRecognitionResultList;
+function parseVoiceResponse(value: unknown): VoiceResponse | null {
+  if (!isRecord(value) || typeof value.transcript !== "string") return null;
+  return { transcript: value.transcript.trim() };
 }
-
-interface SpeechRecognitionInstanceLike {
-  continuous: boolean;
-  interimResults: boolean;
-  lang: string;
-  start: () => void;
-  stop: () => void;
-  onresult: ((event: SpeechRecognitionEventLike) => void) | null;
-  onerror: (() => void) | null;
-  onend: (() => void) | null;
-}
-
-type SpeechConstructor = new () => SpeechRecognitionInstanceLike;
-
-function isSpeechConstructor(val: unknown): val is SpeechConstructor {
-  return typeof val === "function";
-}
-
-function getSpeechRecognitionClass(): SpeechConstructor | null {
-  if (typeof window === "undefined") return null;
-  const standard = Reflect.get(window, "SpeechRecognition");
-  if (isSpeechConstructor(standard)) return standard;
-  const webkit = Reflect.get(window, "webkitSpeechRecognition");
-  if (isSpeechConstructor(webkit)) return webkit;
-  return null;
-}
-
 
 function formatPercent(rate: number): string {
   return `${Math.round(rate * 100)}%`;
@@ -82,11 +64,14 @@ export function CoachPanel({
   } = useStudio();
 
   const [isListening, setIsListening] = useState<boolean>(false);
+  const [isTranscribing, setIsTranscribing] = useState<boolean>(false);
   const [voiceNotice, setVoiceNotice] = useState<string | null>(null);
   const [isTextInputOpen, setIsTextInputOpen] = useState<boolean>(false);
   const [textCommand, setTextCommand] = useState<string>("");
 
-  const speechInstanceRef = useRef<SpeechRecognitionInstanceLike | null>(null);
+  const voiceRecordingRef = useRef<VoiceRecording | null>(null);
+  const isStartingVoiceRef = useRef<boolean>(false);
+  const isTalkHeldRef = useRef<boolean>(false);
 
   const handleApplyAction = useCallback(
     (action: CoachAction, sourceNotice: string) => {
@@ -96,69 +81,93 @@ export function CoachPanel({
     [applyCoachAction],
   );
 
-  const startListening = useCallback(() => {
-    const SpeechCtor = getSpeechRecognitionClass();
-    if (SpeechCtor === null) {
-      setVoiceNotice("Speech recognition unavailable in this browser. Use text command below.");
-      setIsTextInputOpen(true);
-      return;
-    }
+  const startListening = useCallback(async () => {
+    if (isStartingVoiceRef.current || voiceRecordingRef.current !== null || isTranscribing) return;
+
+    isTalkHeldRef.current = true;
+    isStartingVoiceRef.current = true;
+    setIsListening(true);
+    setVoiceNotice("Listening... speak a command, then release to apply.");
 
     try {
-      if (speechInstanceRef.current !== null) {
-        speechInstanceRef.current.stop();
-        speechInstanceRef.current = null;
+      const recording = await startVoiceRecording();
+      if (!isTalkHeldRef.current) {
+        await recording.cancel();
+        return;
+      }
+      voiceRecordingRef.current = recording;
+    } catch (error: unknown) {
+      const message =
+        error instanceof VoiceRecordingError
+          ? error.message
+          : "Microphone unavailable. Use a text command instead.";
+      setVoiceNotice(message);
+      setIsTextInputOpen(true);
+      setIsListening(false);
+    } finally {
+      isStartingVoiceRef.current = false;
+    }
+  }, [isTranscribing]);
+
+  const stopListening = useCallback(async () => {
+    isTalkHeldRef.current = false;
+    const recording = voiceRecordingRef.current;
+    voiceRecordingRef.current = null;
+    setIsListening(false);
+    if (recording === null) return;
+
+    setIsTranscribing(true);
+    setVoiceNotice("Transcribing your command...");
+    try {
+      const audio = await recording.stop();
+      const form = new FormData();
+      form.append("audio", audio, "voice-command.wav");
+      const response = await fetch(VOICE_ENDPOINT, { method: "POST", body: form });
+      let payload: unknown;
+      try {
+        payload = await response.json();
+      } catch {
+        setVoiceNotice("The voice transcript could not be read. Try again.");
+        return;
+      }
+      if (!response.ok) {
+        setVoiceNotice(messageFromResponse(payload) ?? "Voice transcription failed. Try again.");
+        return;
       }
 
-      const instance = new SpeechCtor();
-      instance.continuous = false;
-      instance.interimResults = false;
-      instance.lang = "en-US";
+      const voiceResponse = parseVoiceResponse(payload);
+      if (voiceResponse === null) {
+        setVoiceNotice("The voice transcript could not be read. Try again.");
+        return;
+      }
+      if (voiceResponse.transcript.length === 0) {
+        setVoiceNotice("No speech heard. Use a text command or try again.");
+        return;
+      }
 
-      instance.onresult = (event) => {
-        const transcript = event.results[0]?.[0]?.transcript?.trim() ?? "";
-        if (transcript.length === 0) return;
-
-        const action = parseVoiceCoachCommand(transcript);
-        if (action !== null) {
-          handleApplyAction(action, `Voice applied: "${transcript}"`);
-        } else {
-          setVoiceNotice(`Heard: "${transcript}". Analyzing take...`);
-          onAnalyzeTake();
-        }
-      };
-
-      instance.onerror = () => {
-        setIsListening(false);
-      };
-
-      instance.onend = () => {
-        setIsListening(false);
-      };
-
-      speechInstanceRef.current = instance;
-      instance.start();
-      setIsListening(true);
-      setVoiceNotice("Listening... speak a command (e.g. 'loop bars 1 to 4', 'slow to 75%')");
-    } catch {
-      setIsListening(false);
-      setIsTextInputOpen(true);
+      const action = parseVoiceCoachCommand(voiceResponse.transcript);
+      if (action !== null) {
+        handleApplyAction(action, `Heard: "${voiceResponse.transcript}". Voice applied.`);
+      } else {
+        setVoiceNotice(`Heard: "${voiceResponse.transcript}". Analyzing take...`);
+        onAnalyzeTake();
+      }
+    } catch (error: unknown) {
+      const message =
+        error instanceof VoiceRecordingError ? error.message : "Voice transcription failed. Try again.";
+      setVoiceNotice(message);
+    } finally {
+      setIsTranscribing(false);
     }
   }, [handleApplyAction, onAnalyzeTake]);
 
-  const stopListening = useCallback(() => {
-    if (speechInstanceRef.current !== null) {
-      speechInstanceRef.current.stop();
-      speechInstanceRef.current = null;
-    }
-    setIsListening(false);
-  }, []);
-
   useEffect(() => {
     return () => {
-      if (speechInstanceRef.current !== null) {
-        speechInstanceRef.current.stop();
-        speechInstanceRef.current = null;
+      isTalkHeldRef.current = false;
+      const recording = voiceRecordingRef.current;
+      voiceRecordingRef.current = null;
+      if (recording !== null) {
+        void recording.cancel();
       }
     };
   }, []);
@@ -258,10 +267,17 @@ export function CoachPanel({
         <button
           type="button"
           aria-pressed={isListening}
-          onMouseDown={startListening}
-          onMouseUp={stopListening}
-          onTouchStart={startListening}
-          onTouchEnd={stopListening}
+          onPointerDown={(event) => {
+            event.currentTarget.setPointerCapture(event.pointerId);
+            void startListening();
+          }}
+          onPointerUp={() => {
+            void stopListening();
+          }}
+          onPointerCancel={() => {
+            void stopListening();
+          }}
+          disabled={isTranscribing}
           className={`h-9 w-full cursor-pointer select-none rounded-icon text-xs font-semibold transition flex items-center justify-center gap-2 ${
             isListening
               ? "bg-accent text-accent-ink shadow-md shadow-accent/25 animate-pulse"
@@ -269,7 +285,13 @@ export function CoachPanel({
           }`}
         >
           <span className="h-2 w-2 rounded-full bg-current" />
-          <span>{isListening ? "Listening... (Release to apply)" : "Hold to talk"}</span>
+          <span>
+            {isListening
+              ? "Listening... (Release to apply)"
+              : isTranscribing
+                ? "Transcribing..."
+                : "Hold to talk"}
+          </span>
         </button>
 
         {/* Quick Action Intervention Chips */}
