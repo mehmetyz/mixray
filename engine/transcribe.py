@@ -17,11 +17,9 @@ import wave
 from bisect import bisect_right
 from itertools import pairwise
 from pathlib import Path
-from typing import Literal, TypeAlias, TypedDict, TypeGuard
+from typing import TYPE_CHECKING, Literal, TypeAlias, TypedDict, TypeGuard
 
 import modal
-import numpy as np
-from numpy.typing import NDArray
 
 from images import basic_pitch_image
 from ingest import DEFAULT_CACHE_PATH, build_served_trackmap, clip_dir, get_cache_root
@@ -80,7 +78,11 @@ PCM_16_BIT_BYTES = 2
 # rather than treating quiet or staccato playing as noise by comparison with another recording.
 LOW_OUTLIER_IQR_MULTIPLIER = 1.5
 
-FloatArray: TypeAlias = NDArray[np.float64]
+if TYPE_CHECKING:
+    import numpy as np
+    from numpy.typing import NDArray
+
+    FloatArray: TypeAlias = NDArray[np.float64]
 
 Hand = Literal["right", "left"]
 RawNoteEvent: TypeAlias = tuple[float, float, int, float, list[int] | None]
@@ -211,6 +213,8 @@ def _velocity(amplitude: float) -> int:
 
 def _read_mono_wav(wav_path: Path) -> tuple[FloatArray, int]:
     """Read Mixray's 16-bit PCM WAV as a mono floating-point signal."""
+    import numpy as np
+
     with wave.open(str(wav_path), "rb") as wav_file:
         if wav_file.getcomptype() != "NONE":
             raise ValueError(f"WAV must use PCM encoding: {wav_path}")
@@ -241,6 +245,8 @@ def _band_energy_envelope(
     samples: FloatArray, sample_rate: int, start: float, end: float, pitch: int
 ) -> FloatArray:
     """Measure narrow-band energy in short consecutive windows within one note span."""
+    import numpy as np
+
     start_index = max(0, min(samples.size, round(start * sample_rate)))
     end_index = max(start_index, min(samples.size, round(end * sample_rate)))
     segment = samples[start_index:end_index]
@@ -300,6 +306,8 @@ def filter_residual_leakage(
 
 def _envelopes_track(first: FloatArray, second: FloatArray) -> bool:
     """Return whether two varying band-energy envelopes share the same temporal shape."""
+    import numpy as np
+
     if (
         first.size < MIN_ENVELOPE_FRAMES
         or second.size < MIN_ENVELOPE_FRAMES
@@ -377,6 +385,8 @@ def _notes_from_events(
     sound_wav_path: Path,
 ) -> tuple[list[Note], list[float]]:
     """Convert Basic Pitch events while removing clip-relative outliers and residual leakage."""
+    import numpy as np
+
     valid_events = [event for event in events if event[0] >= 0.0 and event[1] > event[0]]
     if not valid_events:
         return [], []
@@ -417,6 +427,8 @@ def _notes_from_events(
 
 def _lower_outlier_floor(values: FloatArray) -> float:
     """Find the clip-relative lower Tukey fence for one measured note property."""
+    import numpy as np
+
     first_quartile, third_quartile = np.percentile(values, (25.0, 75.0))
     return max(
         0.0, float(first_quartile - LOW_OUTLIER_IQR_MULTIPLIER * (third_quartile - first_quartile))
