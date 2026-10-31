@@ -27,6 +27,7 @@ from ingest import (
 if TYPE_CHECKING:
     import torch
     from sam_audio import Batch, SAMAudio, SAMAudioProcessor
+    from sam_audio.ranking.ranker import Ranker
 
     from track import TrackResult
 
@@ -41,6 +42,9 @@ HF_SECRET = modal.Secret.from_name("mixray-hf")
 ISOLATION_GPU = ["L4", "A10G"]
 
 DEFAULT_MODEL_ID = "facebook/sam-audio-small"
+# One unjudged draw measured +8.02, -0.16 and +8.20 dB on the same clip and prompt; two extra
+# sequential draws cost about 10 s with no extra VRAM.
+ISOLATION_CANDIDATES = 3
 
 # Passing the rankers and span predictor as None keeps ImageBind (~4.5 GB), CLAP (~1.9 GB), Judge,
 # and PE-A-Frame from being built or downloaded. They are only used when reranking_candidates > 1
@@ -189,23 +193,66 @@ def _separate_and_persist(  # noqa: PLR0913
     batch: "Batch",
     model: "SAMAudio",
     processor: "SAMAudioProcessor",
+    text_ranker: "Ranker",
     cache_root: Path,
     iso_dir: Path,
     cached_json: Path,
     trackmap_url: str,
 ) -> IsolationEntry:
-    """Run one prepared SAM Audio batch and persist its result."""
+    """Draw, rank, and persist the best SAM Audio candidate for one prepared batch."""
+    import json
+
     import torch
 
+    candidate_sounds: list[torch.Tensor] = []
+    candidate_rests: list[torch.Tensor] = []
+    candidate_seconds: list[float] = []
     with torch.inference_mode():
-        separation = model.separate(batch, predict_spans=False, reranking_candidates=1)
+        for _ in range(ISOLATION_CANDIDATES):
+            started = time.perf_counter()
+            separation = model.separate(batch, predict_spans=False, reranking_candidates=1)
+            candidate_seconds.append(time.perf_counter() - started)
+            target_item = (
+                separation.target[0] if isinstance(separation.target, list) else separation.target
+            )
+            residual_item = (
+                separation.residual[0]
+                if isinstance(separation.residual, list)
+                else separation.residual
+            )
+            candidate_sounds.append(target_item)
+            candidate_rests.append(residual_item)
 
-    target_item = separation.target[0] if isinstance(separation.target, list) else separation.target
-    residual_item = (
-        separation.residual[0] if isinstance(separation.residual, list) else separation.residual
+    sizes = model.audio_codec.feature_idx_to_wav_idx(batch.sizes)
+    input_audio = [
+        audio[:, :size].expand(ISOLATION_CANDIDATES, -1)
+        for audio, size in zip(batch.audios, sizes, strict=False)
+    ]
+    scores = text_ranker(
+        extracted_audio=[torch.stack(candidate_sounds)],
+        input_audio=input_audio,
+        descriptions=[prompt],
+        sample_rate=model.audio_codec.sample_rate,
     )
-    sound = target_item.detach().float().cpu()
-    rest = residual_item.detach().float().cpu()
+    chosen_index = int(scores.argmax(dim=1)[0].item())
+    candidate_scores = [float(score) for score in scores[0].detach().float().cpu().tolist()]
+    for index, (score, seconds) in enumerate(zip(candidate_scores, candidate_seconds, strict=True)):
+        LOGGER.info("isolation candidate index=%d score=%.5f seconds=%.2f", index, score, seconds)
+
+    iso_dir.mkdir(parents=True, exist_ok=True)
+    candidates_path = iso_dir / "candidates.json"
+    candidates_path.write_text(
+        json.dumps(
+            {
+                "chosen_index": chosen_index,
+                "scores": candidate_scores,
+                "seconds": candidate_seconds,
+            }
+        ),
+        encoding="utf-8",
+    )
+    sound = candidate_sounds[chosen_index].detach().float().cpu()
+    rest = candidate_rests[chosen_index].detach().float().cpu()
     return _persist_isolation(
         clip_id,
         iso_id,
@@ -232,6 +279,7 @@ def run_isolation(  # noqa: PLR0913
     *,
     model: "SAMAudio",
     processor: "SAMAudioProcessor",
+    text_ranker: "Ranker",
     cache_root: Path | None = None,
 ) -> IsolationEntry:
     """Separate `prompt` from `clip_id` with SAM Audio and persist sound, rest, and peaks."""
@@ -251,6 +299,7 @@ def run_isolation(  # noqa: PLR0913
         batch=batch,
         model=model,
         processor=processor,
+        text_ranker=text_ranker,
         cache_root=root,
         iso_dir=iso_dir,
         cached_json=cached_json,
@@ -315,6 +364,7 @@ def run_visual_isolation(  # noqa: PLR0913
     *,
     model: "SAMAudio",
     processor: "SAMAudioProcessor",
+    text_ranker: "Ranker",
     cache_root: Path | None = None,
 ) -> IsolationEntry:
     """Separate a tracked object with its SAM 3.1 raster mask as a SAM Audio visual prompt."""
@@ -346,6 +396,7 @@ def run_visual_isolation(  # noqa: PLR0913
         batch=batch,
         model=model,
         processor=processor,
+        text_ranker=text_ranker,
         cache_root=root,
         iso_dir=iso_dir,
         cached_json=cached_json,

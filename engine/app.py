@@ -36,6 +36,7 @@ from transcribe import apply_transcription
 if TYPE_CHECKING:
     from fastapi import FastAPI
     from sam_audio import SAMAudio, SAMAudioProcessor
+    from sam_audio.ranking.ranker import Ranker
 
 LOGGER = logging.getLogger(__name__)
 
@@ -73,6 +74,7 @@ class IsolationWorker:
 
     model: SAMAudio
     processor: SAMAudioProcessor
+    text_ranker: Ranker
 
     @modal.enter(snap=True)
     def load_model_on_cpu(self) -> None:
@@ -80,14 +82,21 @@ class IsolationWorker:
         os.environ["HF_HOME"] = f"{WEIGHTS_PATH}/huggingface"
 
         from sam_audio import SAMAudio, SAMAudioProcessor
+        from sam_audio.model.config import ClapRankerConfig
+        from sam_audio.ranking import create_ranker
 
         self.model = SAMAudio.from_pretrained(DEFAULT_MODEL_ID, **RANKERS_OFF)
         self.processor = SAMAudioProcessor.from_pretrained(DEFAULT_MODEL_ID)
+        text_ranker = create_ranker(ClapRankerConfig())
+        if text_ranker is None:
+            raise RuntimeError("SAM Audio CLAP ranker could not be created")
+        self.text_ranker = text_ranker
 
     @modal.enter(snap=False)
     def move_model_to_gpu(self) -> None:
         """Transfer weights after restore because GPU state is not part of the memory snapshot."""
         self.model = self.model.eval().cuda()
+        self.text_ranker = self.text_ranker.cuda()
 
     def _queue_follow_up(self, clip_id: str, iso_id: str, prompt: str) -> None:
         """Queue optional post-isolation work after a successful isolation."""
@@ -121,6 +130,7 @@ class IsolationWorker:
                 label=label,
                 model=self.model,
                 processor=self.processor,
+                text_ranker=self.text_ranker,
             )
         except Exception:
             LOGGER.exception("isolation failed for clip=%s prompt=%s", clip_id, prompt)
@@ -216,6 +226,7 @@ class IsolationWorker:
                 label=named["label"],
                 model=self.model,
                 processor=self.processor,
+                text_ranker=self.text_ranker,
                 cache_root=root,
             )
             name_track(track, named["label"], named_prompt, iso_id)
