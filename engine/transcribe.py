@@ -12,12 +12,16 @@ from __future__ import annotations
 
 import json
 import logging
+import math
+import wave
 from bisect import bisect_right
 from itertools import pairwise
 from pathlib import Path
 from typing import Literal, TypeAlias, TypedDict, TypeGuard
 
 import modal
+import numpy as np
+from numpy.typing import NDArray
 
 from images import basic_pitch_image
 from ingest import DEFAULT_CACHE_PATH, build_served_trackmap, clip_dir, get_cache_root
@@ -57,20 +61,26 @@ MIN_BEATS_FOR_EIGHTH_GRID = 2
 # Basic Pitch inference parameters tuned for acoustic accuracy and note-boundary stability.
 BASIC_PITCH_ONSET_THRESHOLD = 0.55
 BASIC_PITCH_FRAME_THRESHOLD = 0.35
-BASIC_PITCH_MIN_NOTE_LENGTH_MS = 60.0
-
-# Notes below this amplitude or duration represent noise floor or sub-transient triggers.
-MIN_NOTE_AMPLITUDE = 0.15
-MIN_NOTE_DURATION_SECONDS = 0.050
 
 # Harmonic overtone intervals (+1 octave, +1 octave + fifth, +2 octaves) and suppression ratio.
 HARMONIC_INTERVALS = frozenset({12, 19, 24})
 HARMONIC_TIME_TOLERANCE_SECONDS = 0.040
 HARMONIC_AMPLITUDE_RATIO = 0.55
+HARMONIC_ENVELOPE_CORRELATION_MIN = 0.90
 
-# Pitches below Ab3 (MIDI 56) in chord/melody/lead parts represent foundation bleed from bass.
-PITCH_FLOOR_NON_BASS = 56
-BASS_KEYWORDS = frozenset({"bass", "sub", "subbass", "kick", "contrabass", "808"})
+# A 50-cent half-width is narrow enough to exclude the adjacent semitone while allowing small
+# tuning drift in an isolation. Frequencies inside this band are sampled on a log scale.
+BAND_HALF_WIDTH_CENTS = 50.0
+BAND_FREQUENCY_SAMPLES = 5
+BAND_ENVELOPE_WINDOW_SECONDS = 0.040
+MIN_ENVELOPE_FRAMES = 2
+PCM_16_BIT_BYTES = 2
+
+# Tukey's conventional lower fence identifies only values that are outliers relative to this clip,
+# rather than treating quiet or staccato playing as noise by comparison with another recording.
+LOW_OUTLIER_IQR_MULTIPLIER = 1.5
+
+FloatArray: TypeAlias = NDArray[np.float64]
 
 Hand = Literal["right", "left"]
 RawNoteEvent: TypeAlias = tuple[float, float, int, float, list[int] | None]
@@ -199,32 +209,146 @@ def _velocity(amplitude: float) -> int:
     return min(MIDI_VELOCITY_MAX, max(MIDI_VELOCITY_MIN, scaled))
 
 
-def _should_filter_sub_bass(prompt: str, label: str) -> bool:
-    """True when the sound is known to be a chord/melody/lead part rather than bass."""
-    text = f"{prompt} {label}".strip().lower()
-    if not text:
+def _read_mono_wav(wav_path: Path) -> tuple[FloatArray, int]:
+    """Read Mixray's 16-bit PCM WAV as a mono floating-point signal."""
+    with wave.open(str(wav_path), "rb") as wav_file:
+        if wav_file.getcomptype() != "NONE":
+            raise ValueError(f"WAV must use PCM encoding: {wav_path}")
+        channels = wav_file.getnchannels()
+        sample_width = wav_file.getsampwidth()
+        sample_rate = wav_file.getframerate()
+        frames = wav_file.readframes(wav_file.getnframes())
+
+    if channels <= 0 or sample_rate <= 0:
+        raise ValueError(f"WAV has invalid channel or sample rate metadata: {wav_path}")
+    if sample_width != PCM_16_BIT_BYTES:
+        raise ValueError(f"unsupported WAV sample width ({sample_width} bytes): {wav_path}")
+    samples = np.frombuffer(frames, dtype="<i2").astype(np.float64) / 32768.0
+
+    if samples.size % channels != 0:
+        raise ValueError(f"WAV contains incomplete channel frames: {wav_path}")
+    if channels == 1:
+        return samples, sample_rate
+    return samples.reshape(-1, channels).mean(axis=1), sample_rate
+
+
+def _midi_frequency(pitch: int) -> float:
+    """Convert a MIDI note number into its equal-tempered fundamental frequency."""
+    return 440.0 * math.pow(2.0, (pitch - 69) / 12.0)
+
+
+def _band_energy_envelope(
+    samples: FloatArray, sample_rate: int, start: float, end: float, pitch: int
+) -> FloatArray:
+    """Measure narrow-band energy in short consecutive windows within one note span."""
+    start_index = max(0, min(samples.size, round(start * sample_rate)))
+    end_index = max(start_index, min(samples.size, round(end * sample_rate)))
+    segment = samples[start_index:end_index]
+    if segment.size == 0:
+        return np.zeros(0, dtype=np.float64)
+
+    frame_size = max(1, round(BAND_ENVELOPE_WINDOW_SECONDS * sample_rate))
+    frame_count = max(1, int(np.ceil(segment.size / frame_size)))
+    frequency = _midi_frequency(pitch)
+    lower_frequency = frequency * 2.0 ** (-BAND_HALF_WIDTH_CENTS / 1200.0)
+    upper_frequency = frequency * 2.0 ** (BAND_HALF_WIDTH_CENTS / 1200.0)
+    frequencies = np.geomspace(lower_frequency, upper_frequency, BAND_FREQUENCY_SAMPLES)
+    energies: list[float] = []
+    for frame in np.array_split(segment, frame_count):
+        window = np.ones(1, dtype=np.float64) if frame.size == 1 else np.hanning(frame.size)
+        tapered = frame * window
+        time = np.arange(frame.size, dtype=np.float64) / sample_rate
+        basis = np.exp(-2j * np.pi * frequencies[:, np.newaxis] * time)
+        projection = basis @ tapered
+        window_energy = float(np.dot(window, window))
+        energies.append(float(np.mean(np.abs(projection) ** 2) / max(window_energy, 1.0)))
+    return np.asarray(energies, dtype=np.float64)
+
+
+def _mean_band_energy(
+    samples: FloatArray, sample_rate: int, start: float, end: float, pitch: int
+) -> float:
+    """Return the mean narrow-band energy for one candidate note."""
+    envelope = _band_energy_envelope(samples, sample_rate, start, end, pitch)
+    return float(envelope.mean()) if envelope.size else 0.0
+
+
+def filter_residual_leakage(
+    notes: list[Note], sound_wav_path: Path, rest_wav_path: Path | None = None
+) -> list[Note]:
+    """Drop notes whose fundamental is louder in the isolation residual than in the sound."""
+    residual_path = (
+        rest_wav_path if rest_wav_path is not None else sound_wav_path.parent / "rest.wav"
+    )
+    if not residual_path.is_file():
+        return notes
+
+    sound_samples, sound_rate = _read_mono_wav(sound_wav_path)
+    rest_samples, rest_rate = _read_mono_wav(residual_path)
+    kept_notes: list[Note] = []
+    for note in notes:
+        sound_energy = _mean_band_energy(
+            sound_samples, sound_rate, note["start"], note["end"], note["pitch"]
+        )
+        rest_energy = _mean_band_energy(
+            rest_samples, rest_rate, note["start"], note["end"], note["pitch"]
+        )
+        if rest_energy <= sound_energy:
+            kept_notes.append(note)
+    return kept_notes
+
+
+def _envelopes_track(first: FloatArray, second: FloatArray) -> bool:
+    """Return whether two varying band-energy envelopes share the same temporal shape."""
+    if (
+        first.size < MIN_ENVELOPE_FRAMES
+        or second.size < MIN_ENVELOPE_FRAMES
+        or first.size != second.size
+    ):
         return False
-    return not any(keyword in text for keyword in BASS_KEYWORDS)
+    first_centered = first - first.mean()
+    second_centered = second - second.mean()
+    first_norm = float(np.linalg.norm(first_centered))
+    second_norm = float(np.linalg.norm(second_centered))
+    if first_norm == 0.0 or second_norm == 0.0:
+        return False
+    correlation = float(np.dot(first_centered, second_centered) / (first_norm * second_norm))
+    return correlation >= HARMONIC_ENVELOPE_CORRELATION_MIN
 
 
 def filter_harmonic_overtones(
     notes: list[Note],
+    sound_wav_path: Path,
     time_tolerance: float = HARMONIC_TIME_TOLERANCE_SECONDS,
     amplitude_ratio: float = HARMONIC_AMPLITUDE_RATIO,
 ) -> list[Note]:
-    """Suppress high harmonic overtones that coincide with a louder fundamental note."""
+    """Suppress coincident high partials only when their energy envelope tracks the fundamental."""
+    samples, sample_rate = _read_mono_wav(sound_wav_path)
     suppressed: set[int] = set()
     for index_h, note_h in enumerate(notes):
         for index_f, note_f in enumerate(notes):
             if index_h == index_f:
                 continue
             interval = note_h["pitch"] - note_f["pitch"]
-            if interval in HARMONIC_INTERVALS:
-                coincident = abs(note_h["start"] - note_f["start"]) <= time_tolerance
-                weaker = note_h["velocity"] <= round(note_f["velocity"] * amplitude_ratio)
-                if coincident and weaker:
-                    suppressed.add(index_h)
-                    break
+            if interval not in HARMONIC_INTERVALS:
+                continue
+            coincident = abs(note_h["start"] - note_f["start"]) <= time_tolerance
+            weaker = note_h["velocity"] <= round(note_f["velocity"] * amplitude_ratio)
+            # Both envelopes cost a narrow-band projection per frame, so they are only measured
+            # once a pair has already passed the cheap interval, onset and level tests.
+            if not (coincident and weaker):
+                continue
+            start = max(note_h["start"], note_f["start"])
+            end = min(note_h["end"], note_f["end"])
+            upper_envelope = _band_energy_envelope(
+                samples, sample_rate, start, end, note_h["pitch"]
+            )
+            fundamental_envelope = _band_energy_envelope(
+                samples, sample_rate, start, end, note_f["pitch"]
+            )
+            if _envelopes_track(upper_envelope, fundamental_envelope):
+                suppressed.add(index_h)
+                break
     return [note for index, note in enumerate(notes) if index not in suppressed]
 
 
@@ -238,7 +362,9 @@ def _basic_pitch_events(wav_path: Path) -> list[RawNoteEvent]:
         str(wav_path),
         onset_threshold=BASIC_PITCH_ONSET_THRESHOLD,
         frame_threshold=BASIC_PITCH_FRAME_THRESHOLD,
-        minimum_note_length=BASIC_PITCH_MIN_NOTE_LENGTH_MS,
+        # The clip-adaptive duration outlier rule below, not Basic Pitch's global default, decides
+        # whether a very short event is noise.
+        minimum_note_length=0.0,
     )
     return [
         (float(start), float(end), int(pitch), float(amplitude), pitch_bends)
@@ -248,22 +374,26 @@ def _basic_pitch_events(wav_path: Path) -> list[RawNoteEvent]:
 
 def _notes_from_events(
     events: list[RawNoteEvent],
-    *,
-    filter_sub_bass: bool = False,
+    sound_wav_path: Path,
 ) -> tuple[list[Note], list[float]]:
-    """Convert Basic Pitch events faithfully while filtering noise floor and register bleed."""
+    """Convert Basic Pitch events while removing clip-relative outliers and residual leakage."""
+    valid_events = [event for event in events if event[0] >= 0.0 and event[1] > event[0]]
+    if not valid_events:
+        return [], []
+
+    amplitudes = np.asarray(
+        [min(1.0, max(0.0, event[3])) for event in valid_events], dtype=np.float64
+    )
+    durations = np.asarray([event[1] - event[0] for event in valid_events], dtype=np.float64)
+    amplitude_floor = _lower_outlier_floor(amplitudes)
+    duration_floor = _lower_outlier_floor(durations)
     candidate_notes: list[Note] = []
-    amplitudes: list[float] = []
-    for start, end, pitch, amplitude, _ in events:
-        if start < 0.0 or end <= start:
-            continue
-        if amplitude < MIN_NOTE_AMPLITUDE:
-            continue
-        if (end - start) < MIN_NOTE_DURATION_SECONDS:
+    candidate_amplitudes: list[float] = []
+    for start, end, pitch, amplitude, _ in valid_events:
+        normalized_amplitude = min(1.0, max(0.0, amplitude))
+        if normalized_amplitude < amplitude_floor or (end - start) < duration_floor:
             continue
         clamped_pitch = _clamp_midi(pitch)
-        if filter_sub_bass and clamped_pitch < PITCH_FLOOR_NON_BASS:
-            continue
         candidate_notes.append(
             {
                 "start": round(start, ROUND_SECONDS),
@@ -272,10 +402,25 @@ def _notes_from_events(
                 "velocity": _velocity(amplitude),
             }
         )
-        amplitudes.append(min(1.0, max(0.0, amplitude)))
+        candidate_amplitudes.append(normalized_amplitude)
 
-    clean_notes = filter_harmonic_overtones(candidate_notes)
-    return clean_notes, amplitudes
+    without_leakage = filter_residual_leakage(candidate_notes, sound_wav_path)
+    clean_notes = filter_harmonic_overtones(without_leakage, sound_wav_path)
+    surviving_note_ids = {id(note) for note in clean_notes}
+    clean_amplitudes = [
+        amplitude
+        for note, amplitude in zip(candidate_notes, candidate_amplitudes, strict=True)
+        if id(note) in surviving_note_ids
+    ]
+    return clean_notes, clean_amplitudes
+
+
+def _lower_outlier_floor(values: FloatArray) -> float:
+    """Find the clip-relative lower Tukey fence for one measured note property."""
+    first_quartile, third_quartile = np.percentile(values, (25.0, 75.0))
+    return max(
+        0.0, float(first_quartile - LOW_OUTLIER_IQR_MULTIPLIER * (third_quartile - first_quartile))
+    )
 
 
 def _pitch_range(notes: list[Note]) -> PitchRange:
@@ -479,33 +624,15 @@ def _intermediate(
 def transcribe_isolated_sound(
     wav_path: Path,
     trackmap: dict[str, object],
-    *,
-    prompt: str = "",
-    label: str = "",
 ) -> Transcription:
     """Transcribe one isolated WAV and derive its easy and intermediate keyboard arrangements."""
     if not wav_path.is_file():
         raise FileNotFoundError(f"isolated WAV not found: {wav_path}")
 
-    # Inspect sibling isolation.json if prompt and label were omitted by the caller.
-    if not prompt and not label:
-        iso_json = wav_path.parent / "isolation.json"
-        if iso_json.is_file():
-            try:
-                data = json.loads(iso_json.read_text(encoding="utf-8"))
-                if isinstance(data, dict):
-                    prompt = str(data.get("prompt", "")).strip().lower()
-                    label = str(data.get("label", "")).strip().lower()
-            except (OSError, json.JSONDecodeError):
-                pass
-
     beats = _time_grid(trackmap, "beats")
     downbeats = _time_grid(trackmap, "downbeats")
     chords = _chords(trackmap)
-    filter_sub_bass = _should_filter_sub_bass(prompt, label)
-    notes, amplitudes = _notes_from_events(
-        _basic_pitch_events(wav_path), filter_sub_bass=filter_sub_bass
-    )
+    notes, amplitudes = _notes_from_events(_basic_pitch_events(wav_path), wav_path)
     easy = transpose_easy_part(snap_to_eighths(top_voice(notes), beats), downbeats)
     left_hand = left_hand_accompaniment(chords, downbeats, easy)
     return {
@@ -553,19 +680,7 @@ def apply_transcription(
     """Read one cached isolation and write its producer-owned transcription sidecar."""
     root = cache_root if cache_root is not None else get_cache_root()
     wav_path = clip_dir(clip_id, root) / "isolations" / isolation_id / "sound.wav"
-    iso_json_path = clip_dir(clip_id, root) / "isolations" / isolation_id / "isolation.json"
-    prompt, label = "", ""
-    if iso_json_path.is_file():
-        try:
-            iso_data = json.loads(iso_json_path.read_text(encoding="utf-8"))
-            if isinstance(iso_data, dict):
-                prompt = str(iso_data.get("prompt", "")).strip().lower()
-                label = str(iso_data.get("label", "")).strip().lower()
-        except (OSError, json.JSONDecodeError):
-            pass
-    transcription = transcribe_isolated_sound(
-        wav_path, build_served_trackmap(clip_id, root), prompt=prompt, label=label
-    )
+    transcription = transcribe_isolated_sound(wav_path, build_served_trackmap(clip_id, root))
     path = wav_path.parent / "transcription.json"
     tmp_path = path.with_suffix(".json.tmp")
     tmp_path.write_text(json.dumps(transcription), encoding="utf-8")
