@@ -304,9 +304,7 @@ export function VideoMaskStage({
                 src={video.url}
                 muted
                 playsInline
-                className={`h-full w-full object-cover transition-opacity duration-300 ${
-                  hasSelection ? "opacity-60 brightness-90" : "opacity-80"
-                }`}
+                className="h-full w-full object-cover transition-opacity duration-300 opacity-100 brightness-100"
               />
             ) : (
               <div className="pointer-events-none absolute inset-0 flex items-center justify-center opacity-30">
@@ -356,10 +354,10 @@ export function VideoMaskStage({
                     filter={isSelected ? "url(#accent-mask-glow)" : undefined}
                     className={`pointer-events-auto cursor-pointer transition-all duration-150 focus:outline-none ${
                       isSelected
-                        ? "fill-[#7DD3EE]/40 stroke-[#7DD3EE]"
+                        ? "fill-[#7DD3EE]/25 stroke-[#7DD3EE]"
                         : hasSelection
-                          ? "fill-white/[0.04] stroke-white/25 opacity-40 hover:fill-[#7DD3EE]/20 hover:stroke-[#7DD3EE]/80 hover:opacity-100"
-                          : "fill-white/[0.08] stroke-white/50 hover:fill-[#7DD3EE]/20 hover:stroke-[#7DD3EE]/80"
+                          ? "fill-transparent stroke-white/30 opacity-40 hover:fill-[#7DD3EE]/15 hover:stroke-[#7DD3EE]/80 hover:opacity-100"
+                          : "fill-transparent stroke-white/45 hover:fill-[#7DD3EE]/15 hover:stroke-[#7DD3EE]/80"
                     }`}
                     strokeWidth={isSelected ? 3 : 1.5}
                     strokeDasharray={isSelected ? undefined : "6 4"}
@@ -394,14 +392,14 @@ export function VideoMaskStage({
                     e.stopPropagation();
                     onSelectTarget(target.id, target.prompt, target.label, target.isolationId);
                   }}
-                  className={`absolute flex cursor-pointer flex-col justify-between rounded-icon p-2 text-left transition-all duration-150 ${target.positionClass} ${
+                  className={`absolute flex cursor-pointer flex-col justify-between rounded-icon p-1.5 text-left transition-all duration-150 ${target.positionClass} ${
                     !isVisible
                       ? "pointer-events-none opacity-0"
                       : selected
-                        ? "border border-accent bg-surface-2/80 shadow-md shadow-accent/10"
+                        ? "border border-accent bg-surface-2/85 shadow-md shadow-accent/10"
                         : hasSelection
-                          ? "border border-dashed border-control/40 bg-bg/35 opacity-45 hover:border-control hover:opacity-90"
-                          : "border border-dashed border-control bg-bg/55 hover:border-text-2"
+                          ? "border border-dashed border-control/30 bg-bg/20 opacity-50 hover:border-control hover:opacity-100"
+                          : "border border-dashed border-control/50 bg-bg/30 hover:border-text-2"
                   }`}
                 >
                   <span

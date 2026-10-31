@@ -1,5 +1,6 @@
 import type { LoopRange } from "@/lib/audio/player";
 import type { Note } from "@/lib/trackmap/trackmap.generated";
+import { midiToNoteName } from "./format";
 
 export type StudioPalette = {
   bg: string;
@@ -41,6 +42,7 @@ export type MiniRollDrawArgs = {
   currentTime: number;
   duration: number;
   downbeats: number[];
+  dpr?: number;
 };
 
 export type EnergyDrawArgs = {
@@ -49,6 +51,7 @@ export type EnergyDrawArgs = {
   currentTime: number;
   duration: number;
   downbeats: number[];
+  dpr?: number;
 };
 
 export type LearnRollDrawArgs = {
@@ -60,6 +63,8 @@ export type LearnRollDrawArgs = {
   downbeats: number[];
   loop: LoopRange | null;
   problemBarZeroBased: number | null;
+  peaks?: number[];
+  dpr?: number;
 };
 
 function token(styles: CSSStyleDeclaration, name: string, fallback: string): string {
@@ -67,9 +72,24 @@ function token(styles: CSSStyleDeclaration, name: string, fallback: string): str
   return val.length > 0 ? val : fallback;
 }
 
+let cachedStudioPalette: StudioPalette | null = null;
+let lastPaletteTheme: string | null = null;
+let lastPaletteReadTime = 0;
+
 export function readStudioPalette(): StudioPalette {
+  const now = typeof performance !== "undefined" ? performance.now() : Date.now();
+  const currentTheme =
+    typeof document !== "undefined" ? document.documentElement.getAttribute("data-theme") : null;
+  if (
+    cachedStudioPalette !== null &&
+    currentTheme === lastPaletteTheme &&
+    now - lastPaletteReadTime < 1000
+  ) {
+    return cachedStudioPalette;
+  }
+  lastPaletteTheme = currentTheme;
   const styles = window.getComputedStyle(document.documentElement);
-  return {
+  cachedStudioPalette = {
     bg: token(styles, "--bg", "black"),
     surface: token(styles, "--surface", "black"),
     line: token(styles, "--line", "gray"),
@@ -84,6 +104,8 @@ export function readStudioPalette(): StudioPalette {
     rest: token(styles, "--rest", "silver"),
     leftHand: token(styles, "--left-hand", "slategray"),
   };
+  lastPaletteReadTime = now;
+  return cachedStudioPalette;
 }
 
 function drawBarGrid(
@@ -148,11 +170,8 @@ function drawPlayhead(
       : fillStyleOrTone === "rest"
         ? palette?.text ?? "#ffffff"
         : fillStyleOrTone;
-  const glow = isAccent ? "rgba(255, 106, 26, 0.65)" : "rgba(255, 255, 255, 0.45)";
 
   ctx.save();
-  ctx.shadowColor = glow;
-  ctx.shadowBlur = 6;
   ctx.fillStyle = color;
   ctx.fillRect(x - 0.75, 0, 1.5, height);
 
@@ -339,13 +358,19 @@ export function drawMiniRoll({
   currentTime,
   duration,
   downbeats,
+  dpr: explicitDpr,
 }: MiniRollDrawArgs): void {
   const ctx = canvas.getContext("2d");
   if (ctx === null) return;
-  const width = canvas.width;
-  const height = canvas.height;
+  const dpr =
+    explicitDpr ??
+    (typeof window !== "undefined" ? Math.min(window.devicePixelRatio || 1, 3) : 1);
+  const width = canvas.width / dpr;
+  const height = canvas.height / dpr;
   const palette = readStudioPalette();
 
+  ctx.save();
+  ctx.scale(dpr, dpr);
   ctx.clearRect(0, 0, width, height);
   drawBarGrid(ctx, width, height, downbeats, duration, palette.line);
 
@@ -370,7 +395,8 @@ export function drawMiniRoll({
     }
   }
 
-  drawPlayhead(ctx, width, height, currentTime, duration, palette.accent);
+  drawPlayhead(ctx, width, height, currentTime, duration, palette.accent, palette);
+  ctx.restore();
 }
 
 export function drawEnergyCurve({
@@ -379,31 +405,62 @@ export function drawEnergyCurve({
   currentTime,
   duration,
   downbeats,
+  dpr: explicitDpr,
 }: EnergyDrawArgs): void {
   const ctx = canvas.getContext("2d");
   if (ctx === null) return;
-  const width = canvas.width;
-  const height = canvas.height;
+  const dpr =
+    explicitDpr ??
+    (typeof window !== "undefined" ? Math.min(window.devicePixelRatio || 1, 3) : 1);
+  const width = canvas.width / dpr;
+  const height = canvas.height / dpr;
   const palette = readStudioPalette();
 
+  ctx.save();
+  ctx.scale(dpr, dpr);
   ctx.clearRect(0, 0, width, height);
   drawBarGrid(ctx, width, height, downbeats, duration, palette.line);
 
   if (values.length > 1) {
-    ctx.strokeStyle = palette.text2;
-    ctx.lineWidth = 1.5;
+    ctx.strokeStyle = palette.accent;
+    ctx.lineWidth = 2;
     ctx.beginPath();
     for (let index = 0; index < values.length; index += 1) {
       const x = (index / (values.length - 1)) * width;
       const val = Math.max(0, Math.min(1, values[index] ?? 0));
-      const y = height - 6 - val * (height - 14);
+      const y = height - 8 - val * (height - 18);
       if (index === 0) ctx.moveTo(x, y);
       else ctx.lineTo(x, y);
     }
     ctx.stroke();
+
+    // Subtle area gradient / fill under curve for clear visual presence
+    ctx.lineTo(width, height);
+    ctx.lineTo(0, height);
+    ctx.closePath();
+    ctx.fillStyle = palette.accent;
+    ctx.globalAlpha = 0.14;
+    ctx.fill();
+    ctx.globalAlpha = 1.0;
   }
 
-  drawPlayhead(ctx, width, height, currentTime, duration, palette.text);
+  drawPlayhead(ctx, width, height, currentTime, duration, palette.text, palette);
+  ctx.restore();
+}
+
+const resampledPeaksCache = new WeakMap<number[], Map<number, number[]>>();
+
+function getFastResampledPeaks(peaks: number[], targetCount: number): number[] {
+  let targetMap = resampledPeaksCache.get(peaks);
+  if (!targetMap) {
+    targetMap = new Map();
+    resampledPeaksCache.set(peaks, targetMap);
+  }
+  const cached = targetMap.get(targetCount);
+  if (cached) return cached;
+  const computed = resamplePeaks(peaks, targetCount);
+  targetMap.set(targetCount, computed);
+  return computed;
 }
 
 export function drawLearnPianoRoll({
@@ -415,16 +472,53 @@ export function drawLearnPianoRoll({
   downbeats,
   loop,
   problemBarZeroBased,
+  peaks,
+  dpr: explicitDpr,
 }: LearnRollDrawArgs): void {
   const ctx = canvas.getContext("2d");
   if (ctx === null) return;
-  const width = canvas.width;
-  const height = canvas.height;
+  const dpr =
+    explicitDpr ??
+    (typeof window !== "undefined" ? Math.min(window.devicePixelRatio || 1, 3) : 1);
+  const width = canvas.width / dpr;
+  const height = canvas.height / dpr;
   const palette = readStudioPalette();
 
+  ctx.save();
+  ctx.scale(dpr, dpr);
   ctx.clearRect(0, 0, width, height);
+
+  // 1. Loop shade
   drawLoopShade(ctx, width, height, loop, duration, palette.text);
 
+  // 2. Clear, high-contrast waveform in the background (visible across both light and dark themes)
+  if (peaks && peaks.length > 0 && duration > 0) {
+    const centerY = height / 2;
+    const barSpacing = width > 1200 ? 3.5 : 4.0;
+    const count = Math.max(16, Math.floor(width / barSpacing));
+    const sampled = getFastResampledPeaks(peaks, count);
+    ctx.save();
+    ctx.fillStyle = palette.mutedWave;
+    ctx.globalAlpha = 0.65;
+    const barW = Math.max(1.8, barSpacing - 1.2);
+    const radius = Math.min(2, barW / 2);
+
+    for (let i = 0; i < sampled.length; i++) {
+      const x = i * barSpacing;
+      const barH = Math.max(3, (sampled[i] ?? 0.08) * (height - 36));
+      const y = centerY - barH / 2;
+      if (typeof ctx.roundRect === "function") {
+        ctx.beginPath();
+        ctx.roundRect(x + 0.5, y, barW, barH, radius);
+        ctx.fill();
+      } else {
+        ctx.fillRect(x + 0.5, y, barW, barH);
+      }
+    }
+    ctx.restore();
+  }
+
+  // 3. Problem bar shading
   if (problemBarZeroBased !== null && duration > 0 && downbeats.length > 0) {
     const barStart = downbeats[problemBarZeroBased] ?? 0;
     const barEnd = downbeats[problemBarZeroBased + 1] ?? duration;
@@ -445,9 +539,10 @@ export function drawLearnPianoRoll({
     ctx.restore();
   }
 
+  // 4. Bar grid lines
   drawBarGrid(ctx, width, height, downbeats, duration, palette.line);
 
-  // Bar numbers along top edge
+  // 5. Bar numbers along top edge
   if (duration > 0) {
     ctx.font = "600 10px monospace";
     for (let index = 0; index < downbeats.length; index += 1) {
@@ -459,36 +554,115 @@ export function drawLearnPianoRoll({
     }
   }
 
-  const lowPitch = 45;
-  const pitchSpan = 40;
+  // 6. Dynamic pitch range calculation so all notes fit nicely
+  let minPitch = 127;
+  let maxPitch = 0;
+  for (const note of notes) {
+    if (note.pitch < minPitch) minPitch = note.pitch;
+    if (note.pitch > maxPitch) maxPitch = note.pitch;
+  }
+  for (const dot of played) {
+    if (dot.pitch < minPitch) minPitch = dot.pitch;
+    if (dot.pitch > maxPitch) maxPitch = dot.pitch;
+  }
+  if (minPitch > maxPitch) {
+    minPitch = 55;
+    maxPitch = 84;
+  } else {
+    minPitch = Math.max(24, minPitch - 2);
+    maxPitch = Math.min(108, maxPitch + 2);
+  }
+  const pitchSpan = Math.max(12, maxPitch - minPitch);
+  const noteH = Math.max(10, Math.min(22, (height - 44) / (pitchSpan * 0.75)));
 
+  // Pitch horizontal guide lines for octaves
+  ctx.save();
+  ctx.strokeStyle = palette.line2;
+  ctx.globalAlpha = 0.14;
+  ctx.lineWidth = 0.75;
+  for (let p = Math.ceil(minPitch / 12) * 12; p <= maxPitch; p += 12) {
+    const norm = (p - minPitch) / pitchSpan;
+    const y = height - 18 - norm * (height - 40);
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(width, y);
+    ctx.stroke();
+  }
+  ctx.restore();
+
+  // 7. Draw Reference Notes
   if (duration > 0) {
     for (const note of notes) {
       const x = (note.start / duration) * width;
-      const w = Math.max(5, ((note.end - note.start) / duration) * width - 1.5);
-      const norm = Math.max(0, Math.min(1, (note.pitch - lowPitch) / pitchSpan));
-      const y = height - 16 - norm * (height - 36);
+      const w = Math.max(6, ((note.end - note.start) / duration) * width - 1.5);
+      const norm = Math.max(0, Math.min(1, (note.pitch - minPitch) / pitchSpan));
+      const y = height - 18 - norm * (height - 40);
       const active = currentTime >= note.start && currentTime <= note.end;
-      if (note.hand === "left") {
+
+      ctx.save();
+      if (active) {
+        ctx.fillStyle = palette.accent;
+      } else if (note.hand === "left") {
         ctx.fillStyle = palette.leftHand;
-        ctx.fillRect(x, y, w, 6);
       } else {
-        ctx.fillStyle = active ? palette.accent : palette.text;
-        ctx.fillRect(x, y, w, 8);
+        ctx.fillStyle = palette.text;
       }
+
+      // Rounded rectangle for modern note capsule feel
+      const r = Math.min(3, noteH / 3, w / 3);
+      ctx.beginPath();
+      if (typeof ctx.roundRect === "function") {
+        ctx.roundRect(x, y - noteH / 2, w, noteH, r);
+      } else {
+        ctx.rect(x, y - noteH / 2, w, noteH);
+      }
+      ctx.fill();
+
+      // Active note crisp highlight ring without expensive Gaussian shadow blur
+      if (active) {
+        ctx.strokeStyle = "#ffffff";
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      }
+
+      // Note name label inside if block is wide enough
+      if (w > 20) {
+        ctx.font = "bold 9px monospace";
+        ctx.fillStyle = active ? "#121010" : palette.bg;
+        ctx.fillText(midiToNoteName(note.pitch), x + 3, y + 3);
+      }
+      ctx.restore();
     }
 
+    // 8. Played dots by user
     for (const dot of played) {
       const x = (dot.time / duration) * width;
-      const norm = Math.max(0, Math.min(1, (dot.pitch - lowPitch) / pitchSpan));
-      const y = height - 16 - norm * (height - 36) - 5;
+      const norm = Math.max(0, Math.min(1, (dot.pitch - minPitch) / pitchSpan));
+      const y = height - 18 - norm * (height - 40);
+      ctx.save();
       ctx.fillStyle = palette.you;
       ctx.beginPath();
-      ctx.arc(x, y, 3, 0, Math.PI * 2);
+      ctx.arc(x, y, 3.5, 0, Math.PI * 2);
       ctx.fill();
+      ctx.strokeStyle = "rgba(0,0,0,0.45)";
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    // 9. Intro indicator if notes enter later in the track
+    if (notes.length > 0 && (notes[0]?.start ?? 0) > 3.0) {
+      const firstStart = notes[0]?.start ?? 0;
+      ctx.save();
+      ctx.fillStyle = palette.muted;
+      ctx.font = "500 11px sans-serif";
+      ctx.fillText(`Melody enters at ${firstStart.toFixed(1)}s`, 12, height - 10);
+      ctx.restore();
     }
   }
 
-  drawPlayhead(ctx, width, height, currentTime, duration, palette.text);
+  // 10. Playhead
+  drawPlayhead(ctx, width, height, currentTime, duration, palette.accent, palette);
+  ctx.restore();
 }
 

@@ -16,8 +16,9 @@ export type PlayerEvents = {
 };
 
 const CROSSFADE_SECONDS = 0.02;
-const DRIFT_TOLERANCE_SECONDS = 0.04;
+const DRIFT_TOLERANCE_SECONDS = 0.2;
 const TICK_MILLISECONDS = 50;
+const DRIFT_SYNC_INTERVAL_MS = 1000;
 
 type Track = {
   element: HTMLAudioElement;
@@ -35,6 +36,7 @@ export class StemPlayer {
   private active: StemName;
   private loop: LoopRange | null = null;
   private ticker: number | null = null;
+  private lastSyncTime = 0;
 
   constructor(sources: StemSource[], events: Partial<PlayerEvents> = {}) {
     const first = sources[0];
@@ -92,7 +94,13 @@ export class StemPlayer {
 
   seek(seconds: number): void {
     const target = Math.min(Math.max(seconds, 0), this.duration || seconds);
-    for (const track of this.tracks.values()) track.element.currentTime = target;
+    for (const track of this.tracks.values()) {
+      try {
+        track.element.currentTime = target;
+      } catch {
+        // Element may not have reached HAVE_METADATA yet
+      }
+    }
     this.events.onTime?.(target);
   }
 
@@ -157,11 +165,19 @@ export class StemPlayer {
       return;
     }
 
-    // Media elements drift apart over time; nudge the followers back onto the leader's clock.
-    for (const track of this.tracks.values()) {
-      if (track === leader) continue;
-      if (Math.abs(track.element.currentTime - now) > DRIFT_TOLERANCE_SECONDS) {
-        track.element.currentTime = now;
+    // Media elements drift apart over time; periodically nudge followers back onto the leader's clock.
+    const nowMs = Date.now();
+    if (nowMs - this.lastSyncTime >= DRIFT_SYNC_INTERVAL_MS) {
+      for (const track of this.tracks.values()) {
+        if (track === leader) continue;
+        if (Math.abs(track.element.currentTime - now) > DRIFT_TOLERANCE_SECONDS) {
+          try {
+            track.element.currentTime = now;
+          } catch {
+            // readyState check
+          }
+          this.lastSyncTime = nowMs;
+        }
       }
     }
     this.events.onTime?.(now);

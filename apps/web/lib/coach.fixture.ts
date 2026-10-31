@@ -95,6 +95,31 @@ function testVoiceCommandParsing() {
     args: { bar: 9 },
   });
 
+  // Wake word stripping
+  const wakeLoop = parseVoiceCoachCommand("hello mixray, loop bars 1 to 4");
+  assert.deepEqual(wakeLoop, {
+    name: "set_loop",
+    args: { start_bar: 1, end_bar: 4 },
+  });
+
+  const wakeSlow = parseVoiceCoachCommand("hey mixray slow down");
+  assert.deepEqual(wakeSlow, {
+    name: "set_tempo",
+    args: { percent: 75 },
+  });
+
+  const wakeSlowSpaced = parseVoiceCoachCommand("hey mix ray slow down");
+  assert.deepEqual(wakeSlowSpaced, {
+    name: "set_tempo",
+    args: { percent: 75 },
+  });
+
+  const wakeSpeedUp = parseVoiceCoachCommand("hello mix-ray, speed up");
+  assert.deepEqual(wakeSpeedUp, {
+    name: "set_tempo",
+    args: { percent: 100 },
+  });
+
   // Empty or unhandled
   assert.equal(parseVoiceCoachCommand(""), null);
   assert.equal(parseVoiceCoachCommand("hello world"), null);

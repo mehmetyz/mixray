@@ -69,8 +69,12 @@ function WaveformLaneRow({
     if (canvas === null) return;
     const dpr = typeof window !== "undefined" ? Math.min(window.devicePixelRatio || 1, 3) : 1;
 
-    canvas.width = Math.round(canvasSize.width * dpr);
-    canvas.height = Math.round(canvasSize.height * dpr);
+    const targetW = Math.round(canvasSize.width * dpr);
+    const targetH = Math.round(canvasSize.height * dpr);
+    if (canvas.width !== targetW || canvas.height !== targetH) {
+      canvas.width = targetW;
+      canvas.height = targetH;
+    }
 
     drawWaveformLane({
       canvas,

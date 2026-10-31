@@ -229,9 +229,18 @@ function digitsFromWords(text: string): string {
   return result;
 }
 
+const WAKE_WORD_PATTERN = /\b(?:mix\s*ray|mixray|mix-ray|mics\s*ray|mic\s*ray)\b/i;
+const STRIP_WAKE_WORD_PATTERN =
+  /^(?:hello|hey|hi|ok|okay)?\s*(?:mix\s*ray|mixray|mix-ray|mics\s*ray|mic\s*ray)[,.:;!?\s]*/i;
+
 export function parseVoiceCoachCommand(phrase: string): CoachAction | null {
-  const spoken = phrase.trim().toLowerCase();
+  let spoken = phrase.trim().toLowerCase();
   if (spoken.length === 0) return null;
+
+  // Strip wake word prefix if present: "hello mixray", "hey mix ray", "mixray", "hi mix ray"
+  spoken = spoken.replace(STRIP_WAKE_WORD_PATTERN, "").trim();
+  if (spoken.length === 0) return null;
+
   const lower = digitsFromWords(spoken);
 
   const loopMatch = lower.match(/(?:loop|bars?)\s*(\d+)\s*(?:to|-|–|and)\s*(\d+)/i);
@@ -250,7 +259,16 @@ export function parseVoiceCoachCommand(phrase: string): CoachAction | null {
     };
   }
 
-  if (lower.includes("slow") || lower.includes("tempo") || lower.includes("speed")) {
+  if (
+    lower.includes("faster") ||
+    lower.includes("speed up") ||
+    lower.includes("normal tempo") ||
+    lower.includes("normal speed")
+  ) {
+    return { name: "set_tempo", args: { percent: 100 } };
+  }
+
+  if (lower.includes("slow") || lower.includes("slower") || lower.includes("tempo") || lower.includes("speed")) {
     const numMatch = lower.match(/(\d{2,3})/);
     const pct =
       numMatch?.[1] !== undefined ? Math.max(40, Math.min(100, parseInt(numMatch[1], 10))) : 75;
@@ -276,6 +294,113 @@ export function parseVoiceCoachCommand(phrase: string): CoachAction | null {
   }
 
   return null;
+}
+
+export type VoiceIntent =
+  | { kind: "action"; action: CoachAction; description: string }
+  | { kind: "analyze"; description: string }
+  | { kind: "play_pause"; description: string }
+  | { kind: "reset"; description: string }
+  | { kind: "greeting"; description: string }
+  | { kind: "unknown"; description: string };
+
+export type ParsedVoiceMessage = {
+  intent: VoiceIntent;
+  wakeWordDetected: boolean;
+  cleanTranscript: string;
+};
+
+export function parseVoiceAssistantMessage(phrase: string): ParsedVoiceMessage {
+  const trimmed = phrase.trim();
+  const lower = trimmed.toLowerCase();
+
+  const wakeWordDetected = WAKE_WORD_PATTERN.test(lower);
+  const clean = lower.replace(STRIP_WAKE_WORD_PATTERN, "").trim();
+
+  // If user only said greeting / wake word with no follow-up command
+  if (wakeWordDetected && clean.length === 0) {
+    return {
+      intent: {
+        kind: "greeting",
+        description: "Hey! I'm listening. Say 'loop bar 4 to 8', 'slow down', or 'analyze my take'.",
+      },
+      wakeWordDetected: true,
+      cleanTranscript: trimmed,
+    };
+  }
+
+  if (
+    clean.includes("analyze") ||
+    clean.includes("how did i do") ||
+    clean.includes("review") ||
+    clean.includes("feedback") ||
+    clean.includes("how was that")
+  ) {
+    return {
+      intent: { kind: "analyze", description: "Analyzing your practice take..." },
+      wakeWordDetected,
+      cleanTranscript: clean,
+    };
+  }
+
+  if (
+    clean === "play" ||
+    clean === "pause" ||
+    clean === "stop" ||
+    clean === "start" ||
+    clean === "resume" ||
+    clean.startsWith("play") ||
+    clean.startsWith("pause") ||
+    clean.startsWith("stop") ||
+    clean.startsWith("start") ||
+    clean.startsWith("resume")
+  ) {
+    return {
+      intent: { kind: "play_pause", description: "Toggling playback" },
+      wakeWordDetected,
+      cleanTranscript: clean,
+    };
+  }
+
+  if (clean.includes("reset") || clean.includes("clear") || clean.includes("start over")) {
+    return {
+      intent: { kind: "reset", description: "Resetting loop and tempo" },
+      wakeWordDetected,
+      cleanTranscript: clean,
+    };
+  }
+
+  const action = parseVoiceCoachCommand(trimmed);
+  if (action !== null) {
+    let desc = "Applied command";
+    if (action.name === "set_loop") {
+      desc = `Looped bars ${action.args.start_bar}–${action.args.end_bar}`;
+    } else if (action.name === "set_tempo") {
+      desc = `Tempo set to ${action.args.percent}%`;
+    } else if (action.name === "switch_hand") {
+      desc = `Hand set to ${action.args.hand}`;
+    } else if (action.name === "simplify_bar") {
+      desc = `Simplified bar ${action.args.bar}`;
+    } else if (action.name === "mark_problem_bar") {
+      desc = `Marked bar ${action.args.bar}`;
+    }
+    return {
+      intent: { kind: "action", action, description: desc },
+      wakeWordDetected,
+      cleanTranscript: clean,
+    };
+  }
+
+  return {
+    intent: {
+      kind: "unknown",
+      description: wakeWordDetected
+        ? `Heard "${clean}", try "slow down", "play", or "loop bar 4 to 8".`
+        : "Didn't catch that. Say 'Hello Mixray' or tap the microphone.",
+    },
+    wakeWordDetected,
+    cleanTranscript: clean,
+  };
 }
 
 

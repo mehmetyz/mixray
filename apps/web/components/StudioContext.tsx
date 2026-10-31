@@ -164,6 +164,7 @@ export function StudioProvider({ clipId, initialTrackMap, children }: StudioProv
   const latestMonitorRef = useRef<StemName>("sound");
   const latestRateRef = useRef<number>(100);
   const latestLoopRef = useRef<LoopRange | null>(null);
+  const pendingPlayRef = useRef<boolean>(false);
 
   const selectedIsolation = useMemo(() => {
     const exact = trackMap.isolations.find((item) => item.id === requestedIsoId);
@@ -262,7 +263,8 @@ export function StudioProvider({ clipId, initialTrackMap, children }: StudioProv
       }
 
       playerRef.current = nextPlayer;
-      if (wasPlaying) {
+      if (wasPlaying || pendingPlayRef.current) {
+        pendingPlayRef.current = false;
         void nextPlayer
           .play()
           .then(() => setPlaying(true))
@@ -303,7 +305,11 @@ export function StudioProvider({ clipId, initialTrackMap, children }: StudioProv
 
   const togglePlay = useCallback(() => {
     const player = playerRef.current;
-    if (player === null) return;
+    if (player === null) {
+      pendingPlayRef.current = !pendingPlayRef.current;
+      setPlaying(pendingPlayRef.current);
+      return;
+    }
     if (player.playing) {
       player.pause();
       setPlaying(false);
@@ -387,7 +393,7 @@ export function StudioProvider({ clipId, initialTrackMap, children }: StudioProv
       ) {
         return;
       }
-      if (event.code === "Space") {
+      if (event.code === "Space" || event.key === " ") {
         event.preventDefault();
         togglePlay();
       } else if (event.key === "1") {

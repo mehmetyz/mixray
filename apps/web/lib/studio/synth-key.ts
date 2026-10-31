@@ -40,6 +40,27 @@ export const TWO_OCTAVE_KEYS: readonly PianoKeySpec[] = [
   { midi: 83, note: "B5", isSharp: false, shortcut: "" },
 ];
 
+const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"] as const;
+
+export function formatKeyNoteName(midi: number): string {
+  const note = NOTE_NAMES[midi % 12] ?? "C";
+  const octave = Math.floor(midi / 12) - 1;
+  return `${note}${octave}`;
+}
+
+export function buildPianoKeys(octaveShift: number = 0): PianoKeySpec[] {
+  const offset = octaveShift * 12;
+  return TWO_OCTAVE_KEYS.map((k) => {
+    const shiftedMidi = Math.max(12, Math.min(108, k.midi + offset));
+    return {
+      midi: shiftedMidi,
+      note: formatKeyNoteName(shiftedMidi),
+      isSharp: k.isSharp,
+      shortcut: k.shortcut,
+    };
+  });
+}
+
 const SHORTCUT_MAP = new Map<string, PianoKeySpec>(
   TWO_OCTAVE_KEYS.filter((item) => item.shortcut.length > 0).map((item) => [
     item.shortcut.toLowerCase(),
@@ -60,36 +81,114 @@ function getSynthContext(): AudioContext | null {
   return sharedAudioContext;
 }
 
-export function lookupShortcutKey(key: string): PianoKeySpec | undefined {
-  return SHORTCUT_MAP.get(key.toLowerCase());
+export function lookupShortcutKey(key: string, octaveShift: number = 0): PianoKeySpec | undefined {
+  const base = SHORTCUT_MAP.get(key.toLowerCase());
+  if (base === undefined) return undefined;
+  if (octaveShift === 0) return base;
+  const shiftedMidi = Math.max(12, Math.min(108, base.midi + octaveShift * 12));
+  return {
+    ...base,
+    midi: shiftedMidi,
+    note: formatKeyNoteName(shiftedMidi),
+  };
+}
+
+type ActiveVoice = {
+  oscMain: OscillatorNode;
+  oscBody: OscillatorNode;
+  filter: BiquadFilterNode;
+  gain: GainNode;
+  stopTimeout: number;
+};
+
+const activeVoices = new Map<number, ActiveVoice>();
+
+/** Starts sounding a note with warm, full-bodied studio tone and sustains it until `stopMonitorNote`. */
+export function startMonitorNote(midi: number): void {
+  const ctx = getSynthContext();
+  if (ctx === null) return;
+
+  // Release any existing voice on this pitch first
+  stopMonitorNote(midi);
+
+  const now = ctx.currentTime;
+  const oscMain = ctx.createOscillator();
+  const oscBody = ctx.createOscillator();
+  const filter = ctx.createBiquadFilter();
+  const gain = ctx.createGain();
+  const bodyGain = ctx.createGain();
+
+  const freq = 440 * Math.pow(2, (midi - 69) / 12);
+
+  // 1. Main melodic oscillator: warm triangle for clean fundamental pitch
+  oscMain.type = "triangle";
+  oscMain.frequency.setValueAtTime(freq, now);
+
+  // 2. Body/Sub reinforcement oscillator: deep sine wave at 1 octave lower (for midi >= 45)
+  // or fundamental (for bass notes) to create rich, warm, "tok" low-end depth
+  const bodyFreq = midi >= 45 ? freq * 0.5 : freq;
+  oscBody.type = "sine";
+  oscBody.frequency.setValueAtTime(bodyFreq, now);
+
+  // 3. Dynamic acoustic lowpass filter:
+  // Starts slightly open (1900 Hz, Q: 1.2) for crisp finger/hammer attack,
+  // then smoothly rolls off to warm 950 Hz so the note stays round, punchy and never shrill
+  filter.type = "lowpass";
+  filter.Q.setValueAtTime(1.2, now);
+  filter.frequency.setValueAtTime(1900, now);
+  filter.frequency.exponentialRampToValueAtTime(950, now + 0.12);
+
+  // 4. Punchy attack & sustain envelope
+  gain.gain.setValueAtTime(0.001, now);
+  gain.gain.linearRampToValueAtTime(0.18, now + 0.012);
+  gain.gain.exponentialRampToValueAtTime(0.12, now + 0.09);
+
+  // Mix 40% body reinforcement with the main oscillator
+  bodyGain.gain.setValueAtTime(0.40, now);
+  oscBody.connect(bodyGain).connect(filter);
+  oscMain.connect(filter);
+
+  filter.connect(gain).connect(ctx.destination);
+
+  oscMain.start(now);
+  oscBody.start(now);
+
+  // Auto safety release after 4.5 seconds if key-up is never received
+  const stopTimeout = window.setTimeout(() => {
+    stopMonitorNote(midi);
+  }, 4500);
+
+  activeVoices.set(midi, { oscMain, oscBody, filter, gain, stopTimeout });
+}
+
+/** Smoothly releases a sounding sustained note. */
+export function stopMonitorNote(midi: number): void {
+  const voice = activeVoices.get(midi);
+  if (!voice) return;
+  activeVoices.delete(midi);
+  window.clearTimeout(voice.stopTimeout);
+
+  const ctx = getSynthContext();
+  if (ctx === null) return;
+  const now = ctx.currentTime;
+
+  try {
+    voice.gain.gain.cancelScheduledValues(now);
+    voice.gain.gain.setValueAtTime(voice.gain.gain.value, now);
+    voice.gain.gain.exponentialRampToValueAtTime(0.0008, now + 0.09);
+    voice.oscMain.stop(now + 0.11);
+    voice.oscBody.stop(now + 0.11);
+  } catch {
+    // Context may already be closed
+  }
 }
 
 /** Audible low-latency monitor voice for on-screen, QWERTY and Web MIDI practice keys. */
 export function playMonitorNote(midi: number, durationSeconds = 0.28): void {
-  const ctx = getSynthContext();
-  if (ctx === null) return;
-
-  const now = ctx.currentTime;
-  const osc = ctx.createOscillator();
-  const filter = ctx.createBiquadFilter();
-  const gain = ctx.createGain();
-
-  osc.type = "triangle";
-  osc.frequency.setValueAtTime(440 * Math.pow(2, (midi - 69) / 12), now);
-
-  filter.type = "lowpass";
-  filter.frequency.setValueAtTime(2800, now);
-
-  gain.gain.setValueAtTime(0.001, now);
-  gain.gain.linearRampToValueAtTime(0.14, now + 0.008);
-  gain.gain.exponentialRampToValueAtTime(0.0008, now + durationSeconds);
-
-  osc.connect(filter);
-  filter.connect(gain);
-  gain.connect(ctx.destination);
-
-  osc.start(now);
-  osc.stop(now + durationSeconds + 0.02);
+  startMonitorNote(midi);
+  window.setTimeout(() => {
+    stopMonitorNote(midi);
+  }, durationSeconds * 1000);
 }
 
 /** Connects to Web MIDI inputs when supported by the browser. */
