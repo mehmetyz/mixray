@@ -23,7 +23,7 @@ from ingest import (
 from isolate import (
     DEFAULT_MODEL_ID,
     HF_SECRET,
-    MEASURE_GPU,
+    ISOLATION_GPU,
     RANKERS_OFF,
     WEIGHTS_PATH,
     WEIGHTS_VOLUME,
@@ -61,7 +61,7 @@ app = modal.App("mixray")
 
 @app.cls(
     image=sam_audio_image,
-    gpu=MEASURE_GPU,
+    gpu=ISOLATION_GPU,
     volumes={WEIGHTS_PATH: WEIGHTS_VOLUME, DEFAULT_CACHE_PATH: CACHE_VOLUME},
     secrets=[HF_SECRET, API_SECRET],
     timeout=ISOLATE_TIMEOUT_SECONDS,

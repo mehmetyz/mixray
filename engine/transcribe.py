@@ -199,12 +199,6 @@ def _velocity(amplitude: float) -> int:
     return min(MIDI_VELOCITY_MAX, max(MIDI_VELOCITY_MIN, scaled))
 
 
-def _is_bass_sound(prompt: str, label: str) -> bool:
-    """Return True if prompt or label explicitly names a bass instrument."""
-    text = f"{prompt} {label}".strip().lower()
-    return bool(text) and any(keyword in text for keyword in BASS_KEYWORDS)
-
-
 def _should_filter_sub_bass(prompt: str, label: str) -> bool:
     """True when the sound is known to be a chord/melody/lead part rather than bass."""
     text = f"{prompt} {label}".strip().lower()
