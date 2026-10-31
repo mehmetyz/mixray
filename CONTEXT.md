@@ -1,0 +1,96 @@
+# CONTEXT.md — project memory
+
+Decisions and current state. The plan is in `SPEC.md`, the UI in `DESIGN.md`, the work in
+`TASKS.md`. Update the "State" section when something changes.
+
+## Scope
+
+- Built for the Meta Global AI Developer Hackathon, which started Oct 26, 2026. Submission closes
+  Nov 4, 2026.
+- Problem statement: **Build for Your World.** Mixray is framed as a creative tool for musicians,
+  not an education chatbot.
+
+## Decisions (with reasons)
+
+- **Name: Mixray** (= x-ray of the mix). Tagline: *Point at a sound. Hear it alone. Learn to play
+  it.* Rejected names: Hookline (an existing music guessing game), Unravel, Decoda (an existing
+  product with the same use case), Keyhook, Stemprint, Trackray.
+- **Core flow:** add a song or a video scene → pick one sound with SAM (text prompt, Muse
+  suggestion chip, or a tap on the video) → analyze it → learn it on a **keyboard only**. Any sound
+  can be isolated, including a guitar riff, but it is always learned on keys; instrument-specific
+  learning is a post-hackathon idea.
+- **SAM Audio is the main separator**, Demucs is only a fallback for standard instruments. Arbitrary
+  prompts ("supersaw lead", "pluck") are the product; Demucs only knows six fixed stems. Where each
+  one wins is a measured routing decision, not a preference.
+- **SAM 3.1** turns a tap on a video frame into tracked regions. The region is cropped and named by
+  Muse Spark, and that name drives separation; the mask is never fed to SAM Audio, because the mask
+  path measured an order of magnitude slower and leaked neighbouring sounds.
+- **Clip ≤ 30 s** (≈ 16 bars at 128 BPM): enough for a hook, and it bounds the cost of every model
+  call.
+- **Upload goes straight to Modal**, with the audio trimmed in the browser first and a 7-day
+  auto-delete. Vercel only hosts the UI and small API routes.
+- **Rights:** demos use media we own, or third-party CC0 / CC BY / CC BY-SA media with full
+  attribution. NC and ND licences are avoided. Every third-party file gets an entry in `CREDITS.md`
+  (title, author, source URL, licence, changes made) and an on-screen credit where it plays. No film
+  scenes and no commercial songs anywhere. The upload screen has a rights checkbox.
+  - **A CC licence on a recording does not cover the music performed in it.** For a video of someone
+    playing, the uploader licensed their footage, not the composition. Such a clip is only used
+    publicly when the piece is public domain or the performer's own work. CC BY-SA also pulls a
+    derived demo video into ShareAlike; plain CC BY / CC0 does not.
+- **Stack:** monorepo, `apps/web` Next.js (App Router, TS, Tailwind, pnpm) on Vercel; `engine/`
+  Python 3.11 on Modal (one image per heavy model); `schema/trackmap.schema.json` v2 is the only
+  contract.
+- **Look:** quiet monochrome DAW, one surgical accent. See `DESIGN.md`, which is authoritative.
+- **Live URL:** https://mixray.vercel.app. A custom domain is optional; this URL is enough.
+- **Contributor mode everywhere** (`muse-spark-1.2-contributor` for audio): far cheaper at the same
+  quality for this workload. Requests may be used to improve the models, so the Add screen discloses
+  this next to the rights checkbox.
+- **`recipe` runs on Muse Spark Open via Baseten partner inference.** The model is an 816B
+  mixture-of-experts; self-hosting it is not possible within this project's budget.
+- Modal CLI on macOS needs `MODAL_DISABLE_API_PROXY=1` to connect.
+
+## State
+
+- Done: plan, spec, design spec, task list, schema v2, mock trackmap (validated).
+- Done (Oct 26): repo setup; web scaffold (pnpm workspace, Next 16.4.3, Tailwind 4, strict TS,
+  trackmap types generated from the schema, Ajv validation); engine scaffold; Meta API reference in
+  `SPEC.md` §9.
+- Done (Oct 27): SAM Audio runs on Modal. Passing `visual_ranker=None, text_ranker=None,
+  span_predictor=None` (with the default `strict=True` — **never** `strict=False`, because
+  `SAMAudio.load_state_dict` has `if strict:` with no `else:` branch and silently skips loading
+  `checkpoint.pt`) drops the unused ranker stack at load time: `facebook/sam-audio-small` in `fp32`
+  uses 5.56 GB idle / **14.26 GB peak VRAM** on a 24 GB GPU and separates a 30 s clip in **5.1 s**
+  (12.1 s warm load from the weights Volume).
+- Done (Oct 27): engine implementation — `POST /jobs` (multipart upload ≤ 50 MB, ≤ 6 min, `ffmpeg`
+  trim ≤ 30 s to 48 kHz WAV + MP3, SHA-256 clip id, 720p video copy + 10 fps frames, schema-v2
+  `TrackMap`), `POST /jobs/{id}/isolate` (SAM Audio GPU worker + SHA-256 `(clip, prompt)` cache),
+  `GET /jobs/{id}`, `GET /files/{path}`, CORS, per-IP daily quota, and a daily 7-day cleanup.
+- Done (Oct 28): all five screens implemented against the design spec, with a persistent transport
+  bar, dynamic trackmap loading from Modal, in-browser WAV trimming, canvas waveforms and piano
+  roll, QWERTY + Web MIDI keyboard, the coach tool handler, and zero-dependency `.mid` + `.zip`
+  export.
+- Done (Oct 28): resolved a Modal container crash loop on `api()` caused by FastAPI trying to build
+  Pydantic response models for a `FileResponse | JSONResponse` union; fixed with
+  `response_class=Response`. Verified the deployed chain end to end.
+- Done (Oct 28): isolation sounded weak because of configuration, not the weights:
+  `reranking_candidates=1` returns a single unjudged sample, and the released config leaves
+  `text_ranker=None`, so reranking is a no-op even if candidates are raised. `sam-audio-base` scores
+  below `-small` on music in Meta's own table and is ruled out.
+- Done (Oct 28): MIDI library unifying Web MIDI, the on-screen keyboard and QWERTY into one note
+  stream aligned to the audio clock, with take recording and a fixture suite.
+- Done (Oct 30): a tap on a video frame goes to SAM 3.1 for masks, the masked region is cropped and
+  named by Muse Spark, and that name drives the fast text separation. Segmentation alone costs about
+  110 s for 270 frames, so the UI shows progress. Tracks are served under `video.tracks`.
+- Done (Oct 30): `/api/coach` accepted live. Muse Spark gets the per-bar score the browser computed
+  plus the notes being learned, and answers through the five fixed tools; every tool call is
+  validated at the boundary. Audio is deliberately not sent.
+- Done (Oct 30): `recipe` accepted live on Baseten. Verified shape: `POST
+  https://inference.baseten.co/v1/chat/completions`, OpenAI chat-completions format, model slug
+  `meta-models/muse-spark-open-1026`. **Muse Spark Open accepts `json_schema` but does not enforce
+  it**, so the reply is validated and retried, never trusted. `n > 1` returns HTTP 400.
+- Done (Oct 30): push-to-talk voice commands run on Muse Voice Transcribe. The endpoint needs a JSON
+  `request` part beside the `audio` part, and it writes numbers as words, so the command parser reads
+  spoken numbers.
+- Open: demo content (an owned 30 s clip with a clear lead, and a 30 s video of a keyboard with a
+  second sound source visible). SAM 3.1 takes MP4/H.264, so anything in another container is
+  transcoded first.
