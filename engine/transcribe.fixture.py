@@ -100,12 +100,31 @@ def _low_register_fixture(directory: Path) -> None:
     assert [note["pitch"] for note in transcription["notes"]] == [40]
 
 
+def _amplitude_gate_fixture() -> None:
+    quiet_cluster = np.asarray([0.04, 0.05, 0.05, 0.06], dtype=np.float64)
+    loud_cluster = np.asarray([0.79, 0.80, 0.80, 0.81], dtype=np.float64)
+    threshold = transcribe._otsu_amplitude_floor(np.concatenate((quiet_cluster, loud_cluster)))
+    assert threshold is not None
+    assert float(quiet_cluster.max()) < threshold < float(loud_cluster.min())
+
+    amplitudes = np.asarray([0.48, 0.49, 0.50, 0.51, 0.52], dtype=np.float64)
+    threshold = transcribe._otsu_amplitude_floor(amplitudes)
+    events: list[transcribe.RawNoteEvent] = [
+        (0.0, DURATION_SECONDS, 60 + index, float(amplitude), None)
+        for index, amplitude in enumerate(amplitudes)
+    ]
+    surviving_events = [event for event in events if threshold is None or event[3] >= threshold]
+    assert threshold is None
+    assert surviving_events == events
+
+
 def main() -> None:
     with tempfile.TemporaryDirectory() as temporary_directory:
         directory = Path(temporary_directory)
         _leakage_fixture(directory)
         _overtone_fixture(directory)
         _low_register_fixture(directory)
+        _amplitude_gate_fixture()
     print("transcribe fixtures passed")
 
 

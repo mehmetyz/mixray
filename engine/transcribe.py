@@ -59,6 +59,9 @@ MIN_BEATS_FOR_EIGHTH_GRID = 2
 # Basic Pitch inference parameters tuned for acoustic accuracy and note-boundary stability.
 BASIC_PITCH_ONSET_THRESHOLD = 0.55
 BASIC_PITCH_FRAME_THRESHOLD = 0.35
+# Basic Pitch 0.4.0's inference API and CLI both document this default in milliseconds.
+BASIC_PITCH_MINIMUM_NOTE_LENGTH_MILLISECONDS = 127.70
+MIN_AMPLITUDES_FOR_OTSU = 2
 
 # Harmonic overtone intervals (+1 octave, +1 octave + fifth, +2 octaves) and suppression ratio.
 HARMONIC_INTERVALS = frozenset({12, 19, 24})
@@ -73,10 +76,6 @@ BAND_FREQUENCY_SAMPLES = 5
 BAND_ENVELOPE_WINDOW_SECONDS = 0.040
 MIN_ENVELOPE_FRAMES = 2
 PCM_16_BIT_BYTES = 2
-
-# Tukey's conventional lower fence identifies only values that are outliers relative to this clip,
-# rather than treating quiet or staccato playing as noise by comparison with another recording.
-LOW_OUTLIER_IQR_MULTIPLIER = 1.5
 
 if TYPE_CHECKING:
     import numpy as np
@@ -370,9 +369,7 @@ def _basic_pitch_events(wav_path: Path) -> list[RawNoteEvent]:
         str(wav_path),
         onset_threshold=BASIC_PITCH_ONSET_THRESHOLD,
         frame_threshold=BASIC_PITCH_FRAME_THRESHOLD,
-        # The clip-adaptive duration outlier rule below, not Basic Pitch's global default, decides
-        # whether a very short event is noise.
-        minimum_note_length=0.0,
+        minimum_note_length=BASIC_PITCH_MINIMUM_NOTE_LENGTH_MILLISECONDS,
     )
     return [
         (float(start), float(end), int(pitch), float(amplitude), pitch_bends)
@@ -394,14 +391,12 @@ def _notes_from_events(
     amplitudes = np.asarray(
         [min(1.0, max(0.0, event[3])) for event in valid_events], dtype=np.float64
     )
-    durations = np.asarray([event[1] - event[0] for event in valid_events], dtype=np.float64)
-    amplitude_floor = _lower_outlier_floor(amplitudes)
-    duration_floor = _lower_outlier_floor(durations)
+    amplitude_floor = _otsu_amplitude_floor(amplitudes)
     candidate_notes: list[Note] = []
     candidate_amplitudes: list[float] = []
     for start, end, pitch, amplitude, _ in valid_events:
         normalized_amplitude = min(1.0, max(0.0, amplitude))
-        if normalized_amplitude < amplitude_floor or (end - start) < duration_floor:
+        if amplitude_floor is not None and normalized_amplitude < amplitude_floor:
             continue
         clamped_pitch = _clamp_midi(pitch)
         candidate_notes.append(
@@ -425,14 +420,52 @@ def _notes_from_events(
     return clean_notes, clean_amplitudes
 
 
-def _lower_outlier_floor(values: FloatArray) -> float:
-    """Find the clip-relative lower Tukey fence for one measured note property."""
+def _otsu_amplitude_floor(amplitudes: FloatArray) -> float | None:
+    """Return an Otsu split between amplitude modes, or no gate for one mode."""
     import numpy as np
 
-    first_quartile, third_quartile = np.percentile(values, (25.0, 75.0))
-    return max(
-        0.0, float(first_quartile - LOW_OUTLIER_IQR_MULTIPLIER * (third_quartile - first_quartile))
+    if amplitudes.size < MIN_AMPLITUDES_FOR_OTSU or float(amplitudes.min()) == float(
+        amplitudes.max()
+    ):
+        return None
+
+    histogram, bin_edges = np.histogram(amplitudes, bins="auto")
+    if histogram.size < MIN_AMPLITUDES_FOR_OTSU:
+        return None
+    bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2.0
+    cumulative_counts = np.cumsum(histogram)
+    cumulative_sums = np.cumsum(histogram * bin_centers)
+    lower_counts = cumulative_counts[:-1]
+    upper_counts = cumulative_counts[-1] - lower_counts
+    valid_splits = (lower_counts > 0) & (upper_counts > 0)
+    if not bool(np.any(valid_splits)):
+        return None
+
+    total_sum = cumulative_sums[-1]
+    lower_means = np.divide(
+        cumulative_sums[:-1],
+        lower_counts,
+        out=np.zeros_like(lower_counts, dtype=np.float64),
+        where=lower_counts > 0,
     )
+    upper_means = np.divide(
+        total_sum - cumulative_sums[:-1],
+        upper_counts,
+        out=np.zeros_like(upper_counts, dtype=np.float64),
+        where=upper_counts > 0,
+    )
+    between_class_variance = lower_counts * upper_counts * (lower_means - upper_means) ** 2
+    between_class_variance[~valid_splits] = 0.0
+    best_split = int(np.argmax(between_class_variance))
+    if between_class_variance[best_split] <= 0.0:
+        return None
+
+    lower_peak = int(histogram[: best_split + 1].max())
+    upper_peak = int(histogram[best_split + 1 :].max())
+    valley_count = min(int(histogram[best_split]), int(histogram[best_split + 1]))
+    if valley_count >= min(lower_peak, upper_peak):
+        return None
+    return float(bin_edges[best_split + 1])
 
 
 def _pitch_range(notes: list[Note]) -> PitchRange:
