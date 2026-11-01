@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
 import type { StemName } from "@/lib/audio/player";
 import { drawWaveformLane } from "@/lib/studio/canvas";
-import { deriveMixPeaks, formatClockSeconds, methodBadgeLabel } from "@/lib/studio/format";
+import { deriveMixPeaks, formatClockSeconds, methodBadgeLabel, methodShortLabel } from "@/lib/studio/format";
 import { useStudio } from "./StudioContext";
 import { useThemeListener } from "./ThemeToggle";
 
@@ -306,7 +306,7 @@ export function WaveformLanes() {
         audible={monitor === "sound" || monitor === "mix"}
         tone="accent"
         showAccentDot
-        badge={selectedIsolation?.method === "demucs" ? "DEMUCS" : "SAM 3.1"}
+        badge={selectedIsolation === undefined ? "SAM" : methodShortLabel(selectedIsolation.method).toUpperCase()}
       />
       <WaveformLaneRow
         title="Rest of mix"

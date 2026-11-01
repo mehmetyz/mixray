@@ -14,10 +14,6 @@ import {
 } from "react";
 import { StemPlayer, type LoopRange, type StemName } from "@/lib/audio/player";
 import { resolvePlayableStems } from "@/lib/studio/demo-audio";
-import {
-  compareStemPitchConfidence,
-  type PitchConfidenceComparison,
-} from "@/lib/studio/fallback-choice";
 import { barRangeToSeconds, matchFallbackStem } from "@/lib/studio/format";
 import type { FallbackStem, Isolation, TrackMap } from "@/lib/trackmap/trackmap.generated";
 
@@ -72,7 +68,6 @@ export type StudioContextValue = {
   selectedIsolation: Isolation | undefined;
   selectedIsolationId: string;
   fallbackAlternative: FallbackStem | null;
-  fallbackComparison: PitchConfidenceComparison | null;
   useDemucsCleaner: boolean;
   isSynthesizedPreview: boolean;
   monitor: StemName;
@@ -150,12 +145,7 @@ export function StudioProvider({ clipId, initialTrackMap, children }: StudioProv
   const [problemBar, setProblemBar] = useState<ProblemBarMark | null>(null);
   const [handFilter, setHandFilter] = useState<HandFilter>("both");
   const [simplifiedBars, setSimplifiedBars] = useState<number[]>([]);
-  const [useDemucsCleaner, setUseDemucsCleaner] = useState<boolean>(() => {
-    const firstIso = trackMap.isolations[0];
-    const firstFallback = matchFallbackStem(firstIso, trackMap.fallback_stems);
-    const firstComp = compareStemPitchConfidence(firstIso, firstFallback, trackMap.isolations);
-    return firstComp?.preferredMethod === "demucs";
-  });
+  const [useDemucsCleaner, setUseDemucsCleaner] = useState<boolean>(false);
   const [isSynthesizedPreview, setIsSynthesizedPreview] = useState<boolean>(false);
   const [coachEntries, setCoachEntries] = useState<CoachActionEntry[]>([]);
 
@@ -176,11 +166,6 @@ export function StudioProvider({ clipId, initialTrackMap, children }: StudioProv
   const fallbackAlternative = useMemo(
     () => matchFallbackStem(selectedIsolation, trackMap.fallback_stems),
     [selectedIsolation, trackMap.fallback_stems],
-  );
-
-  const fallbackComparison = useMemo(
-    () => compareStemPitchConfidence(selectedIsolation, fallbackAlternative, trackMap.isolations),
-    [selectedIsolation, fallbackAlternative, trackMap.isolations],
   );
 
   const effectiveSoundUrl = useMemo(() => {
@@ -211,13 +196,11 @@ export function StudioProvider({ clipId, initialTrackMap, children }: StudioProv
         const targetIso = trackMap.isolations.find((item) => item.id === iso);
         if (targetIso !== undefined) {
           setRequestedIsoId(iso);
-          const targetFallback = matchFallbackStem(targetIso, trackMap.fallback_stems);
-          const comp = compareStemPitchConfidence(targetIso, targetFallback, trackMap.isolations);
-          setUseDemucsCleaner(comp?.preferredMethod === "demucs");
+          setUseDemucsCleaner(false);
         }
       }
     },
-    [trackMap.isolations, trackMap.fallback_stems],
+    [trackMap.isolations],
   );
 
   useEffect(() => {
@@ -286,15 +269,12 @@ export function StudioProvider({ clipId, initialTrackMap, children }: StudioProv
   const selectIsolation = useCallback(
     (isolationId: string) => {
       setRequestedIsoId(isolationId);
-      const targetIso = trackMap.isolations.find((item) => item.id === isolationId);
-      const targetFallback = matchFallbackStem(targetIso, trackMap.fallback_stems);
-      const comp = compareStemPitchConfidence(targetIso, targetFallback, trackMap.isolations);
-      setUseDemucsCleaner(comp?.preferredMethod === "demucs");
+      setUseDemucsCleaner(false);
       if (pathname !== null && pathname.length > 0) {
         router.replace(`${pathname}?iso=${encodeURIComponent(isolationId)}`, { scroll: false });
       }
     },
-    [pathname, router, trackMap.isolations, trackMap.fallback_stems],
+    [pathname, router],
   );
 
   const setMonitor = useCallback((stem: StemName) => {
@@ -415,7 +395,6 @@ export function StudioProvider({ clipId, initialTrackMap, children }: StudioProv
       selectedIsolation,
       selectedIsolationId,
       fallbackAlternative,
-      fallbackComparison,
       useDemucsCleaner,
       isSynthesizedPreview,
       monitor,
@@ -445,7 +424,6 @@ export function StudioProvider({ clipId, initialTrackMap, children }: StudioProv
       selectedIsolation,
       selectedIsolationId,
       fallbackAlternative,
-      fallbackComparison,
       useDemucsCleaner,
       isSynthesizedPreview,
       monitor,

@@ -5,7 +5,7 @@ import { usePathname } from "next/navigation";
 import type { MouseEvent, ReactNode } from "react";
 import type { StemName } from "@/lib/audio/player";
 import type { ClipStepId, NavState } from "@/lib/steps";
-import { formatBarBeat, formatClockSeconds } from "@/lib/studio/format";
+import { formatBarBeat, formatClockSeconds, methodShortLabel } from "@/lib/studio/format";
 import { AppHeader } from "./AppHeader";
 import { useStudio } from "./StudioContext";
 
@@ -277,7 +277,7 @@ export function StudioShell({ children }: StudioShellProps) {
                         <span className="truncate">{iso.label}</span>
                       </div>
                       <span className="mono-num ml-1 shrink-0 rounded-xs bg-bg/60 px-1.5 py-0.5 text-[10px] uppercase text-muted">
-                        {iso.method === "demucs" ? "DEM [1]" : "SAM [1]"}
+                        {`${methodShortLabel(iso.method)} [1]`}
                       </span>
                     </button>
                   );

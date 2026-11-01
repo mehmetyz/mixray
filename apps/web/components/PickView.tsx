@@ -3,15 +3,16 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
-import { startIsolation, waitForJob } from "@/lib/engine/client";
-import type { JobStage } from "@/lib/engine/types";
-import { methodBadgeLabel } from "@/lib/studio/format";
+import { startAreaIsolation, startIsolation, waitForJob } from "@/lib/engine/client";
+import type { Job, JobStage } from "@/lib/engine/types";
+import type { VideoArea } from "@/lib/studio/area";
+import { methodBadgeLabel, methodShortLabel } from "@/lib/studio/format";
 import { useStudio } from "./StudioContext";
 import { TimelineRuler } from "./StudioShell";
 import { VideoMaskStage } from "./VideoMaskStage";
 import { WaveformLanes } from "./WaveformLanes";
 
-const PROGRESS_STAGES: readonly JobStage[] = ["listening", "isolating", "analyzing"];
+const PROGRESS_STAGES: readonly JobStage[] = ["listening", "naming", "isolating", "analyzing"];
 const LIVE_CLIP_ID_RE = /^[0-9a-f]{64}$/;
 
 export function PickView() {
@@ -23,7 +24,6 @@ export function PickView() {
     selectedIsolationId,
     selectIsolation,
     fallbackAlternative,
-    fallbackComparison,
     useDemucsCleaner,
     setUseDemucsCleaner,
     setMonitor,
@@ -41,6 +41,31 @@ export function PickView() {
     (track) => track.isolation_id === selectedIsolationId,
   );
   const activeMaskId = matchedTrack?.id ?? selectedMaskId;
+
+  const runJob = async (firstStage: JobStage, start: () => Promise<Job>) => {
+    setErrorMessage(null);
+    setWorkingStage(firstStage);
+    try {
+      const initialJob = await start();
+      let finalJob = initialJob;
+      if (initialJob.status !== "done") {
+        finalJob = await waitForJob(clipId, {
+          onStage: (job) => setWorkingStage(job.stage),
+        });
+      }
+      router.refresh();
+      if (finalJob.isolationId !== null) {
+        selectIsolation(finalJob.isolationId);
+        setMonitor("sound");
+      }
+    } catch (error: unknown) {
+      setErrorMessage(
+        error instanceof Error ? error.message : "Could not isolate that sound right now.",
+      );
+    } finally {
+      setWorkingStage(null);
+    }
+  };
 
   const runOrSelectPrompt = async (prompt: string, label?: string) => {
     const cleanPrompt = prompt.trim();
@@ -75,27 +100,9 @@ export function PickView() {
       }
     }
 
-    setWorkingStage("isolating");
-    try {
-      const initialJob = await startIsolation({ jobId: clipId, prompt: cleanPrompt, label });
-      let finalJob = initialJob;
-      if (initialJob.status !== "done") {
-        finalJob = await waitForJob(clipId, {
-          onStage: (job) => setWorkingStage(job.stage),
-        });
-      }
-      router.refresh();
-      if (finalJob.isolationId !== null) {
-        selectIsolation(finalJob.isolationId);
-        setMonitor("sound");
-      }
-    } catch (error: unknown) {
-      setErrorMessage(
-        error instanceof Error ? error.message : "Could not isolate that sound right now.",
-      );
-    } finally {
-      setWorkingStage(null);
-    }
+    await runJob("isolating", () =>
+      startIsolation({ jobId: clipId, prompt: cleanPrompt, label }),
+    );
   };
 
   const onPromptSubmit = (event: FormEvent<HTMLFormElement>) => {
@@ -152,6 +159,16 @@ export function PickView() {
             }
             void runOrSelectPrompt(prompt, label);
           }}
+          onSelectArea={
+            trackMap.video === undefined
+              ? undefined
+              : (area: VideoArea, frame: number) => {
+                  void runJob("naming", () =>
+                    startAreaIsolation({ jobId: clipId, area, frame }),
+                  );
+                }
+          }
+          areaBusy={workingStage !== null}
         />
 
         <WaveformLanes />
@@ -326,7 +343,7 @@ export function PickView() {
                       </span>
                     </div>
                     <span className="mono-num ml-2 shrink-0 rounded-full border border-line-2 bg-bg px-2 py-0.5 text-[10px] uppercase text-muted">
-                      {iso.method === "demucs" ? "Demucs" : "SAM"}
+                      {methodShortLabel(iso.method)}
                     </span>
                   </button>
                 );
@@ -356,37 +373,11 @@ export function PickView() {
                   Use Demucs alternative ({fallbackAlternative.name})
                 </span>
                 <span className="block text-xs leading-relaxed text-text-2">
-                  {fallbackComparison?.hasComparison
-                    ? fallbackComparison.reason
-                    : "Standard instrument found from Demucs fallback; switch to hear both versions."}
+                  Switch to hear both versions and keep the one that sounds cleaner.
                 </span>
               </div>
             </label>
 
-            {fallbackComparison?.hasComparison &&
-            fallbackComparison.samConfidence !== null &&
-            fallbackComparison.demucsConfidence !== null ? (
-              <div className="mono-num grid grid-cols-2 gap-2 border-t border-line-2/60 pt-2 text-xs">
-                <div
-                  className={`rounded-card border px-2.5 py-1 text-center ${
-                    fallbackComparison.preferredMethod === "demucs"
-                      ? "border-accent bg-accent/15 font-semibold text-accent"
-                      : "border-line-2 bg-surface text-muted"
-                  }`}
-                >
-                  Demucs: {Math.round(fallbackComparison.demucsConfidence * 100)}%
-                </div>
-                <div
-                  className={`rounded-card border px-2.5 py-1 text-center ${
-                    fallbackComparison.preferredMethod === "sam_audio"
-                      ? "border-accent bg-accent/15 font-semibold text-accent"
-                      : "border-line-2 bg-surface text-muted"
-                  }`}
-                >
-                  SAM: {Math.round(fallbackComparison.samConfidence * 100)}%
-                </div>
-              </div>
-            ) : null}
           </div>
         ) : null}
 

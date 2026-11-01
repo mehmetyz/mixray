@@ -137,8 +137,15 @@ export function barRangeToSeconds(
   };
 }
 
+export function methodShortLabel(method: IsolationMethod): string {
+  if (method === "demucs") return "Demucs";
+  if (method === "unseparated") return "Original";
+  return "SAM";
+}
+
 export function methodBadgeLabel(method: IsolationMethod, useDemucsCleaner: boolean): string {
   if (useDemucsCleaner || method === "demucs") return "DEMUCS STEM";
+  if (method === "unseparated") return "ORIGINAL · SOLO RECORDING";
   if (method === "sam_audio_visual") return "SAM AUDIO · VISUAL (SAM 3.1)";
   return "SAM AUDIO · TEXT PROMPT";
 }
@@ -170,7 +177,7 @@ export function matchFallbackStem(
   if (isolation === undefined || fallbackStems === undefined || fallbackStems.length === 0) {
     return null;
   }
-  if (isolation.method === "demucs") return null;
+  if (isolation.method === "demucs" || isolation.method === "unseparated") return null;
   const kind = inferStemKind(`${isolation.label} ${isolation.prompt}`);
   if (kind === null) return null;
   const found = fallbackStems.find((stem) => stem.name === kind && stem.level >= 0.08);

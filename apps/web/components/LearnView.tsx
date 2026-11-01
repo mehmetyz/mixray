@@ -482,9 +482,9 @@ export function LearnView() {
             {activeNotes.length === 0 ? (
               <div className="pointer-events-none absolute inset-0 flex items-center justify-center p-6 text-center">
                 <div className="rounded-card border border-line-2 bg-surface/90 p-4 shadow-lg backdrop-blur-xs">
-                  <p className="text-xs font-semibold text-text">No melodic notes in this stem</p>
+                  <p className="text-xs font-semibold text-text">No notes for this sound</p>
                   <p className="mt-1 text-[11px] text-muted">
-                    Select another instrument above (e.g. Piano or Lead) to practice melodies on keys.
+                    Mixray writes notes for vocals, bass, guitar and piano. You can still listen to this one.
                   </p>
                 </div>
               </div>
