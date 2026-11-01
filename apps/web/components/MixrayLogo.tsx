@@ -14,9 +14,9 @@ export type MixrayIconProps = SVGProps<SVGSVGElement> & {
  * Mixray Tri-Stem Horizon icon mark.
  *
  * An aerodynamic play symbol (▶) formed by 3 horizontal frequency stems:
- * - Top stem: Treble frequencies (off-white #EAECEF)
+ * - Top stem: Treble frequencies (the theme's text color)
  * - Mid stem: The isolated sound voice extending forward in surgical orange (#FF6A1A)
- * - Bottom stem: Bass frequencies (off-white #EAECEF)
+ * - Bottom stem: Bass frequencies (the theme's text color)
  */
 export function MixrayIcon({
   size = 24,
@@ -25,7 +25,7 @@ export function MixrayIcon({
   ...props
 }: MixrayIconProps) {
   const midColor = variant === "accent" ? "#FF6A1A" : "currentColor";
-  const baseColor = variant === "accent" ? "#EAECEF" : "currentColor";
+  const baseColor = variant === "accent" ? "var(--text)" : "currentColor";
 
   return (
     <svg

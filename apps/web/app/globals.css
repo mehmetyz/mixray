@@ -26,6 +26,7 @@
   --key-white: #e8ebf0;
   --key-white-ink: #111215;
   --key-black: #1b1d24;
+  --key-black-ink: #c4c9d4;
 }
 
 [data-theme="light"] {
@@ -37,7 +38,7 @@
   --line-2: #d3d8e2;
   --control: #bec4d0;
   --inactive: #9ea5b3;
-  --muted-wave: #b8c1cf;
+  --muted-wave: #8b95a7;
 
   --text: #0e1117;
   --text-2: #434a58;
@@ -54,6 +55,7 @@
   --key-white: #ffffff;
   --key-white-ink: #0e1117;
   --key-black: #1a1e26;
+  --key-black-ink: #c4c9d4;
 }
 
 
@@ -83,6 +85,7 @@
   --color-key-white: var(--key-white);
   --color-key-white-ink: var(--key-white-ink);
   --color-key-black: var(--key-black);
+  --color-key-black-ink: var(--key-black-ink);
 
   --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
   --font-mono: var(--font-geist-mono), ui-monospace, monospace;

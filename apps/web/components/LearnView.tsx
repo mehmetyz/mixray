@@ -641,7 +641,7 @@ export function LearnView() {
                       className={`mono-num absolute top-0 z-10 flex h-[60%] w-[4.4%] cursor-pointer select-none touch-none flex-col items-center justify-between rounded-b-icon border py-1 text-[10px] transition ${
                         active
                           ? "border-accent bg-accent font-semibold text-accent-ink shadow-sm"
-                          : "border-control bg-key-black text-text-2 hover:text-text active:bg-accent/40"
+                          : "border-control bg-key-black text-key-black-ink active:bg-accent/40"
                       }`}
                     >
                       <span className="opacity-70 text-[9px]">{sharpKey.shortcut}</span>

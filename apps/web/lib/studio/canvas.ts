@@ -284,9 +284,9 @@ export function drawWaveformLane({
 
     const inGrad = ctx.createLinearGradient(0, centerY - maxAmplitudeHalf, 0, centerY + maxAmplitudeHalf);
     if (isLight) {
-      inGrad.addColorStop(0.0, "rgba(255, 106, 26, 0.45)");
-      inGrad.addColorStop(0.5, "rgba(255, 106, 26, 0.22)");
-      inGrad.addColorStop(1.0, "rgba(255, 106, 26, 0.40)");
+      inGrad.addColorStop(0.0, "rgba(255, 106, 26, 0.85)");
+      inGrad.addColorStop(0.5, "rgba(255, 106, 26, 0.6)");
+      inGrad.addColorStop(1.0, "rgba(255, 106, 26, 0.8)");
     } else {
       inGrad.addColorStop(0.0, "rgba(255, 106, 26, 0.40)");
       inGrad.addColorStop(0.5, "rgba(255, 106, 26, 0.18)");
@@ -309,9 +309,9 @@ export function drawWaveformLane({
 
     const inGrad = ctx.createLinearGradient(0, centerY - maxAmplitudeHalf, 0, centerY + maxAmplitudeHalf);
     if (isLight) {
-      inGrad.addColorStop(0.0, "rgba(100, 116, 139, 0.35)");
-      inGrad.addColorStop(0.5, "rgba(100, 116, 139, 0.18)");
-      inGrad.addColorStop(1.0, "rgba(100, 116, 139, 0.28)");
+      inGrad.addColorStop(0.0, "rgba(71, 85, 105, 0.75)");
+      inGrad.addColorStop(0.5, "rgba(71, 85, 105, 0.5)");
+      inGrad.addColorStop(1.0, "rgba(71, 85, 105, 0.65)");
     } else {
       inGrad.addColorStop(0.0, "rgba(148, 163, 184, 0.32)");
       inGrad.addColorStop(0.5, "rgba(148, 163, 184, 0.14)");
