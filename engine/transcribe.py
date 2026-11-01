@@ -21,6 +21,14 @@ from typing import TYPE_CHECKING, Literal, TypeAlias, TypedDict, TypeGuard
 
 import modal
 
+from fallback import (
+    DEMUCS_MODEL,
+    FALLBACK_DIRECTORY_NAME,
+    STEM_NAMES,
+    StemName,
+    prompt_has_notes,
+    stem_for_prompt,
+)
 from images import basic_pitch_image
 from ingest import DEFAULT_CACHE_PATH, build_served_trackmap, clip_dir, get_cache_root
 
@@ -56,25 +64,39 @@ ROUND_CONFIDENCE = 3
 # Two consecutive detected beats are the minimum evidence needed to derive an eighth-note interval.
 MIN_BEATS_FOR_EIGHTH_GRID = 2
 
-# Basic Pitch inference parameters tuned for acoustic accuracy and note-boundary stability.
-BASIC_PITCH_ONSET_THRESHOLD = 0.55
-BASIC_PITCH_FRAME_THRESHOLD = 0.35
-# Basic Pitch 0.4.0's inference API and CLI both document this default in milliseconds.
-BASIC_PITCH_MINIMUM_NOTE_LENGTH_MILLISECONDS = 127.70
-MIN_AMPLITUDES_FOR_OTSU = 2
+# Basic Pitch 0.4.0 decoder defaults from basic_pitch/inference.py::predict.
+BASIC_PITCH_ONSET_THRESHOLD = 0.50
+BASIC_PITCH_FRAME_THRESHOLD = 0.30
+# Every piano part scored best at 30 ms (average 0.963 versus 0.755 at 127.70 ms) on a curve
+# measured with synthesised evaluation material; this has not been checked against real recordings.
+BASIC_PITCH_MINIMUM_NOTE_LENGTH_MILLISECONDS = 30.0
+# Four of five bass parts scored best at Basic Pitch's 127.70 ms default on that same synthesised
+# evaluation curve. Two real bass recordings since measured 0.745 at 30 ms against 0.729 here, so
+# the two disagree; 0.016 over two cases is too little to move a value, and it stays.
+BASS_BASIC_PITCH_MINIMUM_NOTE_LENGTH_MILLISECONDS = 127.70
+# Guitar is the one class measured on real recordings twice over. Across 180 held-out GuitarSet
+# excerpts with published note labels, Basic Pitch's own 127.70 ms default scored 0.777 against
+# 0.732 at 30 ms and brought the note count from 1.40x the truth down to 1.02x; across the eight
+# real guitar mixtures it scored 0.671 against 0.634. No other class has real note labels to prove
+# a gain with, so the longer gate applies to guitar alone.
+GUITAR_BASIC_PITCH_MINIMUM_NOTE_LENGTH_MILLISECONDS = 127.70
+BASIC_PITCH_MELODIA_TRICK = True
 
-# Harmonic overtone intervals (+1 octave, +1 octave + fifth, +2 octaves) and suppression ratio.
-HARMONIC_INTERVALS = frozenset({12, 19, 24})
-HARMONIC_TIME_TOLERANCE_SECONDS = 0.040
-HARMONIC_AMPLITUDE_RATIO = 0.55
-HARMONIC_ENVELOPE_CORRELATION_MIN = 0.90
+REGISTER_LOWER_PERCENTILE = 10.0
+REGISTER_UPPER_PERCENTILE = 90.0
+REGISTER_PADDING_SEMITONES = 1
+STEM_TRANSCRIPTION_SUFFIX = ".transcription.json"
+
+# Demucs' sixth stem is everything it could not assign, not an instrument, so a note vote that
+# lands there is not evidence of anything.
+LEFTOVER_STEM: StemName = "other"
+ISOLATION_METADATA_FILENAME = "isolation.json"
 
 # A 50-cent half-width is narrow enough to exclude the adjacent semitone while allowing small
 # tuning drift in an isolation. Frequencies inside this band are sampled on a log scale.
 BAND_HALF_WIDTH_CENTS = 50.0
 BAND_FREQUENCY_SAMPLES = 5
 BAND_ENVELOPE_WINDOW_SECONDS = 0.040
-MIN_ENVELOPE_FRAMES = 2
 PCM_16_BIT_BYTES = 2
 
 if TYPE_CHECKING:
@@ -82,9 +104,13 @@ if TYPE_CHECKING:
     from numpy.typing import NDArray
 
     FloatArray: TypeAlias = NDArray[np.float64]
+    StemSamples: TypeAlias = dict[StemName, tuple[FloatArray, int]]
 
 Hand = Literal["right", "left"]
 RawNoteEvent: TypeAlias = tuple[float, float, int, float, list[int] | None]
+FrequencyBounds: TypeAlias = tuple[float, float]
+StemWavPaths: TypeAlias = dict[StemName, Path]
+StemVote: TypeAlias = tuple[list[StemName], StemName]
 
 
 class Note(TypedDict):
@@ -124,6 +150,12 @@ class Transcription(TypedDict):
     arrangements: Arrangements
     pitch_confidence: float
     range: PitchRange
+
+
+class StemTranscriptionCache(TypedDict):
+    """The Basic Pitch note pitches cached beside one Demucs stem."""
+
+    pitches: list[int]
 
 
 class Chord(TypedDict):
@@ -235,7 +267,7 @@ def _read_mono_wav(wav_path: Path) -> tuple[FloatArray, int]:
     return samples.reshape(-1, channels).mean(axis=1), sample_rate
 
 
-def _midi_frequency(pitch: int) -> float:
+def _midi_frequency(pitch: float) -> float:
     """Convert a MIDI note number into its equal-tempered fundamental frequency."""
     return 440.0 * math.pow(2.0, (pitch - 69) / 12.0)
 
@@ -270,7 +302,7 @@ def _band_energy_envelope(
     return np.asarray(energies, dtype=np.float64)
 
 
-def _mean_band_energy(
+def mean_band_energy(
     samples: FloatArray, sample_rate: int, start: float, end: float, pitch: int
 ) -> float:
     """Return the mean narrow-band energy for one candidate note."""
@@ -278,88 +310,12 @@ def _mean_band_energy(
     return float(envelope.mean()) if envelope.size else 0.0
 
 
-def filter_residual_leakage(
-    notes: list[Note], sound_wav_path: Path, rest_wav_path: Path | None = None
-) -> list[Note]:
-    """Drop notes whose fundamental is louder in the isolation residual than in the sound."""
-    residual_path = (
-        rest_wav_path if rest_wav_path is not None else sound_wav_path.parent / "rest.wav"
-    )
-    if not residual_path.is_file():
-        return notes
-
-    sound_samples, sound_rate = _read_mono_wav(sound_wav_path)
-    rest_samples, rest_rate = _read_mono_wav(residual_path)
-    kept_notes: list[Note] = []
-    for note in notes:
-        sound_energy = _mean_band_energy(
-            sound_samples, sound_rate, note["start"], note["end"], note["pitch"]
-        )
-        rest_energy = _mean_band_energy(
-            rest_samples, rest_rate, note["start"], note["end"], note["pitch"]
-        )
-        if rest_energy <= sound_energy:
-            kept_notes.append(note)
-    return kept_notes
-
-
-def _envelopes_track(first: FloatArray, second: FloatArray) -> bool:
-    """Return whether two varying band-energy envelopes share the same temporal shape."""
-    import numpy as np
-
-    if (
-        first.size < MIN_ENVELOPE_FRAMES
-        or second.size < MIN_ENVELOPE_FRAMES
-        or first.size != second.size
-    ):
-        return False
-    first_centered = first - first.mean()
-    second_centered = second - second.mean()
-    first_norm = float(np.linalg.norm(first_centered))
-    second_norm = float(np.linalg.norm(second_centered))
-    if first_norm == 0.0 or second_norm == 0.0:
-        return False
-    correlation = float(np.dot(first_centered, second_centered) / (first_norm * second_norm))
-    return correlation >= HARMONIC_ENVELOPE_CORRELATION_MIN
-
-
-def filter_harmonic_overtones(
-    notes: list[Note],
-    sound_wav_path: Path,
-    time_tolerance: float = HARMONIC_TIME_TOLERANCE_SECONDS,
-    amplitude_ratio: float = HARMONIC_AMPLITUDE_RATIO,
-) -> list[Note]:
-    """Suppress coincident high partials only when their energy envelope tracks the fundamental."""
-    samples, sample_rate = _read_mono_wav(sound_wav_path)
-    suppressed: set[int] = set()
-    for index_h, note_h in enumerate(notes):
-        for index_f, note_f in enumerate(notes):
-            if index_h == index_f:
-                continue
-            interval = note_h["pitch"] - note_f["pitch"]
-            if interval not in HARMONIC_INTERVALS:
-                continue
-            coincident = abs(note_h["start"] - note_f["start"]) <= time_tolerance
-            weaker = note_h["velocity"] <= round(note_f["velocity"] * amplitude_ratio)
-            # Both envelopes cost a narrow-band projection per frame, so they are only measured
-            # once a pair has already passed the cheap interval, onset and level tests.
-            if not (coincident and weaker):
-                continue
-            start = max(note_h["start"], note_f["start"])
-            end = min(note_h["end"], note_f["end"])
-            upper_envelope = _band_energy_envelope(
-                samples, sample_rate, start, end, note_h["pitch"]
-            )
-            fundamental_envelope = _band_energy_envelope(
-                samples, sample_rate, start, end, note_f["pitch"]
-            )
-            if _envelopes_track(upper_envelope, fundamental_envelope):
-                suppressed.add(index_h)
-                break
-    return [note for index, note in enumerate(notes) if index not in suppressed]
-
-
-def _basic_pitch_events(wav_path: Path) -> list[RawNoteEvent]:
+def _basic_pitch_events(
+    wav_path: Path,
+    minimum_frequency: float | None = None,
+    maximum_frequency: float | None = None,
+    minimum_note_length: float = BASIC_PITCH_MINIMUM_NOTE_LENGTH_MILLISECONDS,
+) -> list[RawNoteEvent]:
     """Run the model only after the Modal image has loaded its heavyweight inference runtime."""
     # Basic Pitch 0.4.0 ships no type information, so this targeted suppression is required for
     # mypy's strict mode; its documented `predict` result supplies the tuple below.
@@ -369,7 +325,10 @@ def _basic_pitch_events(wav_path: Path) -> list[RawNoteEvent]:
         str(wav_path),
         onset_threshold=BASIC_PITCH_ONSET_THRESHOLD,
         frame_threshold=BASIC_PITCH_FRAME_THRESHOLD,
-        minimum_note_length=BASIC_PITCH_MINIMUM_NOTE_LENGTH_MILLISECONDS,
+        minimum_note_length=minimum_note_length,
+        minimum_frequency=minimum_frequency,
+        maximum_frequency=maximum_frequency,
+        melodia_trick=BASIC_PITCH_MELODIA_TRICK,
     )
     return [
         (float(start), float(end), int(pitch), float(amplitude), pitch_bends)
@@ -377,27 +336,34 @@ def _basic_pitch_events(wav_path: Path) -> list[RawNoteEvent]:
     ]
 
 
+def _isolation_basic_pitch_events(
+    wav_path: Path,
+    frequency_bounds: FrequencyBounds | None,
+    minimum_note_length: float,
+) -> list[RawNoteEvent]:
+    """Run Basic Pitch on an isolation while retaining any existing stem-derived register bounds."""
+    if frequency_bounds is None:
+        return _basic_pitch_events(wav_path, minimum_note_length=minimum_note_length)
+    return _basic_pitch_events(
+        wav_path,
+        minimum_frequency=frequency_bounds[0],
+        maximum_frequency=frequency_bounds[1],
+        minimum_note_length=minimum_note_length,
+    )
+
+
 def _notes_from_events(
     events: list[RawNoteEvent],
-    sound_wav_path: Path,
 ) -> tuple[list[Note], list[float]]:
-    """Convert Basic Pitch events while removing clip-relative outliers and residual leakage."""
-    import numpy as np
-
+    """Convert valid Basic Pitch events into TrackMap notes and their amplitudes."""
     valid_events = [event for event in events if event[0] >= 0.0 and event[1] > event[0]]
     if not valid_events:
         return [], []
 
-    amplitudes = np.asarray(
-        [min(1.0, max(0.0, event[3])) for event in valid_events], dtype=np.float64
-    )
-    amplitude_floor = _otsu_amplitude_floor(amplitudes)
     candidate_notes: list[Note] = []
     candidate_amplitudes: list[float] = []
     for start, end, pitch, amplitude, _ in valid_events:
         normalized_amplitude = min(1.0, max(0.0, amplitude))
-        if amplitude_floor is not None and normalized_amplitude < amplitude_floor:
-            continue
         clamped_pitch = _clamp_midi(pitch)
         candidate_notes.append(
             {
@@ -409,63 +375,156 @@ def _notes_from_events(
         )
         candidate_amplitudes.append(normalized_amplitude)
 
-    without_leakage = filter_residual_leakage(candidate_notes, sound_wav_path)
-    clean_notes = filter_harmonic_overtones(without_leakage, sound_wav_path)
-    surviving_note_ids = {id(note) for note in clean_notes}
-    clean_amplitudes = [
-        amplitude
-        for note, amplitude in zip(candidate_notes, candidate_amplitudes, strict=True)
-        if id(note) in surviving_note_ids
-    ]
-    return clean_notes, clean_amplitudes
+    return candidate_notes, candidate_amplitudes
 
 
-def _otsu_amplitude_floor(amplitudes: FloatArray) -> float | None:
-    """Return an Otsu split between amplitude modes, or no gate for one mode."""
+def _fallback_stem_paths(wav_path: Path) -> StemWavPaths | None:
+    """Return all six cached Demucs stems, or leave the isolation transcription unchanged."""
+    stem_directory = wav_path.parent.parent.parent / FALLBACK_DIRECTORY_NAME / DEMUCS_MODEL
+    if not stem_directory.is_dir():
+        LOGGER.info(
+            "skipping stem-guided transcription; stem directory is missing: %s", stem_directory
+        )
+        return None
+
+    paths = {stem: stem_directory / f"{stem}.wav" for stem in STEM_NAMES}
+    missing_paths = [path for path in paths.values() if not path.is_file()]
+    if missing_paths:
+        LOGGER.info(
+            "skipping stem-guided transcription; stem file is missing: %s", missing_paths[0]
+        )
+        return None
+    return paths
+
+
+def _isolation_metadata(wav_path: Path) -> dict[str, object] | None:
+    """Read the cached isolation sidecar when it is available."""
+    metadata_path = wav_path.parent / ISOLATION_METADATA_FILENAME
+    if not metadata_path.is_file():
+        LOGGER.info("isolation metadata is missing: %s", metadata_path)
+        return None
+    metadata: object = json.loads(metadata_path.read_text(encoding="utf-8"))
+    if not _is_mapping(metadata):
+        raise ValueError(f"isolation metadata must be an object: {metadata_path}")
+    return metadata
+
+
+def _isolation_prompt(metadata: dict[str, object] | None) -> str | None:
+    """Return the prompt a sound was isolated with."""
+    if metadata is None:
+        return None
+    prompt = metadata.get("prompt")
+    if not isinstance(prompt, str):
+        raise ValueError("isolation metadata prompt must be a string")
+    return prompt
+
+
+def _cached_stem_pitches(stem_wav_path: Path) -> list[int]:
+    """Read or create the per-clip, per-stem Basic Pitch cache used for register bounds."""
+    cache_path = stem_wav_path.with_suffix(STEM_TRANSCRIPTION_SUFFIX)
+    if cache_path.is_file():
+        cached: object = json.loads(cache_path.read_text(encoding="utf-8"))
+        if not _is_mapping(cached):
+            raise ValueError(f"stem transcription cache must be an object: {cache_path}")
+        raw_pitches = cached.get("pitches")
+        if not isinstance(raw_pitches, list):
+            raise ValueError(f"stem transcription cache pitches must be an array: {cache_path}")
+        return [
+            _integer(pitch, f"stem transcription cache pitch at {cache_path}")
+            for pitch in raw_pitches
+        ]
+
+    pitches = [event[2] for event in _basic_pitch_events(stem_wav_path)]
+    payload: StemTranscriptionCache = {"pitches": pitches}
+    cache_path.write_text(json.dumps(payload), encoding="utf-8")
+    return pitches
+
+
+def _stem_frequency_bounds(stem_wav_path: Path) -> FrequencyBounds | None:
+    """Derive a padded 10th--90th percentile register window from one Demucs stem."""
+    pitches = _cached_stem_pitches(stem_wav_path)
+    if not pitches:
+        LOGGER.info(
+            "skipping stem register bounds; stem transcription has no notes: %s", stem_wav_path
+        )
+        return None
+
     import numpy as np
 
-    if amplitudes.size < MIN_AMPLITUDES_FOR_OTSU or float(amplitudes.min()) == float(
-        amplitudes.max()
-    ):
-        return None
-
-    histogram, bin_edges = np.histogram(amplitudes, bins="auto")
-    if histogram.size < MIN_AMPLITUDES_FOR_OTSU:
-        return None
-    bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2.0
-    cumulative_counts = np.cumsum(histogram)
-    cumulative_sums = np.cumsum(histogram * bin_centers)
-    lower_counts = cumulative_counts[:-1]
-    upper_counts = cumulative_counts[-1] - lower_counts
-    valid_splits = (lower_counts > 0) & (upper_counts > 0)
-    if not bool(np.any(valid_splits)):
-        return None
-
-    total_sum = cumulative_sums[-1]
-    lower_means = np.divide(
-        cumulative_sums[:-1],
-        lower_counts,
-        out=np.zeros_like(lower_counts, dtype=np.float64),
-        where=lower_counts > 0,
+    lower_pitch, upper_pitch = np.percentile(
+        np.asarray(pitches, dtype=np.float64),
+        (REGISTER_LOWER_PERCENTILE, REGISTER_UPPER_PERCENTILE),
     )
-    upper_means = np.divide(
-        total_sum - cumulative_sums[:-1],
-        upper_counts,
-        out=np.zeros_like(upper_counts, dtype=np.float64),
-        where=upper_counts > 0,
+    return (
+        _midi_frequency(float(lower_pitch) - REGISTER_PADDING_SEMITONES),
+        _midi_frequency(float(upper_pitch) + REGISTER_PADDING_SEMITONES),
     )
-    between_class_variance = lower_counts * upper_counts * (lower_means - upper_means) ** 2
-    between_class_variance[~valid_splits] = 0.0
-    best_split = int(np.argmax(between_class_variance))
-    if between_class_variance[best_split] <= 0.0:
+
+
+def _isolation_frequency_bounds(wav_path: Path, stem_paths: StemWavPaths) -> FrequencyBounds | None:
+    """Map the isolation prompt to its Demucs stem before deriving decoder bounds."""
+    prompt = _isolation_prompt(_isolation_metadata(wav_path))
+    if prompt is None:
+        return None
+    stem = stem_for_prompt(prompt)
+    if stem is None:
+        LOGGER.info("skipping stem register bounds; prompt has no matching stem: %s", prompt)
+        return None
+    return _stem_frequency_bounds(stem_paths[stem])
+
+
+def _stem_samples(stem_paths: StemWavPaths) -> StemSamples:
+    """Load every Demucs stem once before measuring the candidate note fundamentals."""
+    return {stem: _read_mono_wav(path) for stem, path in stem_paths.items()}
+
+
+def _notes_for_target_stem(
+    notes: list[Note], winners: list[StemName], target_stem: StemName
+) -> list[Note]:
+    """Keep notes won by the voted stem, retaining all notes if that would empty the part."""
+    kept_notes = [
+        note for note, winner in zip(notes, winners, strict=True) if winner == target_stem
+    ]
+    if kept_notes:
+        return kept_notes
+    LOGGER.info("stem vote for %s would empty the part; keeping unfiltered notes", target_stem)
+    return notes
+
+
+def _majority_stem_vote(notes: list[Note], stem_paths: StemWavPaths) -> StemVote | None:
+    """Return each note's winning stem and the majority stem, if there are notes to vote on."""
+    if not notes:
         return None
 
-    lower_peak = int(histogram[: best_split + 1].max())
-    upper_peak = int(histogram[best_split + 1 :].max())
-    valley_count = min(int(histogram[best_split]), int(histogram[best_split + 1]))
-    if valley_count >= min(lower_peak, upper_peak):
-        return None
-    return float(bin_edges[best_split + 1])
+    samples_by_stem = _stem_samples(stem_paths)
+    winners: list[StemName] = []
+    for note in notes:
+        energies = {
+            stem: mean_band_energy(
+                samples,
+                sample_rate,
+                note["start"],
+                note["end"],
+                note["pitch"],
+            )
+            for stem, (samples, sample_rate) in samples_by_stem.items()
+        }
+        winners.append(max(STEM_NAMES, key=energies.__getitem__))
+    target_stem = max(STEM_NAMES, key=winners.count)
+    return winners, target_stem
+
+
+def _filter_majority_stem_notes(notes: list[Note], stem_vote: StemVote) -> list[Note]:
+    """Keep notes whose fundamental is strongest in the majority-voted stem."""
+    winners, target_stem = stem_vote
+    if target_stem == LEFTOVER_STEM:
+        # Demucs has no stem for a synth lead or a pad, so both land in its leftover bucket. The
+        # vote then carries no evidence about which source a note belongs to, and filtering on it
+        # measured a recall collapse on a detuned lead (0.823 to 0.508) while precision rose to
+        # 1.000 - it was discarding played notes, not leakage.
+        LOGGER.info("stem vote landed on %s, which is a residue rather than a source", target_stem)
+        return notes
+    return _notes_for_target_stem(notes, winners, target_stem)
 
 
 def _pitch_range(notes: list[Note]) -> PitchRange:
@@ -477,7 +536,7 @@ def _pitch_range(notes: list[Note]) -> PitchRange:
 
 
 def _mean_confidence(amplitudes: list[float]) -> float:
-    """Summarise note confidence as the mean of Basic Pitch's per-note amplitudes."""
+    """Summarise transcription confidence as the mean amplitude of the detected notes."""
     if not amplitudes:
         return 0.0
     return round(sum(amplitudes) / len(amplitudes), ROUND_CONFIDENCE)
@@ -537,7 +596,7 @@ def _nearest_grid_time(time: float, grid: list[float]) -> float:
 
 
 def snap_to_eighths(notes: list[Note], beats: list[float]) -> list[Note]:
-    """Snap note bounds to the analysed clip grid and discard collapsed notes."""
+    """Snap note bounds to the analysed clip grid, keeping short notes at grid resolution."""
     grid = _eighth_grid(beats)
     if not grid:
         return []
@@ -546,7 +605,11 @@ def snap_to_eighths(notes: list[Note], beats: list[float]) -> list[Note]:
         start = _nearest_grid_time(note["start"], grid)
         end = _nearest_grid_time(note["end"], grid)
         if end <= start:
-            continue
+            start_index = bisect_right(grid, start)
+            if start_index < len(grid):
+                end = grid[start_index]
+            else:
+                continue
         snapped.append(
             {
                 "start": round(start, ROUND_SECONDS),
@@ -666,6 +729,13 @@ def _intermediate(
     )
 
 
+def _minimum_note_length(prompt: str | None) -> float:
+    """Pick the shortest note the decoder may keep, by the instrument class the prompt names."""
+    if prompt is not None and stem_for_prompt(prompt) == "guitar":
+        return GUITAR_BASIC_PITCH_MINIMUM_NOTE_LENGTH_MILLISECONDS
+    return BASIC_PITCH_MINIMUM_NOTE_LENGTH_MILLISECONDS
+
+
 def transcribe_isolated_sound(
     wav_path: Path,
     trackmap: dict[str, object],
@@ -674,16 +744,59 @@ def transcribe_isolated_sound(
     if not wav_path.is_file():
         raise FileNotFoundError(f"isolated WAV not found: {wav_path}")
 
+    metadata = _isolation_metadata(wav_path)
+    prompt = _isolation_prompt(metadata)
+    unseparated = metadata is not None and metadata.get("method") == "unseparated"
+    # A solo recording is the instrument itself, so its notes hold whatever the prompt called it.
+    if prompt is not None and not unseparated and not prompt_has_notes(prompt):
+        LOGGER.info("no notes claimed for this sound: %s", prompt)
+        return {
+            "notes": [],
+            "pitch_confidence": 0.0,
+            "range": {"low": MIDI_MIN, "high": MIDI_MIN},
+            "arrangements": {"easy": [], "intermediate": []},
+        }
+
     beats = _time_grid(trackmap, "beats")
     downbeats = _time_grid(trackmap, "downbeats")
     chords = _chords(trackmap)
-    notes, amplitudes = _notes_from_events(_basic_pitch_events(wav_path), wav_path)
+    stem_paths = None if unseparated else _fallback_stem_paths(wav_path)
+    frequency_bounds = (
+        _isolation_frequency_bounds(wav_path, stem_paths) if stem_paths is not None else None
+    )
+    minimum_note_length = _minimum_note_length(prompt)
+    events = _isolation_basic_pitch_events(wav_path, frequency_bounds, minimum_note_length)
+    notes, amplitudes = _notes_from_events(events)
+    if stem_paths is not None:
+        stem_vote = _majority_stem_vote(notes, stem_paths)
+        if (
+            stem_vote is not None
+            and stem_vote[1] == "bass"
+            and minimum_note_length != BASS_BASIC_PITCH_MINIMUM_NOTE_LENGTH_MILLISECONDS
+        ):
+            LOGGER.info("rerunning Basic Pitch with bass floor because stem vote selected bass")
+            events = _isolation_basic_pitch_events(
+                wav_path,
+                frequency_bounds,
+                BASS_BASIC_PITCH_MINIMUM_NOTE_LENGTH_MILLISECONDS,
+            )
+            notes, amplitudes = _notes_from_events(events)
+            stem_vote = _majority_stem_vote(notes, stem_paths)
+        if stem_vote is None:
+            filtered_notes = notes
+        else:
+            filtered_notes = _filter_majority_stem_notes(notes, stem_vote)
+        surviving_note_ids = {id(note) for note in filtered_notes}
+        amplitudes = [
+            amplitude
+            for note, amplitude in zip(notes, amplitudes, strict=True)
+            if id(note) in surviving_note_ids
+        ]
+        notes = filtered_notes
     easy = transpose_easy_part(snap_to_eighths(top_voice(notes), beats), downbeats)
     left_hand = left_hand_accompaniment(chords, downbeats, easy)
     return {
         "notes": notes,
-        # Mean Basic Pitch note amplitude is its per-note confidence signal, so it is a useful
-        # quality measure when choosing between the SAM Audio and Demucs isolations.
         "pitch_confidence": _mean_confidence(amplitudes),
         "range": _pitch_range(notes),
         "arrangements": {"easy": easy, "intermediate": _intermediate(easy, left_hand)},

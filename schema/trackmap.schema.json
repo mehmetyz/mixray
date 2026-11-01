@@ -238,7 +238,7 @@
     },
     "isolationMethod": {
       "title": "IsolationMethod",
-      "enum": ["sam_audio_text", "sam_audio_visual", "demucs"]
+      "enum": ["sam_audio_text", "sam_audio_visual", "demucs", "unseparated"]
     },
     "pitchRange": {
       "title": "PitchRange",

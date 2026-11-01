@@ -1,4 +1,4 @@
-"""Local signal fixtures for transcription filters; no model or network is used."""
+"""Local transcription fixtures for stem attribution; no model or network is used."""
 
 from __future__ import annotations
 
@@ -10,10 +10,20 @@ from pathlib import Path
 import numpy as np
 
 import transcribe
+from fallback import STEM_NAMES, StemName
 
 SAMPLE_RATE = 8_000
 DURATION_SECONDS = 0.8
 PCM_SCALE = 32767.0
+EXPECTED_PITCH_CONFIDENCE = 0.3
+EXPECTED_MINIMUM_NOTE_LENGTH_MILLISECONDS = 30.0
+EXPECTED_BASS_MINIMUM_NOTE_LENGTH_MILLISECONDS = 127.70
+# A quantised eighth lasts 0.25 s at 120 BPM, so a sixteenth-note run is the fastest material the
+# grid has to carry without losing a note.
+SIXTEENTH_RUN_SECONDS = 0.125
+SIXTEENTH_RUN_LENGTH = 16
+BEATS_PER_SIXTEENTH_RUN = 9
+QUARTER_NOTE_SECONDS = 0.5
 
 
 def _tone(frequency: float, amplitude: float, envelope: np.ndarray) -> np.ndarray:
@@ -35,96 +45,311 @@ def _note(pitch: int, velocity: int) -> transcribe.Note:
     return {"start": 0.0, "end": DURATION_SECONDS, "pitch": pitch, "velocity": velocity}
 
 
-def _leakage_fixture(directory: Path) -> None:
-    sample_count = round(SAMPLE_RATE * DURATION_SECONDS)
-    envelope = np.ones(sample_count, dtype=np.float64)
-    loud = _tone(110.0, 0.7, envelope)
-    quiet = _tone(110.0, 0.08, envelope)
-    sound_path = directory / "sound.wav"
-    rest_path = directory / "rest.wav"
-    note = _note(45, 100)
-
-    _write_wav(sound_path, loud)
-    _write_wav(rest_path, quiet)
-    assert transcribe.filter_residual_leakage([note], sound_path, rest_path) == [note]
-
-    _write_wav(sound_path, quiet)
-    _write_wav(rest_path, loud)
-    assert transcribe.filter_residual_leakage([note], sound_path, rest_path) == []
-
-
-def _overtone_fixture(directory: Path) -> None:
-    sample_count = round(SAMPLE_RATE * DURATION_SECONDS)
-    time = np.arange(sample_count, dtype=np.float64) / SAMPLE_RATE
-    c3_envelope = 0.3 + 0.7 * np.sin(2.0 * np.pi * 2.0 * time) ** 2
-    c4_envelope = 0.3 + 0.7 * np.cos(2.0 * np.pi * 2.0 * time) ** 2
-    g3_envelope = 0.3 + 0.7 * np.sin(2.0 * np.pi * 1.5 * time) ** 2
-    d5_envelope = 0.3 + 0.7 * np.cos(2.0 * np.pi * 1.5 * time) ** 2
-    voicing = (
-        _tone(130.8128, 0.7, c3_envelope)
-        + _tone(261.6256, 0.2, c4_envelope)
-        + _tone(195.9977, 0.65, g3_envelope)
-        + _tone(587.3295, 0.2, d5_envelope)
-    )
-    sound_path = directory / "voicing.wav"
-    notes = [_note(48, 120), _note(60, 40), _note(55, 110), _note(74, 40)]
-
-    _write_wav(sound_path, voicing)
-    assert transcribe.filter_harmonic_overtones(notes, sound_path) == notes
+def _trackmap() -> dict[str, object]:
+    return {"beats": [0.0, 0.4, 0.8], "downbeats": [0.0], "chords": []}
 
 
 def _low_register_fixture(directory: Path) -> None:
+    """A missing stem directory must leave a low non-bass-prompted part untouched."""
     sample_count = round(SAMPLE_RATE * DURATION_SECONDS)
     low_directory = directory / "low"
     low_directory.mkdir()
     sound_path = low_directory / "sound.wav"
     _write_wav(sound_path, _tone(82.4069, 0.3, np.ones(sample_count, dtype=np.float64)))
     (low_directory / "isolation.json").write_text(
-        json.dumps({"prompt": "cello", "label": "Cello"}), encoding="utf-8"
+        json.dumps({"prompt": "cello", "label": "Cello", "method": "unseparated"}), encoding="utf-8"
     )
     events: list[transcribe.RawNoteEvent] = [(0.0, DURATION_SECONDS, 40, 0.3, None)]
     original_events = transcribe._basic_pitch_events
-    event_loader_name = "_basic_pitch_events"
 
-    def fixed_events(_: Path) -> list[transcribe.RawNoteEvent]:
+    def fixed_events(
+        wav_path: Path,
+        minimum_frequency: float | None = None,
+        maximum_frequency: float | None = None,
+        minimum_note_length: float = EXPECTED_MINIMUM_NOTE_LENGTH_MILLISECONDS,
+    ) -> list[transcribe.RawNoteEvent]:
+        del wav_path
+        assert minimum_frequency is None
+        assert maximum_frequency is None
+        assert minimum_note_length == EXPECTED_MINIMUM_NOTE_LENGTH_MILLISECONDS
         return events
 
-    setattr(transcribe, event_loader_name, fixed_events)
+    transcribe._basic_pitch_events = fixed_events
     try:
-        transcription = transcribe.transcribe_isolated_sound(
-            sound_path,
-            {"beats": [0.0, 0.4, 0.8], "downbeats": [0.0], "chords": []},
-        )
+        transcription = transcribe.transcribe_isolated_sound(sound_path, _trackmap())
     finally:
-        setattr(transcribe, event_loader_name, original_events)
+        transcribe._basic_pitch_events = original_events
     assert [note["pitch"] for note in transcription["notes"]] == [40]
 
+    # The same word out of a band mix claims no notes: other pitched stems measured only 0.13.
+    (sound_path.parent / "isolation.json").write_text(
+        json.dumps({"prompt": "cello", "label": "Cello", "method": "demucs"}), encoding="utf-8"
+    )
+    assert transcribe.transcribe_isolated_sound(sound_path, _trackmap())["notes"] == []
 
-def _amplitude_gate_fixture() -> None:
-    quiet_cluster = np.asarray([0.04, 0.05, 0.05, 0.06], dtype=np.float64)
-    loud_cluster = np.asarray([0.79, 0.80, 0.80, 0.81], dtype=np.float64)
-    threshold = transcribe._otsu_amplitude_floor(np.concatenate((quiet_cluster, loud_cluster)))
-    assert threshold is not None
-    assert float(quiet_cluster.max()) < threshold < float(loud_cluster.min())
 
-    amplitudes = np.asarray([0.48, 0.49, 0.50, 0.51, 0.52], dtype=np.float64)
-    threshold = transcribe._otsu_amplitude_floor(amplitudes)
-    events: list[transcribe.RawNoteEvent] = [
-        (0.0, DURATION_SECONDS, 60 + index, float(amplitude), None)
-        for index, amplitude in enumerate(amplitudes)
+def _window_envelope(start: float, end: float, sample_count: int) -> np.ndarray:
+    envelope = np.zeros(sample_count, dtype=np.float64)
+    envelope[round(start * SAMPLE_RATE) : round(end * SAMPLE_RATE)] = 1.0
+    return envelope
+
+
+def _majority_stem_fixture(directory: Path) -> None:
+    """The winning stem vote, rather than a piano prompt, selects the returned notes."""
+    sample_count = round(SAMPLE_RATE * DURATION_SECONDS)
+    clip_directory = directory / "clip"
+    isolation_directory = clip_directory / "isolations" / "piano"
+    isolation_directory.mkdir(parents=True)
+    sound_path = isolation_directory / "sound.wav"
+    _write_wav(sound_path, np.zeros(sample_count, dtype=np.float64))
+    (isolation_directory / "isolation.json").write_text(
+        json.dumps({"prompt": "piano chords", "label": "Piano chords"}), encoding="utf-8"
+    )
+
+    stem_directory = clip_directory / "fallback" / "htdemucs_6s"
+    stem_directory.mkdir(parents=True)
+    stem_samples = {stem: np.zeros(sample_count, dtype=np.float64) for stem in STEM_NAMES}
+    candidate_events: list[transcribe.RawNoteEvent] = [
+        (0.0, 0.2, 60, 0.2, None),
+        (0.25, 0.45, 64, 0.4, None),
+        (0.5, 0.7, 67, 0.8, None),
     ]
-    surviving_events = [event for event in events if threshold is None or event[3] >= threshold]
-    assert threshold is None
-    assert surviving_events == events
+    winners: tuple[StemName, ...] = ("vocals", "vocals", "piano")
+    for event, winner in zip(candidate_events, winners, strict=True):
+        start, end, pitch, _, _ = event
+        stem_samples[winner] += _tone(
+            transcribe._midi_frequency(pitch),
+            0.7,
+            _window_envelope(start, end, sample_count),
+        )
+    for stem, samples in stem_samples.items():
+        _write_wav(stem_directory / f"{stem}.wav", samples)
+
+    original_events = transcribe._basic_pitch_events
+    isolation_calls: list[tuple[float | None, float | None, float]] = []
+
+    def fixed_events(
+        wav_path: Path,
+        minimum_frequency: float | None = None,
+        maximum_frequency: float | None = None,
+        minimum_note_length: float = EXPECTED_MINIMUM_NOTE_LENGTH_MILLISECONDS,
+    ) -> list[transcribe.RawNoteEvent]:
+        if wav_path.name == "piano.wav":
+            assert minimum_frequency is None
+            assert maximum_frequency is None
+            assert minimum_note_length == EXPECTED_MINIMUM_NOTE_LENGTH_MILLISECONDS
+            return candidate_events
+        isolation_calls.append((minimum_frequency, maximum_frequency, minimum_note_length))
+        return candidate_events
+
+    transcribe._basic_pitch_events = fixed_events
+    try:
+        transcription = transcribe.transcribe_isolated_sound(sound_path, _trackmap())
+    finally:
+        transcribe._basic_pitch_events = original_events
+
+    assert isolation_calls and all(lower is not None for lower, _, _ in isolation_calls)
+    assert all(upper is not None for _, upper, _ in isolation_calls)
+    assert [floor for _, _, floor in isolation_calls] == [EXPECTED_MINIMUM_NOTE_LENGTH_MILLISECONDS]
+    assert [note["pitch"] for note in transcription["notes"]] == [60, 64]
+    assert transcription["pitch_confidence"] == EXPECTED_PITCH_CONFIDENCE
+    assert (stem_directory / "piano.transcription.json").is_file()
+
+
+def _bass_second_pass_fixture(directory: Path) -> None:
+    """A bass vote reruns Basic Pitch once with its measured note-length floor."""
+    sample_count = round(SAMPLE_RATE * DURATION_SECONDS)
+    clip_directory = directory / "bass-clip"
+    isolation_directory = clip_directory / "isolations" / "bass"
+    isolation_directory.mkdir(parents=True)
+    sound_path = isolation_directory / "sound.wav"
+    _write_wav(sound_path, np.zeros(sample_count, dtype=np.float64))
+
+    stem_directory = clip_directory / "fallback" / "htdemucs_6s"
+    stem_directory.mkdir(parents=True)
+    stem_samples = {stem: np.zeros(sample_count, dtype=np.float64) for stem in STEM_NAMES}
+    candidate_events: list[transcribe.RawNoteEvent] = [
+        (0.0, 0.2, 36, 0.2, None),
+        (0.25, 0.45, 40, 0.4, None),
+        (0.5, 0.7, 43, 0.8, None),
+    ]
+    winners: tuple[StemName, ...] = ("bass", "bass", "piano")
+    for event, winner in zip(candidate_events, winners, strict=True):
+        start, end, pitch, _, _ = event
+        stem_samples[winner] += _tone(
+            transcribe._midi_frequency(pitch),
+            0.7,
+            _window_envelope(start, end, sample_count),
+        )
+    for stem, samples in stem_samples.items():
+        _write_wav(stem_directory / f"{stem}.wav", samples)
+
+    original_events = transcribe._basic_pitch_events
+    isolation_calls: list[float] = []
+
+    def fixed_events(
+        wav_path: Path,
+        minimum_frequency: float | None = None,
+        maximum_frequency: float | None = None,
+        minimum_note_length: float = EXPECTED_MINIMUM_NOTE_LENGTH_MILLISECONDS,
+    ) -> list[transcribe.RawNoteEvent]:
+        assert wav_path == sound_path
+        assert minimum_frequency is None
+        assert maximum_frequency is None
+        isolation_calls.append(minimum_note_length)
+        return candidate_events
+
+    transcribe._basic_pitch_events = fixed_events
+    try:
+        transcription = transcribe.transcribe_isolated_sound(sound_path, _trackmap())
+    finally:
+        transcribe._basic_pitch_events = original_events
+
+    assert isolation_calls == [
+        EXPECTED_MINIMUM_NOTE_LENGTH_MILLISECONDS,
+        EXPECTED_BASS_MINIMUM_NOTE_LENGTH_MILLISECONDS,
+    ]
+    assert [note["pitch"] for note in transcription["notes"]] == [36, 40]
+
+
+def _routing_fixture() -> None:
+    """Prompt routing and the note gate follow the instrument class, not the wording."""
+    from fallback import prompt_has_notes, route_for_prompt, stem_for_prompt
+
+    assert stem_for_prompt("lead electric guitar") == "guitar"
+    assert stem_for_prompt("grand piano") == "piano"
+    assert stem_for_prompt("lead vocals") == "vocals"
+    # `keys` used to reach the piano stem, where a synth part scored 0.005 against 0.135.
+    assert stem_for_prompt("synth keys") == "other"
+    assert stem_for_prompt("organ") == "other"
+    assert stem_for_prompt("cello") == "other"
+    assert stem_for_prompt("supersaw lead") == "other"
+    assert stem_for_prompt("a sound with no instrument in it") is None
+
+    for sound, route, has_notes in (
+        ("lead vocals", "sam_candidates", True),
+        ("bass guitar", "sam_candidates", True),
+        ("acoustic guitar", "sam_candidates", True),
+        ("piano", "demucs", True),
+        ("drums", "demucs", False),
+        ("organ", "demucs", False),
+        ("person talking", "demucs", False),
+        ("car honking", "sam_event", False),
+    ):
+        assert route_for_prompt(sound) == route, sound
+        assert prompt_has_notes(sound) is has_notes, sound
+
+    guitar = transcribe._minimum_note_length("acoustic guitar")
+    assert guitar == transcribe.GUITAR_BASIC_PITCH_MINIMUM_NOTE_LENGTH_MILLISECONDS
+    for prompt in ("lead vocals", "piano", "synthesizer", None):
+        assert (
+            transcribe._minimum_note_length(prompt)
+            == transcribe.BASIC_PITCH_MINIMUM_NOTE_LENGTH_MILLISECONDS
+        )
+
+
+def _confidence_fixture() -> None:
+    """Confidence is the plain mean of note amplitudes, with no ranker score mixed in."""
+    assert transcribe._mean_confidence([0.3, 0.3]) == EXPECTED_PITCH_CONFIDENCE
+    assert transcribe._mean_confidence([]) == 0.0
+
+
+def _drum_prompt_bypass_fixture(directory: Path) -> None:
+    """An unpitched drum prompt skips Basic Pitch and returns empty notes."""
+    sample_count = round(SAMPLE_RATE * DURATION_SECONDS)
+    drum_directory = directory / "drum-clip"
+    drum_directory.mkdir(parents=True)
+    sound_path = drum_directory / "sound.wav"
+    _write_wav(sound_path, np.zeros(sample_count, dtype=np.float64))
+    (drum_directory / "isolation.json").write_text(
+        json.dumps({"prompt": "punchy drum kit", "label": "Drums"}), encoding="utf-8"
+    )
+
+    transcription = transcribe.transcribe_isolated_sound(sound_path, _trackmap())
+    assert transcription["notes"] == []
+    assert transcription["pitch_confidence"] == 0.0
+    assert transcription["range"] == {"low": 0, "high": 0}
+    assert transcription["arrangements"] == {"easy": [], "intermediate": []}
+
+
+def _empty_vote_fixture() -> None:
+    """A vote which would remove every note must preserve the unfiltered part."""
+    notes = [_note(60, 100)]
+    assert transcribe._notes_for_target_stem(notes, ["vocals"], "piano") == notes
+
+
+def _timed_note(pitch: int, start: float, end: float) -> transcribe.Note:
+    return {"start": start, "end": end, "pitch": pitch, "velocity": 80}
+
+
+def _melody_preservation_fixture() -> None:
+    """The arrangement stages reduce polyphony; none of them may delete a played note.
+
+    Each case below was a measured regression: a melody filter that treated any note under a still
+    ringing higher note as accompaniment left one note of five, and a grid deduplication step that
+    kept the higher of two notes on one slot halved every sixteenth-note run.
+    """
+    descending_with_pedal = [
+        _timed_note(72, 0.0, 0.9),
+        _timed_note(69, 0.5, 1.4),
+        _timed_note(67, 1.0, 1.9),
+        _timed_note(64, 1.5, 2.4),
+        _timed_note(60, 2.0, 2.9),
+    ]
+    assert [note["pitch"] for note in transcribe.top_voice(descending_with_pedal)] == [
+        72,
+        69,
+        67,
+        64,
+        60,
+    ]
+
+    dipping_below_the_treble = [
+        _timed_note(72, 0.0, 0.4),
+        _timed_note(74, 0.5, 0.9),
+        _timed_note(55, 1.0, 1.4),
+        _timed_note(52, 1.5, 1.9),
+        _timed_note(76, 2.0, 2.4),
+    ]
+    assert [note["pitch"] for note in transcribe.top_voice(dipping_below_the_treble)] == [
+        72,
+        74,
+        55,
+        52,
+        76,
+    ]
+
+    beats = [index * QUARTER_NOTE_SECONDS for index in range(BEATS_PER_SIXTEENTH_RUN)]
+    run = [
+        _timed_note(
+            60 + index,
+            index * SIXTEENTH_RUN_SECONDS,
+            index * SIXTEENTH_RUN_SECONDS + SIXTEENTH_RUN_SECONDS,
+        )
+        for index in range(SIXTEENTH_RUN_LENGTH)
+    ]
+    assert len(transcribe.snap_to_eighths(run, beats)) == SIXTEENTH_RUN_LENGTH
 
 
 def main() -> None:
+    assert (
+        transcribe.BASIC_PITCH_MINIMUM_NOTE_LENGTH_MILLISECONDS
+        == EXPECTED_MINIMUM_NOTE_LENGTH_MILLISECONDS
+    )
+    assert (
+        transcribe.BASS_BASIC_PITCH_MINIMUM_NOTE_LENGTH_MILLISECONDS
+        == EXPECTED_BASS_MINIMUM_NOTE_LENGTH_MILLISECONDS
+    )
     with tempfile.TemporaryDirectory() as temporary_directory:
         directory = Path(temporary_directory)
-        _leakage_fixture(directory)
-        _overtone_fixture(directory)
         _low_register_fixture(directory)
-        _amplitude_gate_fixture()
+        _majority_stem_fixture(directory)
+        _bass_second_pass_fixture(directory)
+        _drum_prompt_bypass_fixture(directory)
+    _routing_fixture()
+    _confidence_fixture()
+    _empty_vote_fixture()
+    _melody_preservation_fixture()
     print("transcribe fixtures passed")
 
 

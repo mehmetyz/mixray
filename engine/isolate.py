@@ -1,11 +1,11 @@
 """SAM Audio: pull one named sound out of a clip and leave everything else behind.
 
-`run_isolation` separates a named sound from a cached clip; `run_visual_isolation` does the same
-for a sound the user pointed at in the video, using the name the tap resolved to.
+`run_isolation` separates a named sound from a cached clip, whether the name was typed, suggested,
+or given by Muse Spark to an area drawn on the video.
 """
 
 import logging
-import subprocess
+import math
 import time
 import wave
 from pathlib import Path
@@ -29,7 +29,6 @@ if TYPE_CHECKING:
     from sam_audio import Batch, SAMAudio, SAMAudioProcessor
     from sam_audio.ranking.ranker import Ranker
 
-    from track import TrackResult
 
 LOGGER = logging.getLogger(__name__)
 
@@ -37,23 +36,30 @@ LOGGER = logging.getLogger(__name__)
 WEIGHTS_VOLUME = modal.Volume.from_name("mixray-weights", create_if_missing=True)
 WEIGHTS_PATH = "/weights"
 HF_SECRET = modal.Secret.from_name("mixray-hf")
-# A list is a fallback order: Modal takes the first type with free capacity. L4 and A10G both
-# have the 24 GB this model needs, so waiting for a specific one only adds queue time.
-ISOLATION_GPU = ["L4", "A10G"]
+# With the span predictor resident, one draw of `sam-audio-large` measured 28.13 GiB of peak VRAM.
+ISOLATION_GPU = ["A100-40GB"]
 
-DEFAULT_MODEL_ID = "facebook/sam-audio-small"
-# One unjudged draw measured +8.02, -0.16 and +8.20 dB on the same clip and prompt; two extra
-# sequential draws cost about 10 s with no extra VRAM.
-ISOLATION_CANDIDATES = 3
-
-# Passing the rankers and span predictor as None keeps ImageBind (~4.5 GB), CLAP (~1.9 GB), Judge,
-# and PE-A-Frame from being built or downloaded. They are only used when reranking_candidates > 1
-# or predict_spans=True. Do NOT pass `strict=False`: `SAMAudio.load_state_dict`
-# (`sam_audio/model/model.py` line 359) has `if strict:` with no `else:` branch, so `strict=False`
-# silently skips loading `checkpoint.pt` and leaves the entire model randomly initialized. With the
-# default `strict=True`, `SAMAudio.load_state_dict` loads `checkpoint.pt` via
-# `super().load_state_dict(..., strict=False)` and filters the rankers out of `missing_keys`.
-RANKERS_OFF = {"visual_ranker": None, "text_ranker": None, "span_predictor": None}
+# Meta's own subjective table puts large above small on music (4.22 vs 4.11), on professional
+# instrument separation (4.49 vs 4.24) and in the wild (3.66 vs 3.56); base is worse than small on
+# music and is not a candidate.
+DEFAULT_MODEL_ID = "facebook/sam-audio-large"
+# Meta's paper uses eight candidates. On ten unseen targets one unranked draw scored note agreement
+# 0.281 and the Judge's pick of eight scored 0.479, so a single draw is only for sounds with no
+# notes.
+INSTRUMENT_DRAWS = 8
+EVENT_DRAWS = 1
+# A prompt for an absent sound returned about -62 dB in three of three controls, while 21 of 22
+# present events stayed above -21 dB. The one below this bar was a failed output with SI-SDR
+# improvement -62 dB.
+ABSENT_OUTPUT_LEVEL_DB = -40.0
+# Judge splits draws into two groups: empty ones near 1, real ones above 3.9 (48 draws, 6 sounds).
+MIN_CANDIDATE_SCORE = 2.0
+# Dropping the two built-in rankers keeps ImageBind and CLAP from being built: candidates are drawn
+# one at a time and ranked by Judge, which holds VRAM flat. The span predictor stays, because it
+# took car horn from -14.6 to +19.2 dB. Do NOT pass `strict=False`: `SAMAudio.load_state_dict`
+# (`sam_audio/model/model.py`) has `if strict:` with no `else:` branch, so `strict=False` silently
+# skips loading `checkpoint.pt` and leaves the entire model randomly initialized.
+BUILT_IN_RANKERS_OFF = {"visual_ranker": None, "text_ranker": None}
 
 
 def _save_pcm16_wav(path: Path, waveform: "torch.Tensor", sample_rate: int) -> None:
@@ -76,11 +82,60 @@ def _save_pcm16_wav(path: Path, waveform: "torch.Tensor", sample_rate: int) -> N
         wav_file.writeframes(pcm)
 
 
+NORMALIZATION_TARGET_PEAK = 0.891
+MINIMUM_NORMALIZATION_PEAK = 0.010
+
+
 def _rms(waveform: "torch.Tensor") -> float:
     return float(waveform.pow(2).mean().sqrt())
 
 
-def _cached_isolation(
+def _normalize_tensor(waveform: "torch.Tensor") -> "torch.Tensor":
+    """Scale a non-silent waveform to -1.0 dBFS peak so it plays at full master volume."""
+    peak = float(waveform.abs().max().item())
+    if peak > MINIMUM_NORMALIZATION_PEAK:
+        return waveform * (NORMALIZATION_TARGET_PEAK / peak)
+    return waveform
+
+
+class CandidatesRejectedError(Exception):
+    """Every SAM Audio draw came back empty, though Demucs found the sound in the clip."""
+
+
+class SoundNotFoundError(Exception):
+    """The requested sound is not audible in this clip, so there is nothing to isolate."""
+
+
+def _pick_candidate(
+    candidates: list["torch.Tensor"],
+    *,
+    mix: "torch.Tensor",
+    prompt: str,
+    ranker: "Ranker",
+    sample_rate: int,
+) -> tuple[int, float]:
+    """Return the draw Judge scores highest for this prompt against this mix, and its score."""
+    import torch
+
+    shared = min(int(mix.shape[-1]), *(int(candidate.shape[-1]) for candidate in candidates))
+    source = mix[:shared].unsqueeze(0)
+    # Scored one at a time: eight candidates in one Judge batch ran a 40 GB card out of memory.
+    torch.cuda.empty_cache()
+    values: list[float] = []
+    for candidate in candidates:
+        scores = ranker(
+            input_audio=[source],
+            extracted_audio=[candidate[:shared].unsqueeze(0).to(source.device)],
+            descriptions=[prompt],
+            sample_rate=sample_rate,
+        )
+        values.append(float(scores[0].detach().float().cpu().reshape(-1)[0]))
+    LOGGER.info("candidate scores for %s: %s", prompt, values)
+    best = max(range(len(values)), key=values.__getitem__)
+    return best, values[best]
+
+
+def cached_isolation(
     clip_id: str, iso_id: str, cache_root: Path
 ) -> tuple[Path, Path, str, IsolationEntry | None]:
     """Return the isolation cache paths and restore the job when its entry already exists."""
@@ -111,7 +166,7 @@ def _cached_isolation(
 
 # The arguments are one cohesive act of persistence and every heavy one is keyword-only, so
 # naming them beats bundling them into a record that exists only to satisfy the count.
-def _persist_isolation(  # noqa: PLR0913
+def persist_isolation(  # noqa: PLR0913
     clip_id: str,
     iso_id: str,
     *,
@@ -120,21 +175,22 @@ def _persist_isolation(  # noqa: PLR0913
     method: IsolationMethod,
     sound: "torch.Tensor",
     rest: "torch.Tensor",
-    processor: "SAMAudioProcessor",
+    sample_rate: int,
     cache_root: Path,
     iso_dir: Path,
     cached_json: Path,
     trackmap_url: str,
 ) -> IsolationEntry:
-    """Write one completed SAM Audio result using the shared isolation sidecar format."""
+    """Write one completed separation using the shared isolation sidecar format."""
     import json
 
     iso_dir.mkdir(parents=True, exist_ok=True)
-    sample_rate = int(processor.audio_sampling_rate)
     sound_wav = iso_dir / "sound.wav"
     rest_wav = iso_dir / "rest.wav"
-    _save_pcm16_wav(sound_wav, sound, sample_rate)
-    _save_pcm16_wav(rest_wav, rest, sample_rate)
+    norm_sound = _normalize_tensor(sound)
+    norm_rest = _normalize_tensor(rest)
+    _save_pcm16_wav(sound_wav, norm_sound, sample_rate)
+    _save_pcm16_wav(rest_wav, norm_rest, sample_rate)
     encode_mp3(sound_wav, iso_dir / "sound.mp3")
     encode_mp3(rest_wav, iso_dir / "rest.mp3")
 
@@ -192,76 +248,56 @@ def _separate_and_persist(  # noqa: PLR0913
     method: IsolationMethod,
     batch: "Batch",
     model: "SAMAudio",
-    processor: "SAMAudioProcessor",
-    text_ranker: "Ranker",
+    ranker: "Ranker",
+    draws: int,
     cache_root: Path,
     iso_dir: Path,
     cached_json: Path,
     trackmap_url: str,
 ) -> IsolationEntry:
-    """Draw, rank, and persist the best SAM Audio candidate for one prepared batch."""
-    import json
-
+    """Draw SAM Audio separations with span prediction, keep the best, and persist it."""
     import torch
 
-    candidate_sounds: list[torch.Tensor] = []
-    candidate_rests: list[torch.Tensor] = []
-    candidate_seconds: list[float] = []
+    sounds: list[torch.Tensor] = []
+    rests: list[torch.Tensor] = []
+    started = time.perf_counter()
     with torch.inference_mode():
-        for _ in range(ISOLATION_CANDIDATES):
-            started = time.perf_counter()
-            separation = model.separate(batch, predict_spans=False, reranking_candidates=1)
-            candidate_seconds.append(time.perf_counter() - started)
-            target_item = (
-                separation.target[0] if isinstance(separation.target, list) else separation.target
-            )
-            residual_item = (
-                separation.residual[0]
-                if isinstance(separation.residual, list)
-                else separation.residual
-            )
-            candidate_sounds.append(target_item)
-            candidate_rests.append(residual_item)
+        for _ in range(draws):
+            separation = model.separate(batch, predict_spans=True, reranking_candidates=1)
+            # Kept off the GPU, so the draws do not pile up against Judge's own memory.
+            sounds.append(separation.target[0].detach().float().cpu())
+            rests.append(separation.residual[0].detach().float().cpu())
+    LOGGER.info(
+        "drew %d for %s (%s) in %.2fs", draws, clip_id, prompt, time.perf_counter() - started
+    )
 
+    sample_rate = int(model.audio_codec.sample_rate)
     sizes = model.audio_codec.feature_idx_to_wav_idx(batch.sizes)
-    input_audio = [
-        audio[:, :size].expand(ISOLATION_CANDIDATES, -1)
-        for audio, size in zip(batch.audios, sizes, strict=False)
-    ]
-    scores = text_ranker(
-        extracted_audio=[torch.stack(candidate_sounds)],
-        input_audio=input_audio,
-        descriptions=[prompt],
-        sample_rate=model.audio_codec.sample_rate,
-    )
-    chosen_index = int(scores.argmax(dim=1)[0].item())
-    candidate_scores = [float(score) for score in scores[0].detach().float().cpu().tolist()]
-    for index, (score, seconds) in enumerate(zip(candidate_scores, candidate_seconds, strict=True)):
-        LOGGER.info("isolation candidate index=%d score=%.5f seconds=%.2f", index, score, seconds)
-
-    iso_dir.mkdir(parents=True, exist_ok=True)
-    candidates_path = iso_dir / "candidates.json"
-    candidates_path.write_text(
-        json.dumps(
-            {
-                "chosen_index": chosen_index,
-                "scores": candidate_scores,
-                "seconds": candidate_seconds,
-            }
-        ),
-        encoding="utf-8",
-    )
-    sound = candidate_sounds[chosen_index].detach().float().cpu()
-    rest = candidate_rests[chosen_index].detach().float().cpu()
-    return _persist_isolation(
+    # SAM Audio returns mono candidates, so the mix is downmixed rather than flattened: flattening
+    # a multi-channel tensor would interleave the channels into noise.
+    mix = batch.audios[0][:, : sizes[0]].detach().mean(dim=0)
+    chosen = 0
+    if draws > 1:
+        with torch.inference_mode():
+            chosen, score = _pick_candidate(
+                sounds, mix=mix, prompt=prompt, ranker=ranker, sample_rate=sample_rate
+            )
+        if score < MIN_CANDIDATE_SCORE:
+            raise CandidatesRejectedError(prompt)
+    sound = sounds[chosen]
+    level = 20.0 * math.log10(max(_rms(sound), 1e-12) / max(_rms(mix.float().cpu()), 1e-12))
+    if level < ABSENT_OUTPUT_LEVEL_DB:
+        LOGGER.info("output sits %.1f dB under the mix for %s (%s)", level, clip_id, prompt)
+        raise SoundNotFoundError(prompt)
+    return persist_isolation(
         clip_id,
         iso_id,
         label=label,
         prompt=prompt,
         method=method,
         sound=sound,
-        rest=rest,
-        processor=processor,
+        rest=rests[chosen],
+        sample_rate=sample_rate,
         cache_root=cache_root,
         iso_dir=iso_dir,
         cached_json=cached_json,
@@ -279,12 +315,13 @@ def run_isolation(  # noqa: PLR0913
     *,
     model: "SAMAudio",
     processor: "SAMAudioProcessor",
-    text_ranker: "Ranker",
+    ranker: "Ranker",
+    draws: int,
     cache_root: Path | None = None,
 ) -> IsolationEntry:
     """Separate `prompt` from `clip_id` with SAM Audio and persist sound, rest, and peaks."""
     root = cache_root if cache_root is not None else get_cache_root()
-    iso_dir, cached_json, trackmap_url, cached = _cached_isolation(clip_id, iso_id, root)
+    iso_dir, cached_json, trackmap_url, cached = cached_isolation(clip_id, iso_id, root)
     if cached is not None:
         return cached
 
@@ -298,128 +335,10 @@ def run_isolation(  # noqa: PLR0913
         method="sam_audio_text",
         batch=batch,
         model=model,
-        processor=processor,
-        text_ranker=text_ranker,
+        ranker=ranker,
+        draws=draws,
         cache_root=root,
         iso_dir=iso_dir,
         cached_json=cached_json,
         trackmap_url=trackmap_url,
     )
-
-
-def _clip_video_size(directory: Path) -> tuple[int, int]:
-    """Read the pixel dimensions used when SAM 3.1 received this clip."""
-    import json
-
-    metadata = json.loads((directory / "trackmap.json").read_text(encoding="utf-8"))
-    if not isinstance(metadata, dict):
-        raise RuntimeError("clip trackmap is not an object")
-    video = metadata.get("video")
-    if not isinstance(video, dict):
-        raise RuntimeError("visual isolation requires a video clip")
-    width, height = video.get("width"), video.get("height")
-    if isinstance(width, bool) or not isinstance(width, int) or width <= 0:
-        raise RuntimeError("clip video width is invalid")
-    if isinstance(height, bool) or not isinstance(height, int) or height <= 0:
-        raise RuntimeError("clip video height is invalid")
-    return width, height
-
-
-def _video_frames(video_path: Path, width: int, height: int) -> "torch.Tensor":
-    """Decode the same 10 fps RGB frames that SAM 3.1 saw into uint8 NCHW form."""
-    import torch
-
-    completed = subprocess.run(
-        [
-            "ffmpeg",
-            "-v",
-            "error",
-            "-i",
-            str(video_path),
-            "-f",
-            "rawvideo",
-            "-pix_fmt",
-            "rgb24",
-            "pipe:1",
-        ],
-        check=True,
-        capture_output=True,
-    )
-    frame_size = width * height * 3
-    if not completed.stdout or len(completed.stdout) % frame_size != 0:
-        raise RuntimeError("decoded video frames do not match the clip dimensions")
-    return (
-        torch.frombuffer(bytearray(completed.stdout), dtype=torch.uint8)
-        .reshape(-1, height, width, 3)
-        .permute(0, 3, 1, 2)
-        .contiguous()
-    )
-
-
-# Same shape as `run_isolation`, deliberately: the two differ only in how the target is named.
-def run_visual_isolation(  # noqa: PLR0913
-    clip_id: str,
-    iso_id: str,
-    track: "TrackResult",
-    *,
-    model: "SAMAudio",
-    processor: "SAMAudioProcessor",
-    text_ranker: "Ranker",
-    cache_root: Path | None = None,
-) -> IsolationEntry:
-    """Separate a tracked object with its SAM 3.1 raster mask as a SAM Audio visual prompt."""
-    from track import track_mask_tensor
-
-    root = cache_root if cache_root is not None else get_cache_root()
-    iso_dir, cached_json, trackmap_url, cached = _cached_isolation(clip_id, iso_id, root)
-    if cached is not None:
-        return cached
-
-    directory = clip_dir(clip_id, root)
-    width, height = _clip_video_size(directory)
-    segment_input = directory / "segment_input.mp4"
-    if not segment_input.is_file():
-        raise FileNotFoundError(f"clip {clip_id} has no segmented video: {segment_input}")
-    frames = _video_frames(segment_input, width, height)
-    masks = track_mask_tensor(track, int(frames.shape[0]), width, height)
-    masked_videos = processor.mask_videos([frames], [masks])
-    mix_wav = directory / "mix.wav"
-    batch = processor(audios=[str(mix_wav)], descriptions=[""], masked_videos=masked_videos).to(
-        "cuda"
-    )
-    return _separate_and_persist(
-        clip_id,
-        iso_id,
-        label=track["label"],
-        prompt=track["prompt"],
-        method="sam_audio_visual",
-        batch=batch,
-        model=model,
-        processor=processor,
-        text_ranker=text_ranker,
-        cache_root=root,
-        iso_dir=iso_dir,
-        cached_json=cached_json,
-        trackmap_url=trackmap_url,
-    )
-
-
-# The README calls `predict_spans=True` with `reranking_candidates=8` "better results at the cost
-# of latency and memory", and the subjective scores it publishes put `sam-audio-base` *below*
-# `-small` on music (3.87 vs 4.11), so candidate reranking is the lever worth measuring, not model
-# size. The ladder climbs so an out-of-memory failure at the top still leaves every cheaper rung
-# measured: each candidate runs the ODE on its own copy of the clip.
-QUALITY_LADDER: list[tuple[bool, int]] = [(False, 1), (True, 1), (True, 2), (True, 4), (True, 8)]
-
-
-# Four performers in the test clip, as (label, text prompt, x, y, width, height) on a 448x252 frame:
-# a violinist, a cellist, a pianist and a singer, each clearly separated in the picture. The boxes
-# were checked against a rendered frame before use.
-# (label, text prompt, x, y, width, height)
-VisualTarget = tuple[str, str, int, int, int, int]
-VISUAL_TARGETS: list[VisualTarget] = [
-    ("violin", "violin", 7, 60, 60, 170),
-    ("cello", "cello", 75, 85, 80, 125),
-    ("piano", "piano", 180, 90, 70, 110),
-    ("voice", "woman singing", 340, 60, 62, 175),
-]

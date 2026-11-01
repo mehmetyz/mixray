@@ -25,7 +25,6 @@ HUGGINGFACE_HUB_PIN = "huggingface_hub==0.36.2"
 # 3.x-compatible code, so the old `_pb2.py` files in the audio stack keep working. The only thing
 # that wanted `<3.20` is tensorboard logging during training, which we never run.
 PROTOBUF_PIN = "protobuf==3.20.3"
-SAM_PARSER_PIN = "meta-sam-parser==0.1.0"
 
 
 # Every container that runs a function declared in `app.py` has to import `app.py`, so it needs
@@ -73,10 +72,6 @@ sam_audio_image = (
     )
     .pip_install(_git_spec("sam-audio", "facebookresearch/sam-audio", SAM_AUDIO_COMMIT))
     .pip_install(NUMPY_PIN, TRANSFORMERS_PIN, HUGGINGFACE_HUB_PIN, PROTOBUF_PIN)
-    # `track` decodes SAM 3.1 masks here too, and this image cannot use `uv_sync` because the audio
-    # stack pins its own conflicting chain, so the parser is pinned again rather than inherited.
-    # Keep this version in step with the one in pyproject.toml.
-    .pip_install(SAM_PARSER_PIN)
     .add_local_python_source(*LOCAL_SOURCES)
 )
 

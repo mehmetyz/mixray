@@ -10,7 +10,7 @@ export type Tonic = "C" | "C#" | "D" | "D#" | "E" | "F" | "F#" | "G" | "G#" | "A
 export type KeyMode = "major" | "minor";
 export type SectionLabel =
   "intro" | "verse" | "build" | "drop" | "breakdown" | "chorus" | "bridge" | "outro" | "section";
-export type IsolationMethod = "sam_audio_text" | "sam_audio_visual" | "demucs";
+export type IsolationMethod = "sam_audio_text" | "sam_audio_visual" | "demucs" | "unseparated";
 export type Hand = "right" | "left";
 export type StemName = "vocals" | "drums" | "bass" | "guitar" | "piano" | "other";
 /**

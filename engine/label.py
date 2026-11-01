@@ -1,7 +1,7 @@
 """Name the prominent sound source in a selected video region for SAM Audio.
 
-Visual masks make a useful tap overlay, but using them directly as an audio-separation prompt is
-slow and lets nearby sources leak through. This module crops the selected region, asks Muse Spark
+Visual masks make a useful overlay, but using them directly as an audio-separation prompt is slow
+and lets nearby sources leak through. This module crops the selected region, asks Muse Spark
 what it shows, and turns that answer into the concise text prompt SAM Audio separates well.
 """
 

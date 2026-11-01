@@ -59,7 +59,7 @@ JobStage = Literal[
     "done",
     "error",
 ]
-IsolationMethod = Literal["sam_audio_text", "sam_audio_visual", "demucs"]
+IsolationMethod = Literal["sam_audio_text", "sam_audio_visual", "demucs", "unseparated"]
 
 
 class IngestError(ValueError):
@@ -204,10 +204,17 @@ def job_file(clip_id: str, cache_root: Path | None = None) -> Path:
     return jobs_dir / f"{clip_id}.json"
 
 
+# Part of the isolation cache key, bumped whenever separation or candidate ranking changes. The
+# clip id is a hash of the audio, so without this a cache hit serves the previous algorithm's
+# result for the same clip and prompt, and a re-run reads as a no-op improvement.
+ISOLATION_ALGORITHM_VERSION = 6
+
+
 def isolation_id_for(clip_id: str, prompt: str) -> str:
-    """Compute a deterministic 16-hex-char isolation ID from clip ID and prompt."""
+    """Compute a deterministic 16-hex-char isolation ID from clip ID, prompt and algorithm."""
     normalized = " ".join(prompt.strip().lower().split())
-    digest = hashlib.sha256(f"{clip_id}:{normalized}".encode()).hexdigest()
+    key = f"v{ISOLATION_ALGORITHM_VERSION}:{clip_id}:{normalized}"
+    digest = hashlib.sha256(key.encode()).hexdigest()
     return digest[:HASH_PREFIX_LEN]
 
 

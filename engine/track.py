@@ -1,9 +1,8 @@
-"""Turn a tap on a video frame into the masks that tell SAM Audio which sound to isolate.
+"""Name an area drawn on a video frame, and follow it through the clip when the UI asks.
 
 SAM 3.1 segments pixels and produces no audio at all; SAM Audio separates audio and cannot be
-pointed at anything on screen. This is the join between them: a point prompt goes to SAM 3.1, the
-masks it returns come back here as polygons for the UI and as a raster for SAM Audio's visual
-prompt.
+pointed at anything on screen. The join between them is a name: Muse Spark names the drawn area, and
+that name drives the separation. SAM 3.1 only runs for the on-demand overlay.
 
 The mask payload is base85 in a variant the docs do not name, so decoding uses Meta's own
 `meta_sam_parser` rather than a guess.
@@ -12,58 +11,47 @@ The mask payload is base85 in a variant the docs do not name, so decoding uses M
 import asyncio
 import json
 import logging
-import math
 import re
 import subprocess
 from collections.abc import AsyncIterator, Iterable, Iterator
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, NotRequired, TypedDict
-
-import modal
+from typing import NotRequired, TypedDict
 
 # `meta_sam_parser` is pure Python with no dependencies, so it costs nothing to import up here and
 # keeping the names at module scope lets the type checker see the record union properly.
 from meta_sam_parser import (
     FramePrompt,
+    PromptBox,
     PromptObject,
-    PromptPoint,
     SegmentationMask,
     SegmentationMaskBounds,
     SegmentationMaskRecord,
     VideoSegmentationResult,
     build_object_prompt,
-    decode_mask_to_raster,
     decode_mask_to_svg_path,
     parse_responses_stream,
     video_segmentation_format,
 )
 
 import meta_api
-from images import web_image
 from ingest import VIDEO_FPS, clip_dir, get_cache_root
-from label import RegionBounds
-
-if TYPE_CHECKING:
-    import torch
+from label import RegionBounds, label_region
 
 LOGGER = logging.getLogger(__name__)
 
-app = modal.App("mixray-track")
-
-CACHE_VOLUME = modal.Volume.from_name("mixray-cache", create_if_missing=True)
-CACHE_PATH = "/cache"
-API_SECRET = modal.Secret.from_name("mixray-secrets")
-
-TRACK_TIMEOUT_SECONDS = 600
 SAM_MODEL = "sam-3.1"
 VIDEO_MEDIA_TYPE = "video/mp4"
 TRACK_OBJECT_ID = 1
 # The wire format carries object ids as text, so records are matched against the string form.
 TRACK_OBJECT_KEY = str(TRACK_OBJECT_ID)
-# Masks propagate from the tapped frame onwards, which is what a user expects after tapping once.
+# Masks propagate from the selected frame onwards.
 PROPAGATION = "forward"
 # A gap longer than this between answered frames ends a visible range rather than being bridged.
 VISIBLE_GAP_SECONDS = 0.5
+# Measured on a 30 s clip: 640 px at 5 fps tracks in 45 s where 1280 px at 10 fps took over 400 s,
+# nearly all of it decoding masks into polygons, with the object's bounds unchanged.
+MASK_FPS = 5
+MASK_WIDTH = 640
 
 
 class FramePolygons(TypedDict):
@@ -74,75 +62,44 @@ class FramePolygons(TypedDict):
     paths: list[str]
 
 
-class StoredMask(TypedDict):
-    """The complete, box-local SAM 3.1 mask needed to reconstruct a raster."""
+class TrackSelection(TypedDict):
+    """The area drawn in stored-video pixels, and the 10 fps frame it was drawn on."""
 
-    encoding: Literal["one_bit", "lossless"]
-    payload: str
-    width: int
-    height: int
-
-
-class StoredMaskBounds(TypedDict):
-    """The half-open source-frame rectangle covered by one stored mask."""
-
-    left: float
-    top: float
-    right: float
-    bottom: float
-
-
-class StoredMaskRecord(TypedDict):
-    """One frame's source mask, retained separately from its UI outline."""
-
+    bounds: RegionBounds
     frame: int
-    mask: StoredMask
-    bounds: StoredMaskBounds
 
 
 class TrackResult(TypedDict):
-    """What one tap produces: an outline per answered frame, and when the object is on screen."""
+    """One named area: an outline per answered frame once followed, and when it is on screen."""
 
     id: str
     label: str
     prompt: str
     frames: list[FramePolygons]
     visible: list[list[float]]
-    masks: list[StoredMaskRecord]
+    selection: TrackSelection
     isolation_id: NotRequired[str]
+    follow_error: NotRequired[str]
 
 
-class LabelTarget(TypedDict):
-    """A visible tracked frame and the full-frame rectangle to name."""
-
-    frame_path: Path
-    bounds: RegionBounds
-
-
-def point_prompt(width: int, height: int, x: int, y: int, frame: int) -> str:
-    """Write the prompt string for a single positive point on one frame.
+def box_prompt(size: tuple[int, int], bounds: RegionBounds, frame: int) -> str:
+    """Write the prompt string for one box on one frame.
 
     Built with Meta's helper rather than by hand: the wire format packs the frame index, the object
     id and the media size into one token, and getting that wrong is silent.
     """
+    box = PromptBox(bounds["left"], bounds["top"], bounds["right"], bounds["bottom"])
     return build_object_prompt(
-        size=(width, height),
-        objects=[
-            PromptObject(
-                id=TRACK_OBJECT_ID,
-                prompts=[FramePrompt(frame=frame, points=[PromptPoint(x, y)])],
-            )
-        ],
+        size=size,
+        objects=[PromptObject(id=TRACK_OBJECT_ID, prompts=[FramePrompt(frame=frame, box=box)])],
     )
 
 
-def segmentation_video(source: Path, destination: Path, fps: int = VIDEO_FPS) -> None:
-    """Re-encode the clip at the mask frame rate before segmenting it.
+def segmentation_video(source: Path, destination: Path, size: tuple[int, int]) -> None:
+    """Re-encode the clip at the mask size and frame rate before segmenting it.
 
-    Frame indices in the reply are indices into whatever video was sent, and `build_track` turns
-    them into seconds by dividing by this same rate, so sending the source copy at its own frame
-    rate would stretch every visible range by the ratio between them. Billing is per frame as well,
-    so this is both the correct and the cheaper thing to send.
+    Frame indices and mask pixels in the reply refer to whatever video was sent, so `build_track`
+    converts them back using these same values. Billing is per frame as well.
     """
     argv = [
         "ffmpeg",
@@ -150,7 +107,7 @@ def segmentation_video(source: Path, destination: Path, fps: int = VIDEO_FPS) ->
         "-i",
         str(source),
         "-vf",
-        f"fps={fps}",
+        f"fps={MASK_FPS},scale={size[0]}:{size[1]}",
         "-an",
         "-c:v",
         "libx264",
@@ -226,20 +183,26 @@ def visible_ranges(times: list[float], gap: float = VISIBLE_GAP_SECONDS) -> list
 PATH_COMMAND = re.compile(r"([ML])(-?[\d.]+)\s+(-?[\d.]+)")
 
 
-def to_frame_space(path: str, mask: SegmentationMask, bounds: SegmentationMaskBounds) -> str:
+def to_frame_space(
+    path: str,
+    mask: SegmentationMask,
+    bounds: SegmentationMaskBounds,
+    video_scale: tuple[float, float],
+) -> str:
     """Rewrite a mask-local SVG path in source-frame pixels.
 
     The raster is box-local: its width and height are its own, not the frame's, and `bounds` says
     which part of the frame it covers. Without this the UI would draw every outline bunched into
-    the top-left corner, at the size of the raster rather than of the object.
+    the top-left corner, at the size of the raster rather than of the object. `video_scale` then
+    undoes the downscale of the video that was sent.
     """
     scale_x = (bounds.right - bounds.left) / mask.width if mask.width else 0.0
     scale_y = (bounds.bottom - bounds.top) / mask.height if mask.height else 0.0
 
     def move(match: re.Match[str]) -> str:
         command, raw_x, raw_y = match.group(1), float(match.group(2)), float(match.group(3))
-        x = bounds.left + raw_x * scale_x
-        y = bounds.top + raw_y * scale_y
+        x = (bounds.left + raw_x * scale_x) * video_scale[0]
+        y = (bounds.top + raw_y * scale_y) * video_scale[1]
         return f"{command}{x:.1f} {y:.1f}"
 
     rewritten, count = PATH_COMMAND.subn(move, path)
@@ -248,144 +211,30 @@ def to_frame_space(path: str, mask: SegmentationMask, bounds: SegmentationMaskBo
     return rewritten
 
 
-def _stored_mask_record(record: SegmentationMaskRecord, frame: int) -> StoredMaskRecord:
-    """Keep the parser-owned payload so visual isolation never has to rasterize an SVG outline."""
-    return {
-        "frame": frame,
-        "mask": {
-            "encoding": record.mask.encoding,
-            "payload": record.mask.payload,
-            "width": record.mask.width,
-            "height": record.mask.height,
-        },
-        "bounds": {
-            "left": record.bounds.left,
-            "top": record.bounds.top,
-            "right": record.bounds.right,
-            "bottom": record.bounds.bottom,
-        },
-    }
-
-
-def _place_mask(
-    output: "torch.Tensor", record: StoredMaskRecord, frame_count: int, width: int, height: int
-) -> None:
-    """Set the tracked object to zero in SAM Audio's inverted full-frame mask."""
-    import torch
-    from torch.nn import functional as functions
-
-    frame = record["frame"]
-    if frame < 0 or frame >= frame_count:
-        raise ValueError(f"mask frame {frame} is outside the clip's {frame_count} frames")
-
-    source = record["mask"]
-    bounds = record["bounds"]
-    raster = decode_mask_to_raster(
-        SegmentationMask(
-            encoding=source["encoding"],
-            payload=source["payload"],
-            width=source["width"],
-            height=source["height"],
-        )
-    )
-    expected_size = source["width"] * source["height"]
-    if len(raster) != expected_size:
-        raise RuntimeError("decoded mask size did not match its dimensions")
-
-    left = round(bounds["left"])
-    top = round(bounds["top"])
-    right = round(bounds["right"])
-    bottom = round(bounds["bottom"])
-    placed_width = right - left
-    placed_height = bottom - top
-    if placed_width <= 0 or placed_height <= 0:
-        raise ValueError("mask bounds must cover at least one pixel")
-
-    local = torch.frombuffer(bytearray(raster), dtype=torch.uint8).reshape(
-        source["height"], source["width"]
-    )
-    placed = functions.interpolate(
-        local.unsqueeze(0).unsqueeze(0).to(torch.float32),
-        size=(placed_height, placed_width),
-        mode="nearest",
-    ).to(torch.uint8)[0, 0]
-
-    destination_left = max(0, left)
-    destination_top = max(0, top)
-    destination_right = min(width, right)
-    destination_bottom = min(height, bottom)
-    if destination_left >= destination_right or destination_top >= destination_bottom:
-        return
-
-    source_left = destination_left - left
-    source_top = destination_top - top
-    source_right = source_left + destination_right - destination_left
-    source_bottom = source_top + destination_bottom - destination_top
-    object_pixels = placed[source_top:source_bottom, source_left:source_right].bool()
-    destination = output[
-        frame, :, destination_top:destination_bottom, destination_left:destination_right
-    ]
-    destination.masked_fill_(object_pixels.unsqueeze(0), 0)
-
-
-def track_mask_tensor(
-    track: TrackResult, frame_count: int, width: int, height: int
-) -> "torch.Tensor":
-    """Build the uint8 NCHW mask `SAMAudioProcessor.mask_videos` expects for one track.
-
-    SAM Audio keeps pixels whose corresponding mask value is zero. The SAM 3.1 raster has ones on
-    the object, so the full-frame tensor starts as ones and `_place_mask` clears the object pixels.
-    """
-    import torch
-
-    if frame_count <= 0:
-        raise ValueError("frame_count must be positive")
-    if width <= 0 or height <= 0:
-        raise ValueError("video dimensions must be positive")
-    if not track["masks"]:
-        raise ValueError("track has no SAM 3.1 mask records")
-
-    output = torch.ones((frame_count, 3, height, width), dtype=torch.uint8)
-    for record in track["masks"]:
-        _place_mask(output, record, frame_count, width, height)
-    return output
-
-
 def build_track(
-    result: VideoSegmentationResult, track_id: str, label: str, prompt: str, fps: int = VIDEO_FPS
+    result: VideoSegmentationResult, track: TrackResult, video_scale: tuple[float, float]
 ) -> TrackResult:
-    """Turn the parsed records into polygons per frame plus the spans the object is on screen."""
+    """Add the polygons per frame and the spans the object is on screen to a named track."""
     by_frame: dict[int, list[str]] = {}
-    masks: list[StoredMaskRecord] = []
     for record in _mask_records(result):
         # `frame` is a FrameReference, and an image result carries none at all.
         if record.frame is None:
             continue
-        index = record.frame.frame_index
-        placed = to_frame_space(decode_mask_to_svg_path(record.mask), record.mask, record.bounds)
+        index = record.frame.frame_index * (VIDEO_FPS // MASK_FPS)
+        placed = to_frame_space(
+            decode_mask_to_svg_path(record.mask), record.mask, record.bounds, video_scale
+        )
         by_frame.setdefault(index, []).append(placed)
-        masks.append(_stored_mask_record(record, index))
 
     frames: list[FramePolygons] = []
     for frame in sorted(by_frame):
-        frames.append({"frame": frame, "time": round(frame / fps, 3), "paths": by_frame[frame]})
-    return {
-        "id": track_id,
-        "label": label,
-        "prompt": prompt,
-        "frames": frames,
-        "visible": visible_ranges([item["time"] for item in frames]),
-        "masks": masks,
-    }
-
-
-class TapRequest(TypedDict):
-    """Where the user tapped: pixel coordinates on one frame, and what to call the result."""
-
-    x: int
-    y: int
-    frame: int
-    label: str
+        frames.append(
+            {"frame": frame, "time": round(frame / VIDEO_FPS, 3), "paths": by_frame[frame]}
+        )
+    followed = track.copy()
+    followed["frames"] = frames
+    followed["visible"] = visible_ranges([item["time"] for item in frames])
+    return followed
 
 
 def _video_dimensions(directory: Path) -> tuple[int, int]:
@@ -395,23 +244,13 @@ def _video_dimensions(directory: Path) -> tuple[int, int]:
         raise RuntimeError("clip trackmap is not an object")
     video = metadata.get("video")
     if not isinstance(video, dict):
-        raise RuntimeError("tap isolation requires a video clip")
+        raise RuntimeError("area selection requires a video clip")
     width, height = video.get("width"), video.get("height")
     if isinstance(width, bool) or not isinstance(width, int) or width <= 0:
         raise RuntimeError("clip video width is invalid")
     if isinstance(height, bool) or not isinstance(height, int) or height <= 0:
         raise RuntimeError("clip video height is invalid")
     return width, height
-
-
-def _validate_tap(tap: TapRequest, size: tuple[int, int], directory: Path) -> None:
-    """Reject points and frame indices outside the video assets before calling SAM 3.1."""
-    x, y, frame = tap["x"], tap["y"], tap["frame"]
-    width, height = size
-    if x < 0 or x >= width or y < 0 or y >= height:
-        raise ValueError("Tap point is outside the video frame.")
-    if frame < 0 or not (directory / "frames" / f"frame_{frame + 1:04d}.jpg").is_file():
-        raise ValueError("Frame is outside the video clip.")
 
 
 def _track_path(directory: Path, track_id: str) -> Path:
@@ -427,91 +266,104 @@ def save_track(directory: Path, track: TrackResult) -> None:
     temporary.replace(path)
 
 
-def label_target(track: TrackResult, requested_frame: int, directory: Path) -> LabelTarget:
-    """Choose a visible frame nearest the tap and merge its mask bounds for the label crop."""
-    width, height = _video_dimensions(directory)
-    by_frame: dict[int, list[StoredMaskBounds]] = {}
-    for mask in track["masks"]:
-        by_frame.setdefault(mask["frame"], []).append(mask["bounds"])
-    if not by_frame:
-        raise RuntimeError("The selected object was not visible in the video.")
-
-    selected_frame = min(by_frame, key=lambda index: (abs(index - requested_frame), index))
-    bounds = by_frame[selected_frame]
-    left = max(0, math.floor(min(item["left"] for item in bounds)))
-    top = max(0, math.floor(min(item["top"] for item in bounds)))
-    right = min(width, math.ceil(max(item["right"] for item in bounds)))
-    bottom = min(height, math.ceil(max(item["bottom"] for item in bounds)))
-    if right <= left or bottom <= top:
-        raise RuntimeError("The selected object has invalid bounds.")
-
-    frame_path = directory / "frames" / f"frame_{selected_frame + 1:04d}.jpg"
-    if not frame_path.is_file():
-        raise FileNotFoundError("Selected video frame is unavailable.")
-    return {
-        "frame_path": frame_path,
-        "bounds": {"left": left, "top": top, "right": right, "bottom": bottom},
-    }
-
-
-def name_track(
-    track: TrackResult, label: str, prompt: str, isolation_id: str | None = None
-) -> None:
-    """Attach the named text-separation result to the tracking sidecar after it succeeds."""
-    track["label"] = label
-    track["prompt"] = prompt
-    if isolation_id is not None:
-        track["isolation_id"] = isolation_id
-
-
-def track_point(clip_id: str, tap: TapRequest, cache_root: Path | None = None) -> TrackResult:
-    """Segment whatever was tapped, and write the result to the clip's own sidecar."""
+def name_selection(
+    clip_id: str, bounds: RegionBounds, frame: int, cache_root: Path | None = None
+) -> TrackResult:
+    """Name what the user drew a box around, and write it to the clip's own sidecar."""
     root = cache_root if cache_root is not None else get_cache_root()
     directory = clip_dir(clip_id, root)
-    video_path = directory / "video.mp4"
-    if not video_path.exists():
-        raise FileNotFoundError(f"clip {clip_id} has no video: {video_path}")
+    frame_path = directory / "frames" / f"frame_{frame + 1:04d}.jpg"
+    if not frame_path.is_file():
+        raise ValueError("Frame is outside the video clip.")
 
-    width, height = _video_dimensions(directory)
-
-    x, y, frame = tap["x"], tap["y"], tap["frame"]
-    _validate_tap(tap, (width, height), directory)
-    prompt = point_prompt(width, height, x, y, frame)
-    segment_path = directory / "segment_input.mp4"
-    segmentation_video(video_path, segment_path)
-    LOGGER.info("segmenting clip=%s at (%d,%d) on frame %d", clip_id, x, y, frame)
-    events = list(
-        meta_api.stream_responses(segmentation_payload(segment_path, prompt), meta_api.api_key())
-    )
-    result = parse_segmentation(events)
-
-    track_id = f"tap{x}x{y}f{frame}"
-    track = build_track(result, track_id, tap["label"], f"tap@{x},{y}")
+    named = label_region(frame_path, bounds, meta_api.api_key())
+    left, top, right, bottom = bounds["left"], bounds["top"], bounds["right"], bounds["bottom"]
+    track: TrackResult = {
+        "id": f"area{left}x{top}x{right}x{bottom}f{frame}",
+        "label": named["label"],
+        "prompt": named["prompt"],
+        "frames": [],
+        "visible": [],
+        "selection": {"bounds": bounds, "frame": frame},
+    }
     save_track(directory, track)
-    LOGGER.info(
-        "tracked %s: %d frames, %d visible span(s)",
-        track_id,
-        len(track["frames"]),
-        len(track["visible"]),
-    )
     return track
 
 
-@app.function(
-    image=web_image,
-    volumes={CACHE_PATH: CACHE_VOLUME},
-    secrets=[API_SECRET],
-    timeout=TRACK_TIMEOUT_SECONDS,
-    gpu=None,
-)
-def track_worker(
-    clip_id: str, x: int, y: int, frame: int = 0, label: str = "Tapped sound"
-) -> TrackResult:
-    """SAM 3.1 is hosted, so this is an HTTP call and needs no GPU."""
-    logging.basicConfig(level=logging.INFO)
-    CACHE_VOLUME.reload()
-    tap: TapRequest = {"x": x, "y": y, "frame": frame, "label": label}
-    try:
-        return track_point(clip_id, tap)
-    finally:
-        CACHE_VOLUME.commit()
+def _bounds_from_json(raw: object) -> RegionBounds:
+    if not isinstance(raw, dict):
+        raise ValueError("track selection has no bounds")
+    left, top, right, bottom = raw.get("left"), raw.get("top"), raw.get("right"), raw.get("bottom")
+    if (
+        not isinstance(left, int)
+        or not isinstance(top, int)
+        or not isinstance(right, int)
+        or not isinstance(bottom, int)
+    ):
+        raise ValueError("track selection bounds are invalid")
+    return {"left": left, "top": top, "right": right, "bottom": bottom}
+
+
+def read_track(directory: Path, track_id: str) -> TrackResult:
+    """Read the named part of a sidecar; its frames are what following writes."""
+    raw = json.loads(_track_path(directory, track_id).read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        raise ValueError("track sidecar is not an object")
+    label, prompt, selection = raw.get("label"), raw.get("prompt"), raw.get("selection")
+    if not isinstance(label, str) or not isinstance(prompt, str) or not isinstance(selection, dict):
+        raise ValueError("track sidecar has no selection")
+    frame = selection.get("frame")
+    if not isinstance(frame, int):
+        raise ValueError("track selection has no frame")
+    track: TrackResult = {
+        "id": track_id,
+        "label": label,
+        "prompt": prompt,
+        "frames": [],
+        "visible": [],
+        "selection": {"bounds": _bounds_from_json(selection.get("bounds")), "frame": frame},
+    }
+    isolation_id = raw.get("isolation_id")
+    if isinstance(isolation_id, str):
+        track["isolation_id"] = isolation_id
+    return track
+
+
+def follow_track(clip_id: str, track_id: str, cache_root: Path | None = None) -> TrackResult:
+    """Track a named area through the rest of the clip with SAM 3.1, at the reduced mask size."""
+    root = cache_root if cache_root is not None else get_cache_root()
+    directory = clip_dir(clip_id, root)
+    track = read_track(directory, track_id)
+    width, height = _video_dimensions(directory)
+    mask_width = min(width, MASK_WIDTH)
+    # libx264 only accepts even dimensions.
+    mask_height = round(height * mask_width / width / 2) * 2
+    scale_x, scale_y = width / mask_width, height / mask_height
+    bounds = track["selection"]["bounds"]
+    scaled: RegionBounds = {
+        "left": int(bounds["left"] / scale_x),
+        "top": int(bounds["top"] / scale_y),
+        "right": min(mask_width, round(bounds["right"] / scale_x)),
+        "bottom": min(mask_height, round(bounds["bottom"] / scale_y)),
+    }
+    frame = track["selection"]["frame"] * MASK_FPS // VIDEO_FPS
+    segment_path = directory / "segment_input.mp4"
+    segmentation_video(directory / "video.mp4", segment_path, (mask_width, mask_height))
+    prompt = box_prompt((mask_width, mask_height), scaled, frame)
+    events = list(
+        meta_api.stream_responses(segmentation_payload(segment_path, prompt), meta_api.api_key())
+    )
+    followed = build_track(parse_segmentation(events), track, (scale_x, scale_y))
+    if not followed["frames"]:
+        raise RuntimeError("SAM 3.1 returned no masks for this area.")
+    save_track(directory, followed)
+    LOGGER.info("followed %s: %d frames", track_id, len(followed["frames"]))
+    return followed
+
+
+def record_follow_error(clip_id: str, track_id: str, message: str) -> None:
+    """Tell the polling UI that following failed, instead of leaving it to time out."""
+    directory = clip_dir(clip_id, get_cache_root())
+    track = read_track(directory, track_id)
+    track["follow_error"] = message
+    save_track(directory, track)
