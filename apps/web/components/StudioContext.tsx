@@ -13,6 +13,7 @@ import {
   type ReactNode,
 } from "react";
 import { StemPlayer, type LoopRange, type StemName } from "@/lib/audio/player";
+import { waitForNotes } from "@/lib/engine/client";
 import { resolvePlayableStems } from "@/lib/studio/demo-audio";
 import { barRangeToSeconds, matchFallbackStem } from "@/lib/studio/format";
 import type { FallbackStem, Isolation, TrackMap } from "@/lib/trackmap/trackmap.generated";
@@ -87,6 +88,8 @@ export type StudioContextValue = {
   seek: (seconds: number) => void;
   /** The player's own clock, finer than the `currentTime` state a render reads. */
   getPlaybackTime: () => number;
+  /** The sound is ready but its notes are still being written. */
+  notesPending: boolean;
   setRatePercent: (percent: number) => void;
   setLoopBars: (bars: BarLoop | null) => void;
   setUseDemucsCleaner: (enabled: boolean) => void;
@@ -168,6 +171,25 @@ export function StudioProvider({ clipId, initialTrackMap, children }: StudioProv
   }, [trackMap.isolations, requestedIsoId]);
 
   const selectedIsolationId = selectedIsolation?.id ?? "";
+
+  const [notesGaveUpFor, setNotesGaveUpFor] = useState<string | null>(null);
+  const awaitingNotes = selectedIsolation !== undefined && selectedIsolation.pitch_confidence === undefined;
+  const notesPending = awaitingNotes && notesGaveUpFor !== selectedIsolationId;
+
+  useEffect(() => {
+    if (!notesPending) return;
+    const controller = new AbortController();
+    void waitForNotes(clipId, selectedIsolationId, controller.signal)
+      .then((ready) => {
+        if (controller.signal.aborted) return;
+        if (ready) router.refresh();
+        else setNotesGaveUpFor(selectedIsolationId);
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) setNotesGaveUpFor(selectedIsolationId);
+      });
+    return () => controller.abort();
+  }, [notesPending, clipId, selectedIsolationId, router]);
 
   const fallbackAlternative = useMemo(
     () => matchFallbackStem(selectedIsolation, trackMap.fallback_stems),
@@ -424,6 +446,7 @@ export function StudioProvider({ clipId, initialTrackMap, children }: StudioProv
       togglePlay,
       seek,
       getPlaybackTime,
+      notesPending,
       setRatePercent,
       setLoopBars,
       setUseDemucsCleaner,
@@ -453,6 +476,7 @@ export function StudioProvider({ clipId, initialTrackMap, children }: StudioProv
       togglePlay,
       seek,
       getPlaybackTime,
+      notesPending,
       setRatePercent,
       setLoopBars,
       applyCoachAction,

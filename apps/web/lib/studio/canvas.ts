@@ -45,15 +45,6 @@ export type MiniRollDrawArgs = {
   dpr?: number;
 };
 
-export type EnergyDrawArgs = {
-  canvas: HTMLCanvasElement;
-  values: number[];
-  currentTime: number;
-  duration: number;
-  downbeats: number[];
-  dpr?: number;
-};
-
 export type LearnRollDrawArgs = {
   canvas: HTMLCanvasElement;
   notes: Note[];
@@ -399,55 +390,6 @@ export function drawMiniRoll({
   ctx.restore();
 }
 
-export function drawEnergyCurve({
-  canvas,
-  values,
-  currentTime,
-  duration,
-  downbeats,
-  dpr: explicitDpr,
-}: EnergyDrawArgs): void {
-  const ctx = canvas.getContext("2d");
-  if (ctx === null) return;
-  const dpr =
-    explicitDpr ??
-    (typeof window !== "undefined" ? Math.min(window.devicePixelRatio || 1, 3) : 1);
-  const width = canvas.width / dpr;
-  const height = canvas.height / dpr;
-  const palette = readStudioPalette();
-
-  ctx.save();
-  ctx.scale(dpr, dpr);
-  ctx.clearRect(0, 0, width, height);
-  drawBarGrid(ctx, width, height, downbeats, duration, palette.line);
-
-  if (values.length > 1) {
-    ctx.strokeStyle = palette.accent;
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    for (let index = 0; index < values.length; index += 1) {
-      const x = (index / (values.length - 1)) * width;
-      const val = Math.max(0, Math.min(1, values[index] ?? 0));
-      const y = height - 8 - val * (height - 18);
-      if (index === 0) ctx.moveTo(x, y);
-      else ctx.lineTo(x, y);
-    }
-    ctx.stroke();
-
-    // Subtle area gradient / fill under curve for clear visual presence
-    ctx.lineTo(width, height);
-    ctx.lineTo(0, height);
-    ctx.closePath();
-    ctx.fillStyle = palette.accent;
-    ctx.globalAlpha = 0.14;
-    ctx.fill();
-    ctx.globalAlpha = 1.0;
-  }
-
-  drawPlayhead(ctx, width, height, currentTime, duration, palette.text, palette);
-  ctx.restore();
-}
-
 const resampledPeaksCache = new WeakMap<number[], Map<number, number[]>>();
 
 function getFastResampledPeaks(peaks: number[], targetCount: number): number[] {
@@ -462,6 +404,9 @@ function getFastResampledPeaks(peaks: number[], targetCount: number): number[] {
   targetMap.set(targetCount, computed);
   return computed;
 }
+
+const LEARN_WAVE_STRIP_HEIGHT = 34;
+const LEARN_WAVE_STRIP_GAP = 8;
 
 export function drawLearnPianoRoll({
   canvas,
@@ -491,29 +436,20 @@ export function drawLearnPianoRoll({
   // 1. Loop shade
   drawLoopShade(ctx, width, height, loop, duration, palette.text);
 
-  // 2. Clear, high-contrast waveform in the background (visible across both light and dark themes)
+  // 2. A quiet strip under the notes: enough to see where the sound is, without competing with them
+  const rollBottom = height - LEARN_WAVE_STRIP_HEIGHT - LEARN_WAVE_STRIP_GAP;
   if (peaks && peaks.length > 0 && duration > 0) {
-    const centerY = height / 2;
-    const barSpacing = width > 1200 ? 3.5 : 4.0;
-    const count = Math.max(16, Math.floor(width / barSpacing));
-    const sampled = getFastResampledPeaks(peaks, count);
+    const barSpacing = 3;
+    const sampled = getFastResampledPeaks(peaks, Math.max(16, Math.floor(width / barSpacing)));
+    // Scaled to its own loudest moment, so a quiet stem still shows its shape.
+    const loudest = Math.max(...sampled, 0.01);
+    const stripCenter = height - 3 - LEARN_WAVE_STRIP_HEIGHT / 2;
     ctx.save();
-    ctx.fillStyle = palette.mutedWave;
-    ctx.globalAlpha = 0.65;
-    const barW = Math.max(1.8, barSpacing - 1.2);
-    const radius = Math.min(2, barW / 2);
-
+    ctx.fillStyle = palette.text;
+    ctx.globalAlpha = 0.4;
     for (let i = 0; i < sampled.length; i++) {
-      const x = i * barSpacing;
-      const barH = Math.max(3, (sampled[i] ?? 0.08) * (height - 36));
-      const y = centerY - barH / 2;
-      if (typeof ctx.roundRect === "function") {
-        ctx.beginPath();
-        ctx.roundRect(x + 0.5, y, barW, barH, radius);
-        ctx.fill();
-      } else {
-        ctx.fillRect(x + 0.5, y, barW, barH);
-      }
+      const barH = Math.max(2, ((sampled[i] ?? 0) / loudest) * LEARN_WAVE_STRIP_HEIGHT);
+      ctx.fillRect(i * barSpacing, stripCenter - barH / 2, 2, barH);
     }
     ctx.restore();
   }
@@ -573,7 +509,7 @@ export function drawLearnPianoRoll({
     maxPitch = Math.min(108, maxPitch + 2);
   }
   const pitchSpan = Math.max(12, maxPitch - minPitch);
-  const noteH = Math.max(10, Math.min(22, (height - 44) / (pitchSpan * 0.75)));
+  const noteH = Math.max(10, Math.min(22, (rollBottom - 26) / (pitchSpan * 0.75)));
 
   // Pitch horizontal guide lines for octaves
   ctx.save();
@@ -582,7 +518,7 @@ export function drawLearnPianoRoll({
   ctx.lineWidth = 0.75;
   for (let p = Math.ceil(minPitch / 12) * 12; p <= maxPitch; p += 12) {
     const norm = (p - minPitch) / pitchSpan;
-    const y = height - 18 - norm * (height - 40);
+    const y = rollBottom - norm * (rollBottom - 22);
     ctx.beginPath();
     ctx.moveTo(0, y);
     ctx.lineTo(width, y);
@@ -596,7 +532,7 @@ export function drawLearnPianoRoll({
       const x = (note.start / duration) * width;
       const w = Math.max(6, ((note.end - note.start) / duration) * width - 1.5);
       const norm = Math.max(0, Math.min(1, (note.pitch - minPitch) / pitchSpan));
-      const y = height - 18 - norm * (height - 40);
+      const y = rollBottom - norm * (rollBottom - 22);
       const active = currentTime >= note.start && currentTime <= note.end;
 
       ctx.save();
@@ -638,7 +574,7 @@ export function drawLearnPianoRoll({
     for (const dot of played) {
       const x = (dot.time / duration) * width;
       const norm = Math.max(0, Math.min(1, (dot.pitch - minPitch) / pitchSpan));
-      const y = height - 18 - norm * (height - 40);
+      const y = rollBottom - norm * (rollBottom - 22);
       ctx.save();
       ctx.fillStyle = palette.you;
       ctx.beginPath();

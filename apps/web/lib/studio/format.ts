@@ -143,13 +143,6 @@ export function methodShortLabel(method: IsolationMethod): string {
   return "SAM";
 }
 
-export function methodBadgeLabel(method: IsolationMethod, useDemucsCleaner: boolean): string {
-  if (useDemucsCleaner || method === "demucs") return "DEMUCS STEM";
-  if (method === "unseparated") return "ORIGINAL · SOLO RECORDING";
-  if (method === "sam_audio_visual") return "SAM AUDIO · VISUAL (SAM 3.1)";
-  return "SAM AUDIO · TEXT PROMPT";
-}
-
 function inferStemKind(text: string): TrackStemName | null {
   const lower = text.toLowerCase();
   if (lower.includes("piano") || lower.includes("key")) return "piano";

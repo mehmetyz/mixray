@@ -66,14 +66,12 @@ export function LearnView() {
     trackMap,
     selectedIsolation,
     selectedIsolationId,
-    selectIsolation,
     currentTime,
     duration,
     seek,
     getPlaybackTime,
+    notesPending,
     playing,
-    monitor,
-    setMonitor,
     loopRange,
     problemBar,
     handFilter,
@@ -379,27 +377,6 @@ export function LearnView() {
         {/* Top Controls & Sound Selector */}
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line bg-surface/95 px-5 py-2.5 text-xs shrink-0">
           <div className="flex flex-wrap items-center gap-3">
-            {/* Sound Selector */}
-            {trackMap.isolations.length > 0 ? (
-              <div className="flex items-center gap-2">
-                <span className="eyebrow hidden sm:inline">Stem:</span>
-                <select
-                  value={selectedIsolationId}
-                  onChange={(event) => {
-                    setPlayedDots([]);
-                    selectIsolation(event.target.value);
-                  }}
-                  className="mono-num h-8 rounded-lg border border-line-2 bg-inset px-3 text-xs font-semibold text-text focus:border-accent focus:outline-none"
-                >
-                  {trackMap.isolations.map((iso) => (
-                    <option key={iso.id} value={iso.id}>
-                      {iso.label} ({iso.notes?.length ?? 0} notes)
-                    </option>
-                  ))}
-                </select>
-              </div>
-            ) : null}
-
             {/* Arrangement Difficulty */}
             <div
               role="group"
@@ -431,34 +408,6 @@ export function LearnView() {
                 }`}
               >
                 Intermediate
-              </button>
-            </div>
-
-            {/* Hear monitor toggle */}
-            <div
-              role="group"
-              aria-label="Practice backing audio"
-              className="flex rounded-lg border border-line-2 bg-inset p-0.5"
-            >
-              <button
-                type="button"
-                aria-pressed={monitor === "sound"}
-                onClick={() => setMonitor("sound")}
-                className={`cursor-pointer rounded-md px-3 py-1 transition ${
-                  monitor === "sound" ? "bg-surface-2 font-medium text-text shadow-xs" : "text-muted hover:text-text"
-                }`}
-              >
-                Hear: Solo
-              </button>
-              <button
-                type="button"
-                aria-pressed={monitor === "mix"}
-                onClick={() => setMonitor("mix")}
-                className={`cursor-pointer rounded-md px-3 py-1 transition ${
-                  monitor === "mix" ? "bg-surface-2 font-medium text-text shadow-xs" : "text-muted hover:text-text"
-                }`}
-              >
-                With Mix
               </button>
             </div>
 
@@ -502,25 +451,14 @@ export function LearnView() {
           {/* Left Track Info Strip (matches TimelineRuler w-36 sm:w-48) */}
           <div className="flex w-36 sm:w-48 shrink-0 flex-col justify-between border-r border-line bg-surface/85 p-3 select-none">
             <div>
-              <span className="mono-num text-[10px] uppercase font-semibold text-muted tracking-wider block">
-                Practice Stem
-              </span>
               <span className="mono-num text-xs sm:text-sm font-semibold text-text truncate block mt-0.5">
                 {selectedIsolation?.label ?? "Melody"}
               </span>
               <span className="mono-num text-[11px] font-medium text-accent block mt-1">
-                {activeNotes.length} notes to learn
+                {activeNotes.length} notes
               </span>
             </div>
 
-            <div className="space-y-1">
-              <span className="mono-num text-[10px] text-muted block">
-                {level === "easy" ? "Easy arrangement" : "Intermediate"}
-              </span>
-              <span className="mono-num text-[10px] text-text-2 block">
-                {monitor === "sound" ? "Solo stem" : "With mix"}
-              </span>
-            </div>
           </div>
 
           {/* Practice Roll Canvas: fills exactly the same horizontal span as TimelineRuler */}
@@ -539,10 +477,16 @@ export function LearnView() {
             {activeNotes.length === 0 ? (
               <div className="pointer-events-none absolute inset-0 flex items-center justify-center p-6 text-center">
                 <div className="rounded-card border border-line-2 bg-surface/90 p-4 shadow-lg backdrop-blur-xs">
-                  <p className="text-xs font-semibold text-text">No notes for this sound</p>
-                  <p className="mt-1 text-[11px] text-muted">
-                    Mixray writes notes for vocals, bass, guitar and piano. You can still listen to this one.
-                  </p>
+                  {notesPending ? (
+                    <p className="text-xs font-semibold text-text">Reading the notes…</p>
+                  ) : (
+                    <>
+                      <p className="text-xs font-semibold text-text">No notes for this sound</p>
+                      <p className="mt-1 text-[11px] text-muted">
+                        Mixray writes notes for vocals, bass, guitar and piano. You can still listen to this one.
+                      </p>
+                    </>
+                  )}
                 </div>
               </div>
             ) : null}
@@ -563,7 +507,7 @@ export function LearnView() {
                         ? "C2 – B3 (Bass)"
                         : octaveShift === 1
                           ? "C5 – B6"
-                          : "C6 – B7"} · Keys A–L
+                          : "C6 – B7"} 
                 </span>
                 <div className="flex items-center rounded-xs border border-line-2 bg-surface p-0.5">
                   <button

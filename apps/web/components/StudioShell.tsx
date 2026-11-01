@@ -7,15 +7,14 @@ import type { StemName } from "@/lib/audio/player";
 import type { ClipStepId, NavState } from "@/lib/steps";
 import { formatBarBeat, formatClockSeconds, methodShortLabel } from "@/lib/studio/format";
 import { AppHeader } from "./AppHeader";
-import { useStudio } from "./StudioContext";
+import { useStudio, type BarLoop } from "./StudioContext";
 
 type TimelineRulerProps = {
   rightSlot?: ReactNode;
 };
 
 type AddShellProps = {
-  center: ReactNode;
-  inspector: ReactNode;
+  children: ReactNode;
 };
 
 type StudioShellProps = {
@@ -25,14 +24,25 @@ type StudioShellProps = {
 type MonitorOption = {
   id: StemName;
   label: string;
-  keyHint: string;
 };
 
 const MONITOR_OPTIONS: readonly MonitorOption[] = [
-  { id: "sound", label: "Sound", keyHint: "1" },
-  { id: "rest", label: "Rest", keyHint: "2" },
-  { id: "mix", label: "Full mix", keyHint: "3" },
+  { id: "sound", label: "Sound" },
+  { id: "rest", label: "Rest" },
+  { id: "mix", label: "Full mix" },
 ];
+
+const LOOP_LENGTH_BARS = 4;
+
+/** Loops the four bars starting where the player is, which is what a player reaches for. */
+function loopFromCurrentBar(time: number, downbeats: number[]): BarLoop {
+  const reached = downbeats.filter((downbeat) => downbeat <= time).length;
+  const startBar = Math.max(1, reached);
+  return {
+    startBar,
+    endBar: Math.max(startBar, Math.min(startBar + LOOP_LENGTH_BARS - 1, downbeats.length)),
+  };
+}
 
 function detectStepFromPath(pathname: string | null): ClipStepId {
   if (pathname?.endsWith("/xray") === true) return "xray";
@@ -65,7 +75,6 @@ export function TimelineRuler({ rightSlot }: TimelineRulerProps) {
   return (
     <div className="flex h-9 shrink-0 select-none items-center border-b border-line bg-surface/90">
       <div className="mono-num flex w-36 shrink-0 items-center justify-between border-r border-line px-3 text-xs text-muted sm:w-48">
-        <span className="text-[11px] font-medium tracking-wide">BARS</span>
         <span className="font-semibold text-text">{formatClockSeconds(currentTime)}</span>
       </div>
       <div
@@ -130,24 +139,14 @@ export function TimelineRuler({ rightSlot }: TimelineRulerProps) {
   );
 }
 
-/** Quiet DAW shell for `/` (Project Hub / Ingest). */
-export function AddShell({ center, inspector }: AddShellProps) {
+/** Quiet shell for `/`, where one file is chosen and nothing else competes with it. */
+export function AddShell({ children }: AddShellProps) {
   const nav: NavState = { current: "add" };
 
   return (
-    <div className="flex min-h-dvh flex-col bg-bg text-text lg:h-dvh lg:overflow-hidden">
+    <div className="flex min-h-dvh flex-col bg-bg text-text">
       <AppHeader nav={nav} />
-      <div className="flex min-h-0 flex-1 flex-col lg:flex-row lg:overflow-hidden">
-        <main className="flex min-w-0 flex-1 flex-col items-center justify-start bg-bg p-4 md:p-8 lg:overflow-y-auto">
-          <div className="w-full max-w-2xl mx-auto">
-            {center}
-          </div>
-        </main>
-
-        <aside className="flex w-full shrink-0 flex-col gap-4 border-t border-line bg-surface p-5 lg:w-96 lg:border-t-0 lg:border-l lg:overflow-y-auto">
-          {inspector}
-        </aside>
-      </div>
+      <main className="mx-auto w-full max-w-2xl flex-1 p-4 pt-10 md:pt-16">{children}</main>
     </div>
   );
 }
@@ -194,152 +193,60 @@ export function StudioShell({ children }: StudioShellProps) {
       <div className="flex min-h-0 flex-1 flex-col lg:flex-row lg:overflow-hidden">
         {/* Project & Audio Tracks (Stems) Sidebar */}
         <aside className="hidden w-60 shrink-0 flex-col justify-between border-r border-line bg-surface/70 backdrop-blur-xs lg:flex">
-          <div className="space-y-4 p-3 overflow-y-auto">
-            {/* Project Card */}
-            <div className="rounded-card border border-line-2 bg-inset p-3 space-y-1.5">
-              <div className="flex items-center justify-between text-[11px] text-muted font-semibold tracking-wider uppercase">
-                <span>Project</span>
-                <span className="mono-num font-mono text-[10px] text-accent">Active</span>
-              </div>
-              <p className="truncate text-xs font-semibold text-text" title={trackMap.source.title}>
+          <div className="space-y-5 overflow-y-auto p-3">
+            <div className="px-1 pt-1">
+              <p className="truncate text-sm font-semibold text-text" title={trackMap.source.title}>
                 {trackMap.source.title}
               </p>
-              <div className="flex flex-wrap items-center gap-1 pt-0.5 text-[10px] text-text-2">
-                <span className="mono-num rounded-icon border border-line-2 bg-surface px-1.5 py-0.5">
-                  {Math.round(trackMap.tempo.bpm)} BPM
-                </span>
-                <span className="mono-num rounded-icon border border-line-2 bg-surface px-1.5 py-0.5">
-                  {trackMap.key.tonic} {trackMap.key.mode}
-                </span>
-                <span className="mono-num rounded-icon border border-line-2 bg-surface px-1.5 py-0.5">
-                  {Math.round(duration)}s
-                </span>
-              </div>
+              <p className="mono-num mt-1 text-xs text-muted">
+                {Math.round(trackMap.tempo.bpm)} BPM, {trackMap.key.tonic} {trackMap.key.mode}
+              </p>
             </div>
 
-            {/* Audio Tracks / Stems Section */}
-            <div className="space-y-2">
-              <div className="flex items-center justify-between px-1">
-                <span className="text-[11px] font-semibold tracking-wider text-muted uppercase">Audio Tracks</span>
-                <span className="mono-num text-[10px] text-muted">Stems</span>
-              </div>
-
-              {/* Master / Full Mix stem */}
-              <button
-                type="button"
-                aria-pressed={monitor === "mix"}
-                onClick={() => setMonitor("mix")}
-                className={`flex w-full cursor-pointer items-center justify-between rounded-card border px-2.5 py-2 text-left text-xs transition ${
-                  monitor === "mix"
-                    ? "border-control bg-surface-2 font-medium text-text shadow-xs"
-                    : "border-transparent text-text-2 hover:bg-surface-2/60 hover:text-text"
-                }`}
-              >
-                <div className="flex min-w-0 items-center gap-2">
-                  <span
-                    className={`h-2 w-2 shrink-0 rounded-full ${
-                      monitor === "mix" ? "bg-accent shadow-xs shadow-accent/40" : "bg-inactive"
-                    }`}
-                  />
-                  <span className="truncate">Full Mix (Master)</span>
-                </div>
-                <span className="mono-num ml-1 shrink-0 rounded-xs bg-bg/60 px-1.5 py-0.5 text-[10px] uppercase text-muted">
-                  Mix [3]
-                </span>
-              </button>
-
-              {/* Isolated Sound stem(s) */}
+            <div className="space-y-1">
+              <p className="px-1 pb-1 text-xs font-medium text-muted">Sounds</p>
               {trackMap.isolations.length > 0 ? (
                 trackMap.isolations.map((iso) => {
                   const isSelected = iso.id === selectedIsolationId;
-                  const isMonitored = monitor === "sound" && isSelected;
                   return (
                     <button
                       key={iso.id}
                       type="button"
-                      aria-pressed={isMonitored}
+                      aria-pressed={isSelected}
                       onClick={() => {
                         selectIsolation(iso.id);
                         setMonitor("sound");
                       }}
-                      className={`flex w-full cursor-pointer items-center justify-between rounded-card border px-2.5 py-2 text-left text-xs transition ${
-                        isMonitored
-                          ? "border-control bg-surface-2 font-medium text-text shadow-xs"
+                      className={`flex w-full cursor-pointer items-center justify-between rounded-card border px-2.5 py-2 text-left text-sm transition ${
+                        isSelected
+                          ? "border-control bg-surface-2 font-medium text-text"
                           : "border-transparent text-text-2 hover:bg-surface-2/60 hover:text-text"
                       }`}
                     >
-                      <div className="flex min-w-0 items-center gap-2">
+                      <span className="flex min-w-0 items-center gap-2">
                         <span
-                          className={`h-2 w-2 shrink-0 rounded-full ${
-                            isMonitored ? "bg-accent shadow-xs shadow-accent/40" : "bg-inactive"
-                          }`}
+                          className={`h-2 w-2 shrink-0 rounded-full ${isSelected ? "bg-accent" : "bg-inactive"}`}
                         />
                         <span className="truncate">{iso.label}</span>
-                      </div>
-                      <span className="mono-num ml-1 shrink-0 rounded-xs bg-bg/60 px-1.5 py-0.5 text-[10px] uppercase text-muted">
-                        {`${methodShortLabel(iso.method)} [1]`}
+                      </span>
+                      <span className="ml-2 shrink-0 text-xs text-muted">
+                        {methodShortLabel(iso.method)}
                       </span>
                     </button>
                   );
                 })
               ) : (
-                <div className="rounded-card border border-dashed border-line-2 p-2.5 text-center text-xs text-muted">
-                  No isolated sound yet
-                </div>
+                <p className="px-1 text-sm text-muted">No sound picked yet.</p>
               )}
-
-              {/* Rest / Backing stem */}
-              <button
-                type="button"
-                aria-pressed={monitor === "rest"}
-                onClick={() => setMonitor("rest")}
-                className={`flex w-full cursor-pointer items-center justify-between rounded-card border px-2.5 py-2 text-left text-xs transition ${
-                  monitor === "rest"
-                    ? "border-control bg-surface-2 font-medium text-text shadow-xs"
-                    : "border-transparent text-text-2 hover:bg-surface-2/60 hover:text-text"
-                }`}
-              >
-                <div className="flex min-w-0 items-center gap-2">
-                  <span
-                    className={`h-2 w-2 shrink-0 rounded-full ${
-                      monitor === "rest" ? "bg-accent shadow-xs shadow-accent/40" : "bg-inactive"
-                    }`}
-                  />
-                  <span className="truncate">Rest (Backing)</span>
-                </div>
-                <span className="mono-num ml-1 shrink-0 rounded-xs bg-bg/60 px-1.5 py-0.5 text-[10px] uppercase text-muted">
-                  Rest [2]
-                </span>
-              </button>
             </div>
           </div>
 
-          {/* Quick Shortcuts & Return to Projects */}
-          <div className="space-y-3 border-t border-line p-3 text-xs text-muted">
-            <div className="space-y-1.5">
-              <span className="text-[10px] font-semibold tracking-wider uppercase text-muted/70 block mb-1">
-                Shortcuts
-              </span>
-              <div className="flex items-center justify-between">
-                <span>Play / Pause</span>
-                <span className="mono-num rounded-xs bg-surface-2 px-1.5 py-0.5 text-xs text-text-2">Space</span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span>Solo Tracks</span>
-                <span className="mono-num rounded-xs bg-surface-2 px-1.5 py-0.5 text-xs text-text-2">1 · 2 · 3</span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span>Virtual Keys</span>
-                <span className="mono-num rounded-xs bg-surface-2 px-1.5 py-0.5 text-xs text-text-2">A – L</span>
-              </div>
-            </div>
-
+          <div className="border-t border-line p-3">
             <Link
               href="/"
-              className="flex w-full items-center justify-center gap-1.5 rounded-card border border-line-2 bg-surface-2/40 px-3 py-2 text-xs font-medium text-text-2 transition hover:border-control hover:bg-surface-2 hover:text-text"
-              title="Return to projects hub"
+              className="flex h-9 w-full items-center justify-center rounded-card border border-line-2 text-sm text-text-2 transition hover:border-control hover:text-text"
             >
-              <span>← All Projects</span>
+              New clip
             </Link>
           </div>
         </aside>
@@ -351,13 +258,6 @@ export function StudioShell({ children }: StudioShellProps) {
 
       <footer className="flex min-h-15 shrink-0 flex-wrap items-center justify-between gap-3 border-t border-line bg-surface/90 px-4 py-2.5 backdrop-blur-md">
         <div className="flex items-center gap-2.5">
-          <Link
-            href="/"
-            className="flex h-9 items-center gap-1 rounded-full border border-line-2 bg-surface-2/60 px-3 text-xs font-medium text-text-2 transition hover:border-control hover:text-text lg:hidden"
-            title="Return to projects hub"
-          >
-            <span>← Projects</span>
-          </Link>
           <button
             type="button"
             aria-label="Return to start"
@@ -374,14 +274,11 @@ export function StudioShell({ children }: StudioShellProps) {
             onClick={togglePlay}
             className="flex h-9 cursor-pointer items-center gap-2 rounded-full bg-text px-4.5 text-sm font-semibold text-bg shadow-sm transition hover:opacity-90 active:scale-[0.98]"
           >
-            <span>{playing ? "Pause" : "Play"}</span>
-            <span className="mono-num text-xs opacity-70">[Space]</span>
+            {playing ? "Pause" : "Play"}
           </button>
           <div className="mono-num ml-1 flex items-center gap-2 rounded-full border border-line-2 bg-surface-2/50 px-4 py-2 text-xs sm:text-sm text-text">
             <span className="font-semibold">{barBeat}</span>
-            <span className="text-line-2">|</span>
-            <span className="text-text-2">{formatClockSeconds(currentTime)}</span>
-            <span className="text-muted">/ {formatClockSeconds(duration)}</span>
+            <span className="text-muted">{formatClockSeconds(duration)}</span>
           </div>
         </div>
 
@@ -404,7 +301,7 @@ export function StudioShell({ children }: StudioShellProps) {
                     : "text-text-2 hover:text-text"
                 }`}
               >
-                {opt.label} <span className="mono-num opacity-60 text-xs">{opt.keyHint}</span>
+                {opt.label}
               </button>
             );
           })}
@@ -431,10 +328,7 @@ export function StudioShell({ children }: StudioShellProps) {
               setLoopBars(
                 loopBars !== null
                   ? null
-                  : {
-                      startBar: Math.min(5, trackMap.downbeats.length || 1),
-                      endBar: Math.min(8, trackMap.downbeats.length || 4),
-                    },
+                  : loopFromCurrentBar(currentTime, trackMap.downbeats),
               )
             }
             className={`mono-num h-8 cursor-pointer rounded-full border px-3 text-xs transition ${
@@ -443,7 +337,7 @@ export function StudioShell({ children }: StudioShellProps) {
                 : "border-line-2 bg-surface-2/60 text-text-2 hover:border-control hover:text-text"
             }`}
           >
-            {loopBars !== null ? `Loop: Bars ${loopBars.startBar}–${loopBars.endBar}` : "Loop: Off"}
+            {loopBars !== null ? `Loop bars ${loopBars.startBar}–${loopBars.endBar}` : "Loop"}
           </button>
         </div>
       </footer>

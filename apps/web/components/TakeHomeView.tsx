@@ -9,15 +9,19 @@ import {
   triggerBrowserDownload,
   type ZipFileEntry,
 } from "@/lib/studio/export-pack";
-import { methodBadgeLabel } from "@/lib/studio/format";
-import { RecipeCard } from "./RecipeCard";
 import { ScreenHeading } from "./ScreenHeading";
 import { useStudio } from "./StudioContext";
-import { TimelineRuler } from "./StudioShell";
 
 type PackItemId = "soundWav" | "restWav" | "midi" | "recipe";
 
 type PackSelection = Record<PackItemId, boolean>;
+
+type PackItem = {
+  id: PackItemId;
+  title: string;
+  description: string;
+  files: string[];
+};
 
 function slugify(text: string): string {
   return (
@@ -26,6 +30,11 @@ function slugify(text: string): string {
       .replace(/[^a-z0-9]+/g, "_")
       .replace(/^_+|_+$/g, "") || "mixray_sound"
   );
+}
+
+/** Names a file after what it really holds: a sound can be served as WAV or as MP3. */
+function audioExtension(url: string): string {
+  return new URL(url, "http://local").pathname.toLowerCase().endsWith(".mp3") ? "mp3" : "wav";
 }
 
 async function fetchBytes(url: string): Promise<Uint8Array> {
@@ -37,7 +46,7 @@ async function fetchBytes(url: string): Promise<Uint8Array> {
 }
 
 export function TakeHomeView() {
-  const { trackMap, selectedIsolation, useDemucsCleaner, fallbackAlternative } = useStudio();
+  const { trackMap, selectedIsolation } = useStudio();
 
   const [selected, setSelected] = useState<PackSelection>({
     soundWav: true,
@@ -48,83 +57,92 @@ export function TakeHomeView() {
   const [bundling, setBundling] = useState<boolean>(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
 
-  const selectedCount = Object.values(selected).filter(Boolean).length;
+  const label = selectedIsolation?.label ?? "The sound";
   const stemSlug = slugify(selectedIsolation?.label ?? "isolated_sound");
+  const soundUrl = selectedIsolation?.sound_wav_url ?? selectedIsolation?.sound_url ?? "";
+  const soundFile = `${stemSlug}_sound.${audioExtension(soundUrl)}`;
+  const restFile = `${stemSlug}_rest.${audioExtension(selectedIsolation?.rest_url ?? "")}`;
+  const hasNotes = (selectedIsolation?.notes.length ?? 0) > 0;
+  const hasRecipe = selectedIsolation?.recipe !== undefined;
+
+  const items: PackItem[] = [
+    {
+      id: "soundWav",
+      title: label,
+      description: "This sound on its own, for the whole clip.",
+      files: [soundFile],
+    },
+    {
+      id: "restWav",
+      title: "Rest of the mix",
+      description: "Everything else in the clip, without this sound. Play along with it.",
+      files: [restFile],
+    },
+  ];
+  if (hasNotes) {
+    items.push({
+      id: "midi",
+      title: "MIDI notes",
+      description:
+        "Easy is one melody line moved into a comfortable range. Intermediate adds the chord root and fifth for the left hand.",
+      files: [`${stemSlug}_easy.mid`, `${stemSlug}_intermediate.mid`],
+    });
+  }
+  items.push({
+    id: "recipe",
+    title: hasRecipe ? "Sound recipe and session notes" : "Session notes",
+    description: hasRecipe
+      ? "Synth settings suggested by Muse Spark Open as a starting point, plus the tempo, key and each bar's chord."
+      : "The tempo, key and each bar's chord.",
+    files: [
+      ...(hasRecipe ? [`${stemSlug}_recipe.json`] : []),
+      `${stemSlug}_session_notes.txt`,
+    ],
+  });
+
+  const chosenFiles = items.filter((item) => selected[item.id]).flatMap((item) => item.files);
 
   const toggleItem = (id: PackItemId) => {
     setSelected((prev) => ({ ...prev, [id]: !prev[id] }));
   };
 
-  const downloadSingleMidi = () => {
-    if (selectedIsolation === undefined) return;
-    const midiBuf = encodeStandardMidi(selectedIsolation.arrangements.easy, trackMap.tempo.bpm);
-    triggerBrowserDownload(new Blob([midiBuf], { type: "audio/midi" }), `${stemSlug}_easy.mid`);
-  };
-
-  const downloadSingleRecipe = () => {
-    if (selectedIsolation === undefined) return;
-    const payload = JSON.stringify(selectedIsolation.recipe ?? {}, null, 2);
-    triggerBrowserDownload(
-      new Blob([payload], { type: "application/json" }),
-      `${stemSlug}_recipe.json`,
-    );
-  };
-
   const downloadBundleZip = async () => {
-    if (selectedIsolation === undefined || selectedCount === 0) return;
+    if (selectedIsolation === undefined || chosenFiles.length === 0) return;
     setBundling(true);
     setStatusMessage(null);
 
-    const soundOverride =
-      useDemucsCleaner && fallbackAlternative !== null
-        ? (fallbackAlternative.wav_url ?? fallbackAlternative.url)
-        : (selectedIsolation.sound_wav_url ?? selectedIsolation.sound_url);
-
     let revoke: () => void = () => {};
     try {
-      const resolved = await resolvePlayableStems(trackMap, selectedIsolation, soundOverride);
+      const resolved = await resolvePlayableStems(trackMap, selectedIsolation, soundUrl);
       revoke = resolved.revoke;
 
       const entries: ZipFileEntry[] = [];
       const encoder = new TextEncoder();
 
       if (selected.soundWav) {
-        entries.push({
-          filename: `${stemSlug}_sound.wav`,
-          data: await fetchBytes(resolved.soundUrl),
-        });
+        entries.push({ filename: soundFile, data: await fetchBytes(resolved.soundUrl) });
       }
       if (selected.restWav) {
-        entries.push({
-          filename: `${stemSlug}_rest.wav`,
-          data: await fetchBytes(resolved.restUrl),
-        });
+        entries.push({ filename: restFile, data: await fetchBytes(resolved.restUrl) });
       }
-      if (selected.midi) {
-        const easyMidi = encodeStandardMidi(
-          selectedIsolation.arrangements.easy,
-          trackMap.tempo.bpm,
-        );
+      if (selected.midi && hasNotes) {
+        const { easy, intermediate } = selectedIsolation.arrangements;
         entries.push({
           filename: `${stemSlug}_easy.mid`,
-          data: new Uint8Array(easyMidi),
+          data: new Uint8Array(encodeStandardMidi(easy, trackMap.tempo.bpm)),
         });
-        if (selectedIsolation.arrangements.intermediate !== undefined) {
-          const interMidi = encodeStandardMidi(
-            selectedIsolation.arrangements.intermediate,
-            trackMap.tempo.bpm,
-          );
-          entries.push({
-            filename: `${stemSlug}_intermediate.mid`,
-            data: new Uint8Array(interMidi),
-          });
-        }
+        entries.push({
+          filename: `${stemSlug}_intermediate.mid`,
+          data: new Uint8Array(encodeStandardMidi(intermediate ?? easy, trackMap.tempo.bpm)),
+        });
       }
       if (selected.recipe) {
-        entries.push({
-          filename: `${stemSlug}_recipe.json`,
-          data: encoder.encode(JSON.stringify(selectedIsolation.recipe ?? {}, null, 2)),
-        });
+        if (hasRecipe) {
+          entries.push({
+            filename: `${stemSlug}_recipe.json`,
+            data: encoder.encode(JSON.stringify(selectedIsolation.recipe, null, 2)),
+          });
+        }
         entries.push({
           filename: `${stemSlug}_session_notes.txt`,
           data: encoder.encode(formatSessionNotes(trackMap, selectedIsolation)),
@@ -136,11 +154,9 @@ export function TakeHomeView() {
         new Blob([zipBuffer], { type: "application/zip" }),
         `${slugify(trackMap.source.title)}_${stemSlug}_pack.zip`,
       );
-      setStatusMessage(`Exported ${entries.length} files in ZIP archive.`);
+      setStatusMessage(`Downloaded ${entries.length} files.`);
     } catch (error: unknown) {
-      setStatusMessage(
-        error instanceof Error ? error.message : "Could not build ZIP bundle right now.",
-      );
+      setStatusMessage(error instanceof Error ? error.message : "Could not build the download.");
     } finally {
       revoke();
       setBundling(false);
@@ -148,164 +164,52 @@ export function TakeHomeView() {
   };
 
   return (
-    <>
-      <section className="flex min-w-0 flex-1 flex-col bg-bg lg:overflow-y-auto">
-        <TimelineRuler />
-
-        <div className="w-full max-w-3xl mx-auto space-y-6 p-5 md:p-8">
-          <ScreenHeading step="take" title="Rebuild it in your DAW.">
-            <p className="text-xs text-text-2">
-              Aligned at {Math.round(trackMap.tempo.bpm)} BPM in {trackMap.key.tonic}{" "}
-              {trackMap.key.mode}. Drop stems and MIDI onto bar 1.
-            </p>
-          </ScreenHeading>
-
-          <div className="divide-y divide-line rounded-card border border-line bg-surface">
-            <label className="flex cursor-pointer items-center justify-between gap-4 p-4 hover:bg-surface-2/40">
-              <span className="flex items-center gap-3">
-                <input
-                  type="checkbox"
-                  checked={selected.soundWav}
-                  onChange={() => toggleItem("soundWav")}
-                  className="h-4 w-4 rounded-icon border-control bg-bg accent-text"
-                />
-                <span>
-                  <span className="block text-sm font-medium text-text">
-                    The sound ({stemSlug}_sound.wav)
-                  </span>
-                  <span className="block text-xs text-muted">
-                    Isolated stem ·{" "}
-                    {selectedIsolation !== undefined
-                      ? methodBadgeLabel(selectedIsolation.method, useDemucsCleaner)
-                      : "WAV"}
-                  </span>
-                </span>
-              </span>
-              <span className="mono-num text-xs text-muted">WAV</span>
-            </label>
-
-            <label className="flex cursor-pointer items-center justify-between gap-4 p-4 hover:bg-surface-2/40">
-              <span className="flex items-center gap-3">
-                <input
-                  type="checkbox"
-                  checked={selected.restWav}
-                  onChange={() => toggleItem("restWav")}
-                  className="h-4 w-4 rounded-icon border-control bg-bg accent-text"
-                />
-                <span>
-                  <span className="block text-sm font-medium text-text">
-                    Rest of the mix ({stemSlug}_rest.wav)
-                  </span>
-                  <span className="block text-xs text-muted">
-                    Backing stem without the picked sound for play-along
-                  </span>
-                </span>
-              </span>
-              <span className="mono-num text-xs text-muted">WAV</span>
-            </label>
-
-            <div className="flex items-center justify-between gap-4 p-4 hover:bg-surface-2/40">
-              <label className="flex flex-1 cursor-pointer items-center gap-3">
-                <input
-                  type="checkbox"
-                  checked={selected.midi}
-                  onChange={() => toggleItem("midi")}
-                  className="h-4 w-4 rounded-icon border-control bg-bg accent-text"
-                />
-                <span>
-                  <span className="block text-sm font-medium text-text">
-                    MIDI arrangements (Easy &amp; Intermediate)
-                  </span>
-                  <span className="block text-xs text-muted">
-                    Beat-snapped Standard MIDI Files at {Math.round(trackMap.tempo.bpm)} BPM
-                  </span>
-                </span>
-              </label>
-              <button
-                type="button"
-                onClick={downloadSingleMidi}
-                className="mono-num h-7 cursor-pointer rounded-icon border border-line-2 bg-bg px-2.5 text-xs text-text-2 hover:border-control hover:text-text"
-              >
-                .MID
-              </button>
-            </div>
-
-            <div className="flex items-center justify-between gap-4 p-4 hover:bg-surface-2/40">
-              <label className="flex flex-1 cursor-pointer items-center gap-3">
-                <input
-                  type="checkbox"
-                  checked={selected.recipe}
-                  onChange={() => toggleItem("recipe")}
-                  className="h-4 w-4 rounded-icon border-control bg-bg accent-text"
-                />
-                <span>
-                  <span className="block text-sm font-medium text-text">
-                    Sound recipe + chord &amp; tempo notes
-                  </span>
-                  <span className="block text-xs text-muted">
-                    Muse Spark Open synth parameters (.json) and bar chords (.txt)
-                  </span>
-                </span>
-              </label>
-              <button
-                type="button"
-                onClick={downloadSingleRecipe}
-                className="mono-num h-7 cursor-pointer rounded-icon border border-line-2 bg-bg px-2.5 text-xs text-text-2 hover:border-control hover:text-text"
-              >
-                .JSON
-              </button>
-            </div>
-          </div>
-
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <span className="mono-num text-xs text-muted">
-              {statusMessage ?? `${selectedCount} item${selectedCount === 1 ? "" : "s"} selected`}
-            </span>
-            <button
-              type="button"
-              disabled={selectedCount === 0 || bundling || selectedIsolation === undefined}
-              onClick={() => void downloadBundleZip()}
-              className="h-9 cursor-pointer rounded-icon bg-text px-5 text-xs font-semibold text-bg transition hover:opacity-90 disabled:cursor-not-allowed disabled:bg-surface-2 disabled:text-muted"
-            >
-              {bundling ? "Building ZIP..." : `Download · ${selectedCount} files`}
-            </button>
-          </div>
-        </div>
-      </section>
-
-      <aside className="flex w-full shrink-0 flex-col gap-5 border-t border-line bg-surface p-4 lg:w-80 lg:border-t-0 lg:border-l lg:overflow-y-auto">
-        <div>
-          <span className="eyebrow mb-2 block">Session specs</span>
-          <div className="mono-num space-y-2 rounded-well border border-line bg-inset p-3 text-xs">
-            <div className="flex justify-between">
-              <span className="text-muted">Clip</span>
-              <span className="truncate text-text">{trackMap.source.title}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-muted">Tempo / Key</span>
-              <span className="text-text">
-                {Math.round(trackMap.tempo.bpm)} BPM · {trackMap.key.tonic} {trackMap.key.mode}
-              </span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-muted">Sound</span>
-              <span className="text-accent">{selectedIsolation?.label ?? "—"}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-muted">Transcribed</span>
-              <span className="text-text">{selectedIsolation?.notes.length ?? 0} notes</span>
-            </div>
-          </div>
-        </div>
-
-        <div className="border-t border-line pt-4">
-          <RecipeCard recipe={selectedIsolation?.recipe} compact />
-          <p className="mt-2 text-[11px] leading-relaxed text-muted">
-            Starting points for Vital or any subtractive synth. Tune by ear against the isolated
-            stem.
+    <section className="flex min-w-0 flex-1 flex-col bg-bg lg:overflow-y-auto">
+      <div className="mx-auto w-full max-w-3xl space-y-6 p-5 md:p-8">
+        <ScreenHeading title="Take it to your DAW">
+          <p className="text-sm text-text-2">
+            {Math.round(trackMap.tempo.bpm)} BPM, {trackMap.key.tonic} {trackMap.key.mode}. All files
+            start at the same moment, so they line up when placed at the same position.
           </p>
+        </ScreenHeading>
+
+        <div className="divide-y divide-line rounded-card border border-line bg-surface">
+          {items.map((item) => (
+            <label
+              key={item.id}
+              className="flex cursor-pointer items-start gap-3 p-4 hover:bg-surface-2/40"
+            >
+              <input
+                type="checkbox"
+                checked={selected[item.id]}
+                onChange={() => toggleItem(item.id)}
+                className="mt-0.5 h-4 w-4 shrink-0 rounded-icon border-control bg-bg accent-text"
+              />
+              <span className="min-w-0">
+                <span className="block text-sm font-medium text-text">{item.title}</span>
+                <span className="mt-0.5 block text-sm text-text-2">{item.description}</span>
+                <span className="mono-num mt-1.5 block truncate text-xs text-muted">
+                  {item.files.join(", ")}
+                </span>
+              </span>
+            </label>
+          ))}
         </div>
-      </aside>
-    </>
+
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <span role="status" className="text-sm text-muted">
+            {statusMessage}
+          </span>
+          <button
+            type="button"
+            disabled={chosenFiles.length === 0 || bundling || selectedIsolation === undefined}
+            onClick={() => void downloadBundleZip()}
+            className="h-10 cursor-pointer rounded-full bg-text px-5 text-sm font-semibold text-bg transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {bundling ? "Building the ZIP…" : `Download ZIP, ${chosenFiles.length} files`}
+          </button>
+        </div>
+      </div>
+    </section>
   );
 }

@@ -3,32 +3,28 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
 import type { StemName } from "@/lib/audio/player";
 import { drawWaveformLane } from "@/lib/studio/canvas";
-import { deriveMixPeaks, formatClockSeconds, methodBadgeLabel, methodShortLabel } from "@/lib/studio/format";
+import { deriveMixPeaks, formatClockSeconds } from "@/lib/studio/format";
 import { useStudio } from "./StudioContext";
 import { useThemeListener } from "./ThemeToggle";
 
 type SingleLaneProps = {
   title: string;
-  subtitle: string;
   stem: StemName;
   peaks: number[];
   audible: boolean;
   tone: "accent" | "rest";
   showAccentDot?: boolean;
-  badge?: string;
 };
 
 function WaveformLaneRow({
   title,
-  subtitle,
   stem,
   peaks,
   audible,
   tone,
   showAccentDot = false,
-  badge,
 }: SingleLaneProps) {
-  const { currentTime, duration, trackMap, monitor, setMonitor, loopRange, seek, playing } =
+  const { currentTime, duration, trackMap, monitor, setMonitor, loopRange, seek } =
     useStudio();
   const themeTick = useThemeListener();
 
@@ -154,38 +150,12 @@ function WaveformLaneRow({
               <span className="truncate">{title}</span>
             </span>
 
-            {/* Mini VU Meter Activity Graphic */}
-            <div className="flex items-end gap-0.5 h-3 shrink-0" title={audible ? "Track audible" : "Track muted"}>
-              <span
-                className={`w-0.5 rounded-full transition-all duration-300 ${
-                  playing && audible ? "h-3 bg-accent animate-pulse" : "h-1 bg-inactive/60"
-                }`}
-              />
-              <span
-                className={`w-0.5 rounded-full transition-all duration-200 ${
-                  playing && audible ? "h-2 bg-accent" : "h-1 bg-inactive/60"
-                }`}
-              />
-              <span
-                className={`w-0.5 rounded-full transition-all duration-300 ${
-                  playing && audible ? "h-2.5 bg-accent" : "h-1 bg-inactive/60"
-                }`}
-              />
-            </div>
           </div>
 
-          <div className="flex items-center gap-1.5">
-            {badge !== undefined ? (
-              <span className="mono-num shrink-0 rounded-xs border border-line-2 bg-surface-2 px-1 py-0.2 text-[9px] font-semibold tracking-wider text-accent uppercase">
-                {badge}
-              </span>
-            ) : null}
-            <span className="mono-num truncate text-[10px] text-muted">{subtitle}</span>
-          </div>
         </div>
 
-        {/* Solo [S] and Mute [M] Control Buttons */}
-        <div className="flex items-center justify-between pt-1 border-t border-line/40">
+        {/* Solo */}
+        <div className="flex items-center">
           <div className="flex items-center gap-1">
             {/* Solo Button */}
             <button
@@ -206,31 +176,7 @@ function WaveformLaneRow({
               S
             </button>
 
-            {/* Mute Button */}
-            <button
-              type="button"
-              aria-label={`Mute ${title}`}
-              aria-pressed={!audible}
-              onClick={(e) => {
-                e.stopPropagation();
-                if (stem === "sound") setMonitor(audible ? "rest" : "mix");
-                else if (stem === "rest") setMonitor(audible ? "sound" : "mix");
-                else setMonitor(audible ? "sound" : "mix");
-              }}
-              className={`mono-num flex h-5.5 w-6 cursor-pointer items-center justify-center rounded-xs text-[10px] font-bold transition ${
-                !audible
-                  ? "border border-red-500/50 bg-red-500/20 text-red-400 font-bold"
-                  : "bg-surface-2/80 text-muted hover:border-control hover:bg-surface-2 hover:text-text"
-              }`}
-              title={!audible ? "Unmute track" : "Mute track"}
-            >
-              M
-            </button>
           </div>
-
-          <span className="mono-num text-[10px] text-muted/70">
-            {audible ? (isSolo ? "SOLO" : "ACTIVE") : "MUTED"}
-          </span>
         </div>
       </div>
 
@@ -270,54 +216,40 @@ function WaveformLaneRow({
 }
 
 export function WaveformLanes() {
-  const { selectedIsolation, useDemucsCleaner, monitor } = useStudio();
-
-  const soundPeaks = useMemo(
-    () => selectedIsolation?.peaks ?? [0.25, 0.45, 0.35, 0.6, 0.5, 0.7, 0.55, 0.4],
-    [selectedIsolation],
+  const { selectedIsolation, monitor } = useStudio();
+  const soundPeaks = selectedIsolation?.peaks;
+  const restPeaks = selectedIsolation?.rest_peaks;
+  const mixPeaks = useMemo(
+    () => (soundPeaks === undefined ? [] : deriveMixPeaks(soundPeaks, restPeaks)),
+    [soundPeaks, restPeaks],
   );
-  const restPeaks = useMemo(
-    () => selectedIsolation?.rest_peaks ?? [0.55, 0.4, 0.42, 0.4, 0.55, 0.4, 0.42, 0.4],
-    [selectedIsolation],
-  );
-  const mixPeaks = useMemo(() => deriveMixPeaks(soundPeaks, restPeaks), [soundPeaks, restPeaks]);
 
-  const soundSubtitle =
-    selectedIsolation !== undefined
-      ? methodBadgeLabel(selectedIsolation.method, useDemucsCleaner)
-      : "No sound picked yet";
+  if (selectedIsolation === undefined || soundPeaks === undefined) return null;
 
   return (
-    <div className="w-full flex flex-col border-b border-line bg-surface/20">
+    <div className="flex w-full flex-col border-b border-line bg-surface/20">
       <WaveformLaneRow
-        title="Full mix"
-        subtitle="Original audio clip"
-        stem="mix"
-        peaks={mixPeaks}
-        audible={monitor === "mix"}
-        tone="rest"
-        badge="MASTER"
-      />
-      <WaveformLaneRow
-        title={selectedIsolation?.label ?? "Isolated stem"}
-        subtitle={soundSubtitle}
+        title={selectedIsolation.label}
         stem="sound"
         peaks={soundPeaks}
         audible={monitor === "sound" || monitor === "mix"}
         tone="accent"
         showAccentDot
-        badge={selectedIsolation === undefined ? "SAM" : methodShortLabel(selectedIsolation.method).toUpperCase()}
       />
       <WaveformLaneRow
-        title="Rest of mix"
-        subtitle="Residual accompaniment"
+        title="Rest of the mix"
         stem="rest"
-        peaks={restPeaks}
+        peaks={restPeaks ?? []}
         audible={monitor === "rest" || monitor === "mix"}
         tone="rest"
-        badge="BACKING"
+      />
+      <WaveformLaneRow
+        title="Full mix"
+        stem="mix"
+        peaks={mixPeaks}
+        audible={monitor === "mix"}
+        tone="rest"
       />
     </div>
   );
 }
-

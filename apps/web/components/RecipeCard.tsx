@@ -6,7 +6,6 @@ import type { Recipe } from "@/lib/trackmap/trackmap.generated";
 
 type RecipeCardProps = {
   recipe: Recipe | undefined;
-  compact?: boolean;
 };
 
 type BlockProps = {
@@ -32,7 +31,7 @@ function ParameterBlock({ title, rows }: BlockProps) {
   );
 }
 
-export function RecipeCard({ recipe, compact = false }: RecipeCardProps) {
+export function RecipeCard({ recipe }: RecipeCardProps) {
   const parsed = useMemo(() => parseRecipeSummary(recipe), [recipe]);
   const { envelope } = parsed;
 
@@ -50,8 +49,8 @@ export function RecipeCard({ recipe, compact = false }: RecipeCardProps) {
       <div className="grid grid-cols-2 gap-2">
         <ParameterBlock title="Oscillators" rows={parsed.oscillatorRows} />
         <ParameterBlock title="Filter" rows={parsed.filterRows} />
-        {!compact ? <ParameterBlock title="FX" rows={parsed.fxRows} /> : null}
-        {!compact ? <ParameterBlock title="Play" rows={parsed.playRows} /> : null}
+        <ParameterBlock title="FX" rows={parsed.fxRows} />
+        <ParameterBlock title="Play" rows={parsed.playRows} />
       </div>
 
       <div className="space-y-1.5 rounded-well border border-line bg-inset p-2.5">

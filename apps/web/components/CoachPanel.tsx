@@ -104,10 +104,7 @@ export function CoachPanel({
 }: CoachPanelProps) {
   const {
     problemBar,
-    ratePercent,
     loopBars,
-    handFilter,
-    simplifiedBars,
     applyCoachAction,
     resetCoachOverrides,
     togglePlay,
@@ -298,7 +295,6 @@ export function CoachPanel({
     setTextCommand("");
   };
 
-  const currentProblemBarNumber = problemBar?.bar;
   const attemptedBars = scoreResult.bars.filter((b: ScoreBar) => b.attempted);
   const avgHitRate =
     attemptedBars.length > 0
@@ -323,10 +319,7 @@ export function CoachPanel({
           </div>
           <div>
             <div className="flex items-center gap-1.5">
-              <span className="text-xs font-semibold text-text">Mixray Voice AI</span>
-              <span className="mono-num rounded-xs border border-accent/30 bg-accent/10 px-1 py-0.2 text-[9px] font-mono font-medium text-accent">
-                Meta
-              </span>
+              <span className="text-sm font-semibold text-text">Coach</span>
             </div>
             <span className="mono-num block text-[10px] text-muted">
               {!isVoiceOn
@@ -396,10 +389,7 @@ export function CoachPanel({
 
           {coachMessage !== null ? (
             <div className="self-start rounded-card border border-accent/25 bg-accent/10 p-2.5 text-xs leading-relaxed text-text max-w-[95%]">
-              <span className="block text-[10px] text-accent font-semibold mb-0.5">
-                Feedback from Muse Spark
-              </span>
-              <p>{coachMessage}</p>
+                            <p>{coachMessage}</p>
             </div>
           ) : null}
 
@@ -414,7 +404,7 @@ export function CoachPanel({
       {/* Performance Score & Coach Assessment */}
       <div className="rounded-card border border-line bg-inset p-3 space-y-2.5">
         <div className="flex items-center justify-between">
-          <span className="text-[11px] font-semibold text-text">Practice Take Score</span>
+          <span className="text-sm font-semibold text-text">Your take</span>
           {loopBars !== null ? (
             <span className="mono-num rounded-xs border border-line-2 bg-surface px-1.5 py-0.5 text-[10px] text-accent">
               Loop {loopBars.startBar}–{loopBars.endBar}
@@ -444,7 +434,7 @@ export function CoachPanel({
           </div>
         ) : (
           <p className="text-[11px] text-muted leading-relaxed">
-            Play along using QWERTY keys (A–L) or USB MIDI. Mixray measures accuracy and timing.
+            Press play and follow the notes on your keyboard.
           </p>
         )}
 
@@ -454,123 +444,8 @@ export function CoachPanel({
           disabled={isCoachThinking}
           className="h-8 w-full cursor-pointer rounded-icon border border-line-2 bg-surface-2 text-xs font-semibold text-text transition hover:border-accent hover:text-accent"
         >
-          {isCoachThinking ? "Analyzing take…" : "Ask Coach for Feedback"}
+          {isCoachThinking ? "Analyzing take…" : "Get feedback"}
         </button>
-      </div>
-
-      {/* Quick Interventions */}
-      <div className="space-y-1.5">
-        <span className="text-[10px] font-semibold uppercase tracking-wider text-muted">
-          Quick Actions
-        </span>
-        <div className="flex flex-wrap gap-1">
-          {currentProblemBarNumber !== undefined ? (
-            <button
-              type="button"
-              onClick={() => {
-                const s = Math.max(1, currentProblemBarNumber - 1);
-                const e = Math.min(16, currentProblemBarNumber + 2);
-                applyCoachActionRef.current({ name: "set_loop", args: { start_bar: s, end_bar: e } });
-                setLastActionNotice(`Looped bars ${s}–${e}`);
-                addChatMessage("mixray", `Looped problem bar ${currentProblemBarNumber} (${s}–${e}).`);
-                speakFeedback(`Looped bars ${s} to ${e}`);
-              }}
-              className="mono-num cursor-pointer rounded-icon border border-line-2 bg-inset px-2 py-1 text-[10px] text-text-2 hover:border-accent hover:text-accent"
-            >
-              Loop Bar {currentProblemBarNumber}
-            </button>
-          ) : null}
-
-          {ratePercent === 100 ? (
-            <button
-              type="button"
-              onClick={() => {
-                applyCoachActionRef.current({ name: "set_tempo", args: { percent: 75 } });
-                setLastActionNotice("Tempo set to 75%");
-                addChatMessage("mixray", "Tempo slowed to 75%.");
-                speakFeedback("Tempo slowed to 75%");
-              }}
-              className="mono-num cursor-pointer rounded-icon border border-line-2 bg-inset px-2 py-1 text-[10px] text-text-2 hover:border-accent hover:text-accent"
-            >
-              Slow 75%
-            </button>
-          ) : (
-            <button
-              type="button"
-              onClick={() => {
-                applyCoachActionRef.current({ name: "set_tempo", args: { percent: 100 } });
-                setLastActionNotice("Tempo restored to 100%");
-                addChatMessage("mixray", "Tempo restored to 100%.");
-                speakFeedback("Tempo restored to 100%");
-              }}
-              className="mono-num cursor-pointer rounded-icon border border-line-2 bg-inset px-2 py-1 text-[10px] text-text-2 hover:border-control hover:text-text"
-            >
-              Reset 100%
-            </button>
-          )}
-
-          {handFilter !== "right" ? (
-            <button
-              type="button"
-              onClick={() => {
-                applyCoachActionRef.current({ name: "switch_hand", args: { hand: "right" } });
-                setLastActionNotice("Right hand isolated");
-                addChatMessage("mixray", "Right hand isolated.");
-                speakFeedback("Right hand isolated");
-              }}
-              className="mono-num cursor-pointer rounded-icon border border-line-2 bg-inset px-2 py-1 text-[10px] text-text-2 hover:border-accent hover:text-accent"
-            >
-              Right Hand
-            </button>
-          ) : (
-            <button
-              type="button"
-              onClick={() => {
-                applyCoachActionRef.current({ name: "switch_hand", args: { hand: "both" } });
-                setLastActionNotice("Both hands enabled");
-                addChatMessage("mixray", "Both hands enabled.");
-                speakFeedback("Both hands enabled");
-              }}
-              className="mono-num cursor-pointer rounded-icon border border-line-2 bg-inset px-2 py-1 text-[10px] text-text-2 hover:border-control hover:text-text"
-            >
-              Both Hands
-            </button>
-          )}
-
-          {currentProblemBarNumber !== undefined &&
-          !simplifiedBars.includes(currentProblemBarNumber) ? (
-            <button
-              type="button"
-              onClick={() => {
-                applyCoachActionRef.current({
-                  name: "simplify_bar",
-                  args: { bar: currentProblemBarNumber },
-                });
-                setLastActionNotice(`Simplified bar ${currentProblemBarNumber}`);
-                addChatMessage("mixray", `Simplified bar ${currentProblemBarNumber}.`);
-                speakFeedback(`Simplified bar ${currentProblemBarNumber}`);
-              }}
-              className="mono-num cursor-pointer rounded-icon border border-line-2 bg-inset px-2 py-1 text-[10px] text-text-2 hover:border-accent hover:text-accent"
-            >
-              Simplify Bar {currentProblemBarNumber}
-            </button>
-          ) : null}
-
-          {loopBars !== null || ratePercent !== 100 || handFilter !== "both" ? (
-            <button
-              type="button"
-              onClick={() => {
-                resetCoachOverridesRef.current();
-                setLastActionNotice("All studio overrides reset");
-                addChatMessage("mixray", "Reset studio overrides.");
-                speakFeedback("Studio overrides reset");
-              }}
-              className="mono-num cursor-pointer rounded-icon border border-line-2 bg-inset px-2 py-1 text-[10px] text-muted hover:text-text"
-            >
-              Reset All
-            </button>
-          ) : null}
-        </div>
       </div>
 
       {/* Text command, for when speaking is not an option */}
@@ -608,7 +483,7 @@ export function CoachPanel({
           href={takeHref}
           className="flex h-9 w-full items-center justify-center rounded-icon bg-accent text-xs font-semibold text-accent-ink shadow-sm transition hover:opacity-95"
         >
-          Finished Practice · Export Track →
+          Continue to Export
         </Link>
       </div>
     </aside>

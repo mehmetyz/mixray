@@ -11,14 +11,6 @@ export const STEP_LABELS: Record<StepId, string> = {
   take: "Export",
 };
 
-const STEP_EYEBROWS: Record<StepId, string> = {
-  add: "Add Media",
-  pick: "Isolate Sound",
-  xray: "Analyze Audio",
-  learn: "Interactive Practice",
-  take: "Export Package",
-};
-
 export type AddNavState = {
   current: "add";
 };
@@ -43,11 +35,6 @@ export type StepLink = {
 
 export function stepNumber(id: StepId): number {
   return STEP_IDS.indexOf(id) + 1;
-}
-
-export function stepEyebrow(id: StepId): string {
-  const num = String(stepNumber(id)).padStart(2, "0");
-  return `${num} · ${STEP_EYEBROWS[id]}`;
 }
 
 function stepHref(id: StepId, nav: NavState): string | null {

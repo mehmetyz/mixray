@@ -31,6 +31,7 @@ import {
 import { formatClockSeconds } from "@/lib/studio/format";
 import { inspectMediaFile, type MediaPreview } from "@/lib/studio/media-preview";
 import { ScreenHeading } from "./ScreenHeading";
+import { WorkingPanel } from "./WorkingPanel";
 
 type UploadState =
   | "idle"
@@ -40,12 +41,6 @@ type UploadState =
   | "isolating"
   | "polling"
   | "routing";
-
-type PipelineStage = {
-  step: number;
-  label: string;
-  detail: string;
-};
 
 type DragMode = "move" | "resize-left" | "resize-right";
 
@@ -59,16 +54,6 @@ type PickedArea = {
   source: PixelSize;
   time: number;
 };
-
-const SUGGESTION_QUICK_PRESETS: readonly string[] = [
-  "Piano",
-  "Vocals",
-  "Bass",
-  "Lead synth",
-  "Drums",
-  "Guitar",
-  "Violin",
-];
 
 function stripExtension(filename: string): string {
   const dot = filename.lastIndexOf(".");
@@ -485,38 +470,16 @@ export function ClipPicker() {
     }
   }, [uploadState, activeStage]);
 
-  const pipelineStages = useMemo<readonly PipelineStage[]>(() => {
-    const hasPrompt = promptInput.trim().length > 0;
+  const pipelineStages = useMemo<readonly string[]>(() => {
+    const hasSound = pickedArea !== null || promptInput.trim().length > 0;
     return [
-      {
-        step: 1,
-        label: "Prepare Clip",
-        detail: "Trimming selected window",
-      },
-      {
-        step: 2,
-        label: "Upload Audio",
-        detail: "Sending audio to engine",
-      },
-      {
-        step: 3,
-        label: "Analyze Track",
-        detail: "Detecting tempo, beats & chords",
-      },
-      {
-        step: 4,
-        label: hasPrompt ? `Isolate "${promptInput.trim()}"` : "Stem Separation",
-        detail: hasPrompt
-          ? "Separating chosen instrument"
-          : "Preparing reference waveforms",
-      },
-      {
-        step: 5,
-        label: "Open Studio",
-        detail: "Opening DAW workspace",
-      },
+      "Preparing your clip",
+      "Uploading",
+      "Reading tempo, key and chords",
+      ...(hasSound ? ["Separating the sound"] : []),
+      "Opening the studio",
     ];
-  }, [promptInput]);
+  }, [promptInput, pickedArea]);
 
   const windowLeftPct =
     preview !== null && preview.duration > 0 ? (windowRange.start / preview.duration) * 100 : 0;
@@ -527,12 +490,9 @@ export function ClipPicker() {
 
   return (
     <div className="w-full max-w-3xl mx-auto space-y-4">
-      <ScreenHeading
-        step="add"
-        title="Point at a sound. Hear it alone."
-      >
+      <ScreenHeading title="Point at a sound. Hear it alone. Learn to play it.">
         <p className="text-sm text-text-2">
-          Add audio or video, select your 30s section, and isolate any instrument or player.
+          Add a song or a video, then choose up to 30 seconds of it.
         </p>
       </ScreenHeading>
 
@@ -541,7 +501,6 @@ export function ClipPicker() {
           role="alert"
           className="rounded-card border border-accent bg-surface px-4 py-2.5 text-xs text-text"
         >
-          <span className="mono-num mr-2 font-semibold uppercase text-accent">Error</span>
           {errorMessage}
         </div>
       ) : null}
@@ -573,7 +532,7 @@ export function ClipPicker() {
               : "Drop your song or video here"}
           </p>
           <p className="mono-num mt-1 text-xs text-muted">
-            MP3 · WAV · FLAC · MP4 · MOV · up to 50 MB
+            MP3, WAV, FLAC, MP4 or MOV. Up to 50 MB and 6 minutes.
           </p>
           <div className="mt-5">
             <label
@@ -585,89 +544,13 @@ export function ClipPicker() {
           </div>
         </div>
       ) : busy ? (
-        <div className="space-y-3 rounded-card border border-line bg-surface p-4">
-          <div className="flex items-center justify-between border-b border-line pb-2.5">
-            <div className="flex min-w-0 items-center gap-2 text-xs">
-              <span className="mono-num rounded-icon border border-line-2 bg-surface-2 px-1.5 py-0.5 text-[10px] uppercase text-text-2">
-                {preview.kind}
-              </span>
-              <span className="truncate font-semibold text-text">{selectedFile.name}</span>
-            </div>
-            <span className="mono-num text-[11px] text-muted shrink-0">
-              {elapsedSeconds > 0 ? `${elapsedSeconds}s · ` : ""}Stage {currentStepIndex + 1} of{" "}
-              {pipelineStages.length}
-            </span>
-          </div>
-
-          <div className="space-y-1.5">
-            <div className="flex items-center justify-between text-xs">
-              <div className="flex items-center gap-2">
-                <span className="relative flex h-2 w-2">
-                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-accent opacity-75"></span>
-                  <span className="relative inline-flex h-2 w-2 rounded-full bg-accent"></span>
-                </span>
-                <span className="font-semibold text-text">
-                  {pipelineStages[currentStepIndex]?.label ?? "Processing track"}
-                </span>
-              </div>
-              <span className="mono-num text-xs text-accent">
-                {Math.round(((currentStepIndex + 1) / pipelineStages.length) * 100)}%
-              </span>
-            </div>
-            <div className="h-1.5 w-full overflow-hidden rounded-full bg-inset">
-              <div
-                className="h-full bg-accent transition-all duration-500 ease-out"
-                style={{
-                  width: `${((currentStepIndex + 1) / pipelineStages.length) * 100}%`,
-                }}
-              />
-            </div>
-          </div>
-
-          {/* Compact 5-step horizontal stepper */}
-          <div className="grid grid-cols-5 gap-1.5 py-1">
-            {pipelineStages.map((stage, idx) => {
-              const isCompleted = idx < currentStepIndex;
-              const isActive = idx === currentStepIndex;
-              return (
-                <div
-                  key={stage.step}
-                  className={`flex flex-col items-center justify-center rounded-icon border px-1.5 py-1 text-center transition ${
-                    isActive
-                      ? "border-accent bg-accent/10 text-text"
-                      : isCompleted
-                        ? "border-line-2 bg-surface-2 text-text opacity-70"
-                        : "border-transparent bg-inset text-muted"
-                  }`}
-                >
-                  <span className="mono-num text-[10px]">
-                    {isCompleted ? "✓" : `0${stage.step}`}
-                  </span>
-                  <span className="truncate text-[10px] font-medium max-w-full">
-                    {stage.label.split(" ")[0]}
-                  </span>
-                </div>
-              );
-            })}
-          </div>
-
-          <div className="flex items-center justify-between border-t border-line pt-2.5 text-xs">
-            <span className="mono-num flex items-center gap-2 text-[11px] text-muted">
-              <span className="h-1.5 w-1.5 animate-ping rounded-full bg-accent"></span>
-              {pipelineStages[currentStepIndex]?.detail}... {elapsedSeconds > 0 ? `(${elapsedSeconds}s)` : "Please wait"}
-            </span>
-            <button
-              type="button"
-              onClick={() => {
-                setElapsedSeconds(0);
-                setUploadState("idle");
-              }}
-              className="cursor-pointer text-[11px] text-muted hover:text-text"
-            >
-              Cancel
-            </button>
-          </div>
-        </div>
+        <WorkingPanel
+          steps={pipelineStages}
+          current={Math.min(currentStepIndex, pipelineStages.length - 1)}
+          seconds={elapsedSeconds}
+          subject={selectedFile.name}
+          note="Keep this tab open. Separating a sound can take a few minutes."
+        />
       ) : (
         <div className="space-y-3 rounded-card border border-line bg-surface p-3.5">
           {/* Top File Info Bar */}
@@ -733,8 +616,8 @@ export function ClipPicker() {
               <div className="flex items-center justify-between gap-3 border-t border-line-2 bg-surface px-3 py-1.5 text-[11px] text-muted">
                 <span>
                   {pickedArea !== null
-                    ? `Area selected at ${formatClockSeconds(pickedArea.time)}. Mixray will isolate what is in it.`
-                    : "Drag over the instrument on the video to pick its sound. Click to play or pause."}
+                    ? "Area selected. Mixray will isolate the sound in it."
+                    : "Drag over an instrument to pick its sound, or click to play."}
                 </span>
                 {pickedArea !== null ? (
                   <button
@@ -902,9 +785,7 @@ export function ClipPicker() {
                   ({clipSeconds(windowRange).toFixed(1)}s)
                 </span>
               </span>
-              <span className="text-[10px] text-muted">
-                Drag window to move · Drag edges to resize
-              </span>
+              <span className="text-[10px] text-muted">Drag to move or resize</span>
             </div>
 
             <div
@@ -966,85 +847,40 @@ export function ClipPicker() {
             </div>
           </div>
 
-          {/* Project Details Section */}
-          <div className="space-y-3 border-t border-line pt-3">
-            <div className="flex items-center justify-between">
-              <span className="text-[11px] font-semibold uppercase tracking-wider text-muted">
-                Project Details
-              </span>
-              <span className="mono-num text-[11px] text-muted">
-                Customizable · Used in Studio
-              </span>
+          {pickedArea === null ? (
+            <div className="border-t border-line pt-3">
+              <label htmlFor="target-sound-input" className="block text-sm text-text">
+                Sound to isolate <span className="text-muted">(optional)</span>
+              </label>
+              <input
+                id="target-sound-input"
+                type="text"
+                value={promptInput}
+                onChange={(event) => setPromptInput(event.target.value)}
+                placeholder="Piano, vocals, bass…"
+                disabled={busy}
+                className="mt-1.5 h-10 w-full rounded-card border border-line-2 bg-inset px-3 text-sm text-text placeholder:text-muted focus:border-control focus:outline-none"
+              />
             </div>
-
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              {/* Project Name Input */}
-              <div className="space-y-1">
-                <label htmlFor="project-title-input" className="block text-xs font-medium text-text">
-                  Project Name
-                </label>
-                <input
-                  id="project-title-input"
-                  type="text"
-                  value={projectTitle}
-                  onChange={(event) => setProjectTitle(event.target.value)}
-                  placeholder="e.g. My New Song"
-                  disabled={busy}
-                  className="mono-num h-9 w-full rounded-card border border-line-2 bg-inset px-3 text-xs text-text placeholder:text-muted focus:border-text focus:outline-none"
-                />
-              </div>
-
-              {/* Target Sound / Isolation Input */}
-              <div className="space-y-1">
-                <label htmlFor="target-sound-input" className="block text-xs font-medium text-text">
-                  Sound to Isolate <span className="text-muted font-normal">(optional)</span>
-                </label>
-                <input
-                  id="target-sound-input"
-                  type="text"
-                  value={promptInput}
-                  onChange={(event) => setPromptInput(event.target.value)}
-                  placeholder="e.g. piano chords, synth lead, vocals"
-                  disabled={busy}
-                  className="mono-num h-9 w-full rounded-card border border-line-2 bg-inset px-3 text-xs text-text placeholder:text-muted focus:border-text focus:outline-none"
-                />
-              </div>
-            </div>
-
-            {/* Quick Suggestion Chips for Sound */}
-            <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
-              <span className="text-[11px] text-muted">Preset sounds:</span>
-              {SUGGESTION_QUICK_PRESETS.map((preset) => (
-                <button
-                  key={preset}
-                  type="button"
-                  disabled={busy}
-                  onClick={() => setPromptInput(preset)}
-                  className={`cursor-pointer rounded-full border px-2.5 py-0.5 text-xs transition disabled:opacity-50 ${
-                    promptInput === preset
-                      ? "border-control bg-surface-2 font-medium text-text shadow-xs"
-                      : "border-line-2 bg-bg text-text-2 hover:border-control hover:text-text"
-                  }`}
-                >
-                  {preset}
-                </button>
-              ))}
-            </div>
-          </div>
+          ) : null}
         </div>
       )}
 
       {selectedFile !== null && !busy ? (
-        <div className="flex flex-col gap-2 rounded-card border border-line bg-surface p-3 sm:flex-row sm:items-center sm:justify-between">
-          <label className="flex cursor-pointer items-center gap-2">
+        <div className="space-y-3">
+          <label className="flex cursor-pointer items-start gap-2.5">
             <input
               type="checkbox"
               checked={rightsChecked}
               onChange={(event) => setRightsChecked(event.target.checked)}
-              className="h-3.5 w-3.5 rounded-icon border-control bg-bg accent-text"
+              className="mt-0.5 h-4 w-4 rounded-icon border-control bg-bg accent-accent"
             />
-            <span className="text-[11px] text-muted">
-              I own this media or have permission to use it.
+            <span className="text-sm text-text-2">
+              I own this file or have the rights to use it.
+              <span className="mt-0.5 block text-xs leading-relaxed text-muted">
+                Clips are sent to Meta models in contributor mode and may be used by Meta to improve
+                them. Uploads are deleted after 7 days.
+              </span>
             </span>
           </label>
 
@@ -1052,9 +888,9 @@ export function ClipPicker() {
             type="button"
             disabled={selectedFile === null || !rightsChecked || busy}
             onClick={() => void handleSubmit()}
-            className="mono-num flex h-8 shrink-0 cursor-pointer items-center justify-center gap-2 rounded-icon bg-text px-4 text-xs font-semibold text-bg transition hover:opacity-90 disabled:cursor-not-allowed disabled:bg-surface-2 disabled:text-muted"
+            className="flex h-10 w-full cursor-pointer items-center justify-center rounded-full bg-text text-sm font-semibold text-bg transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
           >
-            {promptInput.trim().length > 0 ? "Create Project & Isolate →" : "Create Studio Project →"}
+            Continue
           </button>
         </div>
       ) : null}

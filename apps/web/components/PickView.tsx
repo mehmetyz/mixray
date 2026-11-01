@@ -6,14 +6,21 @@ import { useRef, useState, type FormEvent } from "react";
 import { startAreaIsolation, startIsolation, waitForJob } from "@/lib/engine/client";
 import type { Job, JobStage } from "@/lib/engine/types";
 import type { VideoArea } from "@/lib/studio/area";
-import { methodBadgeLabel, methodShortLabel } from "@/lib/studio/format";
 import { useStudio } from "./StudioContext";
 import { TimelineRuler } from "./StudioShell";
 import { VideoMaskStage } from "./VideoMaskStage";
+import { WorkingPanel } from "./WorkingPanel";
 import { WaveformLanes } from "./WaveformLanes";
 
-const PROGRESS_STAGES: readonly JobStage[] = ["listening", "naming", "isolating", "analyzing"];
-const LIVE_CLIP_ID_RE = /^[0-9a-f]{64}$/;
+const STAGE_LABELS: Record<JobStage, string> = {
+  listening: "Listening to the clip",
+  segmenting: "Finding the area",
+  naming: "Naming the area",
+  isolating: "Separating the sound",
+  analyzing: "Reading the notes",
+  done: "Finishing",
+  error: "Stopped",
+};
 
 export function PickView() {
   const router = useRouter();
@@ -29,25 +36,22 @@ export function PickView() {
     setMonitor,
   } = useStudio();
 
-  const isDemo = !LIVE_CLIP_ID_RE.test(clipId);
-  const [demoQuartetMode, setDemoQuartetMode] = useState<boolean>(false);
-  const initialTargetId = trackMap.video?.tracks[0]?.id ?? "violin";
-  const [selectedMaskId, setSelectedMaskId] = useState<string>(initialTargetId);
   const [promptInput, setPromptInput] = useState<string>("");
   const [workingStage, setWorkingStage] = useState<JobStage | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [workingSeconds, setWorkingSeconds] = useState<number>(0);
+  const [workingSteps, setWorkingSteps] = useState<readonly string[]>([]);
   const workingTimer = useRef<number | null>(null);
-
-  const matchedTrack = trackMap.video?.tracks.find(
-    (track) => track.isolation_id === selectedIsolationId,
-  );
-  const activeMaskId = matchedTrack?.id ?? selectedMaskId;
 
   const runJob = async (firstStage: JobStage, start: () => Promise<Job>) => {
     setErrorMessage(null);
     setWorkingStage(firstStage);
     setWorkingSeconds(0);
+    setWorkingSteps(
+      firstStage === "naming"
+        ? [STAGE_LABELS.naming, STAGE_LABELS.isolating]
+        : [STAGE_LABELS.isolating],
+    );
     workingTimer.current = window.setInterval(() => setWorkingSeconds((seconds) => seconds + 1), 1000);
     try {
       const initialJob = await start();
@@ -91,20 +95,6 @@ export function PickView() {
       return;
     }
 
-    if (isDemo) {
-      const partial = trackMap.isolations.find(
-        (item) =>
-          lower.includes("piano") || lower.includes("chord") || lower.includes("key")
-            ? item.label.toLowerCase().includes("piano")
-            : item.label.toLowerCase().includes("lead"),
-      );
-      if (partial !== undefined) {
-        selectIsolation(partial.id);
-        setMonitor("sound");
-        return;
-      }
-    }
-
     await runJob("isolating", () =>
       startIsolation({ jobId: clipId, prompt: cleanPrompt, label }),
     );
@@ -120,313 +110,124 @@ export function PickView() {
       ? `/c/${encodeURIComponent(clipId)}/xray?iso=${encodeURIComponent(selectedIsolationId)}`
       : `/c/${encodeURIComponent(clipId)}/xray`;
 
-  const rulerToggle =
-    trackMap.video === undefined && isDemo ? (
-      <div className="mono-num flex items-center gap-1 text-[11px]">
-        <button
-          type="button"
-          aria-pressed={!demoQuartetMode}
-          onClick={() => setDemoQuartetMode(false)}
-          className={`cursor-pointer rounded-icon px-2 py-0.5 ${
-            !demoQuartetMode ? "bg-surface-2 text-text" : "text-muted hover:text-text"
-          }`}
-        >
-          Audio view
-        </button>
-        <button
-          type="button"
-          aria-pressed={demoQuartetMode}
-          onClick={() => setDemoQuartetMode(true)}
-          className={`cursor-pointer rounded-icon px-2 py-0.5 ${
-            demoQuartetMode ? "bg-surface-2 text-text" : "text-muted hover:text-text"
-          }`}
-        >
-          Video mask stage
-        </button>
-      </div>
-    ) : undefined;
-
   return (
     <>
       <section className="flex min-w-0 flex-1 flex-col bg-bg lg:overflow-y-auto">
-        <TimelineRuler rightSlot={rulerToggle} />
+        <TimelineRuler />
 
-        <VideoMaskStage
-          video={trackMap.video}
-          demoQuartetMode={demoQuartetMode}
-          selectedTargetId={activeMaskId}
-          onSelectTarget={(targetId, prompt, label, isolationId) => {
-            setSelectedMaskId(targetId);
-            if (isolationId !== undefined) {
-              selectIsolation(isolationId);
-              setMonitor("sound");
-              return;
-            }
-            void runOrSelectPrompt(prompt, label);
-          }}
-          onSelectArea={
-            trackMap.video === undefined
-              ? undefined
-              : (area: VideoArea, frame: number) => {
-                  void runJob("naming", () =>
-                    startAreaIsolation({ jobId: clipId, area, frame }),
-                  );
-                }
-          }
-          areaBusy={workingStage !== null}
-        />
+        {trackMap.video !== undefined ? (
+          <VideoMaskStage
+            video={trackMap.video}
+            onSelectArea={(area: VideoArea, frame: number) => {
+              void runJob("naming", () => startAreaIsolation({ jobId: clipId, area, frame }));
+            }}
+            areaBusy={workingStage !== null}
+            sizeClass="max-w-[calc(46dvh*16/9)]"
+          />
+        ) : null}
 
         <WaveformLanes />
-
-        <div className="flex items-center justify-between px-4 py-2 text-[11px] text-muted">
-          <span className="mono-num truncate">
-            {selectedIsolation !== undefined
-              ? `${selectedIsolation.label} · ${methodBadgeLabel(selectedIsolation.method, useDemucsCleaner)}`
-              : "Select a sound"}
-          </span>
-          <span className="mono-num shrink-0 text-muted">Scrub to seek</span>
-        </div>
       </section>
 
-      <aside className="flex w-full shrink-0 flex-col gap-4 border-t border-line bg-surface/80 p-4 backdrop-blur-md lg:w-80 lg:border-t-0 lg:border-l lg:overflow-y-auto">
-        <div className="flex items-center justify-between pb-1">
-          <div>
-            <h2 className="text-base font-semibold tracking-tight text-text">Isolate Sound</h2>
-            <p className="text-xs text-muted">Point or type to separate any stem</p>
-          </div>
-          <span className="mono-num rounded-full border border-line-2 bg-surface-2 px-2.5 py-0.5 text-xs font-medium text-text-2">
-            {useDemucsCleaner
-              ? "DEMUCS"
-              : selectedIsolation === undefined
-                ? "SAM AUDIO"
-                : methodShortLabel(selectedIsolation.method).toUpperCase()}
-          </span>
-        </div>
+      <aside className="flex w-full shrink-0 flex-col gap-5 border-t border-line bg-surface/80 p-4 lg:w-80 lg:overflow-y-auto lg:border-t-0 lg:border-l">
+        <h2 className="text-base font-semibold tracking-tight text-text">Pick a sound</h2>
 
         {errorMessage !== null ? (
           <div
             role="alert"
-            className="rounded-card border border-accent/40 bg-accent/10 px-3.5 py-2.5 text-xs text-text shadow-xs"
+            className="rounded-card border border-accent/40 bg-accent/10 px-3.5 py-2.5 text-sm text-text"
           >
             {errorMessage}
           </div>
         ) : null}
 
-        {/* Describe a sound - prominent hero prompt search */}
-        <div className="space-y-3.5 rounded-card border border-line-2 bg-surface-2/40 p-3.5 shadow-xs">
-          <form onSubmit={onPromptSubmit} className="space-y-2.5">
-            <div className="flex items-center justify-between">
-              <label htmlFor="sound-prompt-input" className="text-xs font-semibold text-text">
-                Target sound
-              </label>
-              <span className="mono-num text-xs font-medium text-accent">
-                Meta SAM Audio
-              </span>
-            </div>
+        <form onSubmit={onPromptSubmit} className="relative flex items-center">
+          <label htmlFor="sound-prompt-input" className="sr-only">
+            Sound to isolate
+          </label>
+          <input
+            id="sound-prompt-input"
+            type="text"
+            value={promptInput}
+            onChange={(event) => setPromptInput(event.target.value)}
+            placeholder="Piano, vocals, bass…"
+            disabled={workingStage !== null}
+            className="h-10 w-full rounded-card border border-line-2 bg-inset pr-20 pl-3.5 text-sm text-text placeholder:text-muted focus:border-control focus:outline-none disabled:opacity-50"
+          />
+          <button
+            type="submit"
+            disabled={workingStage !== null || promptInput.trim().length === 0}
+            className="absolute right-1.5 h-7.5 cursor-pointer rounded-icon bg-text px-3 text-xs font-semibold text-bg transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            Isolate
+          </button>
+        </form>
 
-            <div className="relative flex items-center">
-              <input
-                id="sound-prompt-input"
-                type="text"
-                value={promptInput}
-                onChange={(event) => setPromptInput(event.target.value)}
-                placeholder="e.g. piano, synth lead, vocals..."
-                disabled={workingStage !== null}
-                className="h-10 w-full rounded-card border border-line-2 bg-surface pr-20 pl-3.5 text-sm text-text placeholder:text-muted transition focus:border-accent focus:outline-none"
-              />
-              <button
-                type="submit"
-                disabled={workingStage !== null || promptInput.trim().length === 0}
-                className="absolute right-1.5 h-7.5 cursor-pointer rounded-icon bg-text px-3 text-xs font-semibold text-bg transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-30"
-              >
-                Isolate
-              </button>
-            </div>
-
-            {promptInput.trim().length > 0 ? (
-              <p className="mono-num truncate px-1 text-xs text-muted">
-                Prompt: &quot;{promptInput.trim()}&quot;
-              </p>
-            ) : null}
-          </form>
-
-          {/* Muse Spark suggestion chips */}
-          {trackMap.suggestions.length > 0 ? (
-            <div className="space-y-2 border-t border-line-2/60 pt-2.5">
-              <span className="block text-xs font-medium text-text-2">
-                Suggestions in this clip
-              </span>
-              <div className="flex flex-wrap gap-1.5">
-                {trackMap.suggestions.map((chip) => {
-                  const active =
-                    selectedIsolation !== undefined &&
-                    (selectedIsolation.prompt.toLowerCase() === chip.prompt.toLowerCase() ||
-                      selectedIsolation.label.toLowerCase() === chip.label.toLowerCase());
-                  return (
-                    <button
-                      key={chip.prompt}
-                      type="button"
-                      aria-pressed={active}
-                      disabled={workingStage !== null}
-                      onClick={() => {
-                        setPromptInput(chip.prompt);
-                        void runOrSelectPrompt(chip.prompt, chip.label);
-                      }}
-                      className={`cursor-pointer rounded-full px-3 py-1 text-xs font-medium transition ${
-                        active
-                          ? "bg-accent font-semibold text-accent-ink shadow-xs"
-                          : "border border-line-2 bg-surface text-text-2 hover:border-control hover:text-text"
-                      }`}
-                    >
-                      {chip.label}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          ) : null}
-        </div>
-
-        {/* Progress Stepper */}
-        {workingStage !== null ? (
-          <div className="space-y-2 rounded-card border border-accent/40 bg-accent/10 p-3.5 text-xs">
-            <div className="mono-num flex items-center justify-between text-xs">
-              <span className="font-semibold text-accent uppercase tracking-wide">Isolating sound</span>
-              <span className="h-2 w-2 rounded-full bg-accent animate-ping" />
-            </div>
-            <div className="mono-num flex flex-wrap items-center gap-1.5">
-              {PROGRESS_STAGES.map((stage, idx) => (
-                <span key={stage} className="flex items-center gap-1.5">
-                  {idx > 0 ? <span className="text-muted">→</span> : null}
-                  <span
-                    className={`rounded-full px-2.5 py-0.5 text-xs ${
-                      stage === workingStage
-                        ? "bg-accent font-semibold text-accent-ink shadow-xs"
-                        : "text-muted"
-                    }`}
-                  >
-                    {stage}
-                  </span>
-                </span>
-              ))}
-            </div>
-            <p className="text-xs text-text-2">
-              {workingSeconds} s so far. Separating a sound can take a few minutes.
-            </p>
+        {trackMap.suggestions.length > 0 ? (
+          <div className="flex flex-wrap gap-1.5">
+            {trackMap.suggestions.map((chip) => {
+              const active =
+                selectedIsolation !== undefined &&
+                (selectedIsolation.prompt.toLowerCase() === chip.prompt.toLowerCase() ||
+                  selectedIsolation.label.toLowerCase() === chip.label.toLowerCase());
+              return (
+                <button
+                  key={chip.prompt}
+                  type="button"
+                  aria-pressed={active}
+                  disabled={workingStage !== null}
+                  onClick={() => {
+                    setPromptInput(chip.prompt);
+                    void runOrSelectPrompt(chip.prompt, chip.label);
+                  }}
+                  className={`cursor-pointer rounded-full px-3 py-1 text-sm transition disabled:opacity-50 ${
+                    active
+                      ? "bg-accent font-medium text-accent-ink"
+                      : "border border-line-2 text-text-2 hover:border-control hover:text-text"
+                  }`}
+                >
+                  {chip.label}
+                </button>
+              );
+            })}
           </div>
         ) : null}
 
-        {/* Ready Isolated Stems */}
-        {trackMap.isolations.length > 0 ? (
-          <div className="space-y-2">
-            <div className="flex items-center justify-between px-1">
-              <span className="text-xs font-semibold text-text">Isolated sounds</span>
-              <span className="mono-num text-xs text-muted">
-                {trackMap.isolations.length} available
-              </span>
-            </div>
-            <div className="space-y-1.5">
-              {trackMap.isolations.map((iso) => {
-                const active = selectedIsolationId === iso.id;
-                return (
-                  <button
-                    key={iso.id}
-                    type="button"
-                    onClick={() => {
-                      selectIsolation(iso.id);
-                      setMonitor("sound");
-                    }}
-                    className={`flex w-full cursor-pointer items-center justify-between rounded-card border px-3 py-2 text-left transition ${
-                      active
-                        ? "border-accent bg-surface-2 font-medium text-text shadow-xs"
-                        : "border-line-2 bg-surface-2/40 text-text-2 hover:border-control hover:text-text"
-                    }`}
-                  >
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-1.5">
-                        {active ? <span className="h-2 w-2 shrink-0 rounded-full bg-accent" /> : null}
-                        <span className="truncate text-sm font-medium">{iso.label}</span>
-                      </div>
-                      <span className="mono-num block truncate text-xs text-muted">
-                        &quot;{iso.prompt}&quot;
-                      </span>
-                    </div>
-                    <span className="mono-num ml-2 shrink-0 rounded-full border border-line-2 bg-bg px-2 py-0.5 text-[10px] uppercase text-muted">
-                      {methodShortLabel(iso.method)}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
+        {workingStage !== null ? (
+          <WorkingPanel
+            steps={workingSteps}
+            current={Math.max(0, workingSteps.indexOf(STAGE_LABELS[workingStage]))}
+            seconds={workingSeconds}
+            note="Separating a sound can take a few minutes."
+          />
         ) : null}
 
         {fallbackAlternative !== null ? (
-          <div className="space-y-2.5 rounded-card border border-line-2 bg-surface-2/40 p-3.5 shadow-xs">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-semibold text-text">Alternative version</span>
-              <span className="mono-num rounded-full border border-line-2 bg-bg px-2 py-0.5 text-[10px] uppercase text-text-2">
-                {useDemucsCleaner ? "PREVIEW ON" : "PREVIEW OFF"}
+          <label className="flex cursor-pointer items-start gap-2.5 border-t border-line pt-4 text-sm">
+            <input
+              type="checkbox"
+              checked={useDemucsCleaner}
+              onChange={(event) => setUseDemucsCleaner(event.target.checked)}
+              className="mt-0.5 h-4 w-4 cursor-pointer rounded-xs border-line-2 accent-accent"
+            />
+            <span>
+              <span className="block text-text">Hear the Demucs version</span>
+              <span className="mt-0.5 block text-xs leading-relaxed text-muted">
+                For comparison here. The next screens keep the selected sound and its notes.
               </span>
-            </div>
-
-            <label className="flex cursor-pointer items-start gap-2.5">
-              <input
-                type="checkbox"
-                checked={useDemucsCleaner}
-                onChange={(event) => setUseDemucsCleaner(event.target.checked)}
-                className="mt-0.5 h-4 w-4 rounded-xs border-line-2 accent-accent cursor-pointer"
-              />
-              <div className="space-y-0.5 text-xs">
-                <span className="block font-medium text-text">
-                  Preview the Demucs {fallbackAlternative.name} stem
-                </span>
-                <span className="block text-xs leading-relaxed text-text-2">
-                  For listening here only. Analyze, Practice and Export use the selected sound, so
-                  playback matches its notes.
-                </span>
-              </div>
-            </label>
-
-          </div>
+            </span>
+          </label>
         ) : null}
 
-        {/* Demo switcher / Try precomputed demo card */}
-        <div className="space-y-1.5 rounded-card border border-line-2/80 bg-surface-2/30 p-3.5">
-          <div className="flex items-center justify-between text-xs">
-            <span className="font-semibold text-text">
-              {isDemo ? "Upload clip" : "Reference demo"}
-            </span>
-            <span className="mono-num rounded-xs bg-bg/60 px-1.5 py-0.5 text-[10px] uppercase text-muted">
-              {isDemo ? "Custom" : "Demo"}
-            </span>
-          </div>
-          <p className="text-xs leading-relaxed text-text-2">
-            {isDemo
-              ? "Isolate any sound in your own song or video."
-              : "Compare with our precomputed reference lead."}
-          </p>
-          <Link
-            href={isDemo ? "/" : "/c/demo1/pick"}
-            className="mono-num inline-flex items-center gap-1 pt-1 text-xs font-semibold text-accent hover:underline"
-          >
-            {isDemo ? "+ Upload your clip →" : "Load demo1 (EDM Lead) →"}
-          </Link>
-        </div>
-
-        <div className="mt-auto border-t border-line pt-3">
+        <div className="mt-auto pt-3">
           {selectedIsolation !== undefined ? (
             <Link
               href={xrayHref}
-              className="flex h-10 w-full items-center justify-center rounded-full bg-text text-sm font-semibold text-bg shadow-sm transition hover:opacity-90 active:scale-[0.99]"
+              className="flex h-10 w-full items-center justify-center rounded-full bg-text text-sm font-semibold text-bg transition hover:opacity-90"
             >
-              Continue to Analyze →
+              Continue to Analyze
             </Link>
-          ) : (
-            <span className="flex h-10 w-full cursor-not-allowed items-center justify-center rounded-full bg-surface-2 text-xs font-medium text-muted">
-              Select a sound
-            </span>
-          )}
+          ) : null}
         </div>
       </aside>
     </>

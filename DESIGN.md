@@ -4,7 +4,9 @@
 
 **Look:** quiet monochrome DAW. Soft near-black neutral ground (`#131417`), thin `1px` hairlines (`#24262D`), soft off-white primary text (`#EAECEF`), cool neutral secondary copy, and a tiny surgical touch of orange (`#FF6A1A`) reserved strictly for precision indicators (wordmark `x`, active step dot, selected SAM 3.1 mask outline, active isolated waveform, sounding reference notes). Primary buttons and selected switches use crisp monochrome contrast (`--text` fill with `--bg` ink). A pale amber (`#F5B971`) marks `--you` (user take dots and the problem bar). No gradients, no glow washes, no emoji.
 
-**Flow:** `1 Add → 2 Pick a sound → 3 X-Ray → 4 Learn → 5 Take home`.
+**Flow:** `Add → Isolate → Analyze → Practice → Export`.
+
+**Honesty rule:** the screen only shows what was measured or produced for this clip. No fixed durations, no invented accuracy figures, no placeholder data standing in for real results.
 
 ---
 
@@ -71,23 +73,11 @@ Load clean geometric sans + `JetBrains_Mono` via `next/font/google` (with system
 
 Desktop-first DAW frame (`100dvh` on `lg+`, scrollable stacked panels on mobile):
 
-1. **Top Status Bar (`44px`, `--surface`, bottom border `--line`):**
-   - Left: `mixray` wordmark linking to `/` (`Add`), current clip title + `BPM · Key` in mono.
-   - Center/Right on mobile (`< lg`): horizontal scrollable 5-step bar (`01 Add · 02 Pick · 03 X-Ray · 04 Learn · 05 Export`).
-   - Right on desktop: `Meta SAM 3.1 · SAM Audio · Muse Spark` mono label.
-2. **Left Sidebar (`224px` on `lg+`, `--surface`, right border `--line`):**
-   - **Workflow (`01`–`05`):** vertical step list (`01 Add`, `02 Pick a sound`, `03 X-Ray`, `04 Learn`, `05 Take home`). Active step gets `--surface-2` fill, `1px` `--line-2` border, and a `6px` `--accent` dot on the right. Steps `03–05` stay disabled until at least one isolation exists; links preserve `?iso=<isolationId>`.
-   - **Isolated sounds:** list of `trackMap.isolations` for the clip; clicking switches `?iso=...` immediately across all screens.
-   - **Shortcuts:** compact mono legend (`Space` Play/Pause, `1/2/3` Sound/Rest/Mix, `A–L` Piano keys).
-3. **Center Stage (`flex-1`, `--bg`):**
-   - **Shared Bar & Time Ruler** (steps `02–05`): 16-bar grid (`1`..`16`), loop range highlight, `1.5px` playhead, click/drag to seek.
-   - **Lanes workspace:** stacked horizontal `1px`-bordered lanes specific to the current step.
-4. **Right Contextual Inspector (`320px` on `lg+`, `--surface`, left border `--line`):**
-   - Contextual controls and AI outputs for the active step (`Pick`, `X-Ray`, `Learn`, `Take home`, or `Demos` on `Add`).
-5. **Bottom Persistent Transport Bar (`56px`, `--surface`, top border `--line`, mounted in `app/c/[id]/layout.tsx` so audio never stops across steps `02–05`):**
-   - Left: Return-to-zero (`|<`), Play/Pause button (`Space`), mono `BAR.BEAT | MM:SS.d / MM:SS.d` readout.
-   - Center: segmented monitor switch **`Sound | Rest | Full mix`** (`1` / `2` / `3`, active = `bg-text text-bg`).
-   - Right: Tempo/Rate slider (`50%–100%` step `5%`, `preservesPitch`) and `Loop` toggle button.
+1. **Header:** logo, the four steps, theme toggle.
+2. **Left sidebar (`240px`):** clip title with tempo and key, the clip's sounds with the method that produced each, and `New clip`.
+3. **Center stage:** bar and time ruler, then the lanes of the current step.
+4. **Right inspector (`320px`):** only the current step's controls and results. Export has none.
+5. **Transport (bottom, kept across steps so audio never stops):** return to start, play, position, `Sound | Rest | Full mix`, rate, and `Loop`, which loops four bars from the playhead.
 
 ---
 
@@ -95,63 +85,31 @@ Desktop-first DAW frame (`100dvh` on `lg+`, scrollable stacked panels on mobile)
 
 ### 3.1 Add (`/`)
 
-- **Center workspace:**
-  - Eyebrow `01 · ADD MEDIA`, title **"Drop a song or video you own. Pick up to 30 seconds."**
-  - **Drop zone:** dashed `1px` `--control` border, `--inset` fill, accepts MP3, WAV, FLAC, M4A, MP4, MOV (`≤ 50 MB`, `≤ 6 min`).
-  - **ClipPicker** (shown once a file is chosen): file name + duration, 8-frame filmstrip above the waveform for video files, waveform with a scrubbable/draggable `≤ 30 s` window outlined in `--accent`, mono `start → end (duration)` readout, local window preview button.
-  - **Area selection** (video files): dragging over the preview draws an area in `--accent`; once the clip is uploaded, Muse Spark names the area and that sound is isolated. A plain click plays or pauses.
-  - **Rights & contributor-mode gate:** checkbox `"I own this file or have the rights to use it."` plus one-line disclosure `"Clips are sent to Meta SAM and Muse models in contributor mode and may be used by Meta to improve its models."` Primary `Open in Pick →` button stays disabled until checked. Audio trims in-browser via `trimToClip` (`WAV`) before `uploadClip`; video uploads whole (`≤ 50 MB`).
-- **Right inspector:** **Precomputed demos** (`Supersaw sketch · 128 BPM · Am` + Quartet visual mask preview) with zero GPU wait, plus pipeline notes.
+One column, one job.
 
-### 3.2 Pick a sound (`/c/[id]/pick`)
+- Title and a line saying what to do. Drop zone with the real limits: `MP3, WAV, FLAC, MP4 or MOV. Up to 50 MB and 6 minutes.`
+- Once a file is chosen: video preview, where dragging draws an area in `--accent` and a click plays or pauses; the `≤ 30 s` window on a waveform; an optional text field for the sound, hidden once an area is drawn.
+- Rights checkbox with the contributor-mode disclosure, then `Continue`.
+- While working: the current step, its number, and the seconds elapsed. No percentage, because the steps are not equal in length.
 
-- **Center lanes:**
-  - **Video stage** (shown when `trackMap.video` exists, or when previewing the Quartet visual-mask demo): 16:9 `--inset` panel with `<video>` and interactive `<button aria-pressed>` mask regions. Selected mask uses `1px` `--accent` border and crisp monochrome label badge; unselected masks use dashed `--control` borders; background dims subtly. On a real video, dragging over the frame draws an area in `--accent`; Muse Spark names it and that name drives the separation. A plain click plays or pauses.
-  - **Three stacked waveform lanes** (`144px` label column + full-width scrubbable canvas, `role="img"` + `aria-label`):
-    1. **Full mix** (`S` solo button, waveform in `--rest` when audible, `--muted-wave` when muted)
-    2. **Picked sound** (`--accent` dot, label + method `SAM Audio` / `Demucs`, `S` solo button, waveform in `--accent` when audible)
-    3. **Rest of mix** (`S` solo button, waveform in `--rest` when audible)
-- **Right inspector (`ISOLATE INSPECTOR`):**
-  - `MUSE SPARK SUGGESTIONS`: clickable chips from `trackMap.suggestions`. Selecting a precomputed isolation switches immediately; selecting an uncomputed chip triggers `startIsolation` + `waitForJob`.
-  - `DESCRIBE A SOUND`: text prompt input + `Isolate` button; shows exact mono prompt sent.
-  - `IsolateProgress`: `listening → isolating → analyzing` mono stepper (`--accent` on current stage, seconds elapsed, with no promised duration).
-  - `Cleaner version (Demucs)` checkbox toggle whenever a matching stem exists in `fallback_stems`.
-  - Primary monochrome CTA `Continue to X-Ray →`.
+### 3.2 Isolate (`/c/[id]/pick`)
 
-### 3.3 X-Ray (`/c/[id]/xray`)
+- **Center:** the video when there is one, where dragging draws an area and Muse Spark names it. Then one lane each for the sound, the rest and the full mix, with a solo button. Nothing is drawn before a sound exists.
+- **Right:** text field, Muse Spark's suggestions, the current stage with seconds elapsed, the Demucs comparison when a matching stem exists, and `Continue to Analyze`.
 
-- **Center lanes:**
-  - **Video stage** (shown when `trackMap.video` exists): the same stage as Isolate, with a `TRACK ON / OFF` `aria-pressed` toggle below it for a sound chosen by area. The first switch-on asks SAM 3.1 to follow the area through the clip; its mask and the **On-screen** lane (`video.tracks[].visible`) then show while the video plays.
-  - **4-stat strip:** `TEMPO` (`BPM`), `KEY` (`tonic mode`), `RANGE` (e.g. `A4–G5`), `ENTERS` (e.g. `Bar 9`).
-  - **Four bar-aligned lanes (`88px` label column):**
-    1. `Sections`: `trackMap.sections` blocks (`drop` highlighted).
-    2. `Chords`: one mono cell per bar (`trackMap.chords`), clickable to seek to that bar.
-    3. `Notes`: `MiniRoll` canvas (`isolation.notes`, active notes at playhead in `--accent`, others in `--text`).
-    4. `Energy`: `trackMap.energy.values` line curve + playhead.
-- **Right inspector (`X-RAY INSPECTOR`):**
-  - `MUSE SPARK · SUMMARY`: concise musical summary of the isolated sound.
-  - `RecipeCard` (`MUSE SPARK OPEN · SOUND RECIPE`): 2×2 parameter grid (`Oscillators`, `Filter`, `FX`, `Glide / Play`) + `AMP ENVELOPE` ADSR bars and mono values.
-  - Primary CTA `Learn on keyboard →`.
+### 3.3 Analyze (`/c/[id]/xray`)
 
-### 3.4 Learn + Coach (`/c/[id]/learn`)
+- **Center:** a `Track` switch when the sound was chosen by area. Switching it on shows the video, small enough to keep the notes on screen, and the first time asks SAM 3.1 to follow the area. Then tempo, key, range and first note; a chord lane where a click seeks; the note roll.
+- **Right:** Muse Spark's summary, a line saying readings are automatic and may be wrong, the sound recipe, `Practice on keys`.
 
-- **Center lanes:**
-  - **Practice strip:** `Easy | Intermediate` arrangement toggle, problem-bar pill (`Bar N · late` in `--you`), `Hear: Sound | With mix`, and `MIDI input` selector (`On-screen + QWERTY` or connected Web MIDI device).
-  - **`PianoRoll` canvas (`~260px` height, `--inset`):** bar gridlines, loop region shade, dashed `--you` outline on problem bar, reference right-hand notes (`--accent` when sounding, `--text` otherwise), left-hand `Intermediate` notes (`--left-hand`), user take dots (`--you`), crisp playhead, click to seek.
-  - **`Keyboard` (`C4–B5`):** tactile monochrome two-octave piano keys (`--key-white` / `--key-black`) with QWERTY hints (`A`–`L`) and MIDI pitch labels; target notes currently sounding light up in `--accent`.
-- **Right inspector (`VOICE COACH`):**
-  - Feedback paragraph naming specific bars and timing/pitch offsets.
-  - `APPLIED TOOL CALLS` mono log (`mark_problem_bar`, `set_loop`, `set_tempo`) that directly updates loop, tempo, and problem-bar state via `applyCoachAction()`.
-  - `Analyze take` control, and a `Voice: On/Off` switch. Voice listens continuously, because both hands are on the keys: phrases go to Muse Voice Transcribe, talk that is not a command is ignored, and a typed command is the fallback.
-  - `PER-BAR ACCURACY` 8-bar vertical chart (`--you` / `--accent` on problem bar) + browser-measurement footnote.
+### 3.4 Practice (`/c/[id]/learn`)
 
-### 3.5 Take home (`/c/[id]/take`)
+- **Center:** `Easy | Intermediate`, MIDI input, the problem bar when the coach marks one. Piano roll with the part and your take. Keyboard `C4–B5` with `A`–`L` hints and which sound the keys play.
+- **Right:** a `Voice: On/Off` switch. Voice listens continuously because both hands are on the keys: phrases go to Muse Voice Transcribe, talk that is not a command is ignored, and a typed command is the fallback. The coach's messages, your take's hit rate and timing, `Get feedback`, `Continue to Export`.
 
-- **Center workspace:**
-  - Eyebrow `05 · TAKE HOME`, title **"Export stems, MIDI & synth recipe."**, subtitle `"Aligned at {bpm} BPM in {key}."`
-  - **`FileList` checklist:** `Isolated sound (.wav)`, `Rest of mix (.wav)`, `MIDI arrangement (.mid — Easy & Intermediate)`, `Sound recipe & chord sheet (.json + .txt)` with individual download actions and primary `Download ZIP · N files` bundle CTA.
-- **Right inspector (`EXPORT INSPECTOR`):**
-  - Session metadata (`BPM`, `Key`, `Method`, `Sample rate`) and compact `RecipeCard` recap.
+### 3.5 Export (`/c/[id]/take`)
+
+No timeline, because nothing here plays against time. A checklist where each row says what it holds and names its real files (sound, rest of the mix, MIDI when the sound has notes, recipe and session notes), and one download button that counts the files in the ZIP.
 
 ---
 

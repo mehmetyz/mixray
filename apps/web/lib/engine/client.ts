@@ -165,6 +165,45 @@ export async function waitForTrackFrames(masksUrl: string): Promise<void> {
   throw new EngineError("Tracking is taking too long. Try again.");
 }
 
+const NOTES_TIMEOUT_MS = 180_000;
+
+function hasTranscription(trackMap: unknown, isolationId: string): boolean {
+  if (typeof trackMap !== "object" || trackMap === null || !("isolations" in trackMap)) return false;
+  if (!Array.isArray(trackMap.isolations)) return false;
+  return trackMap.isolations.some(
+    (isolation: unknown) =>
+      typeof isolation === "object" &&
+      isolation !== null &&
+      "id" in isolation &&
+      isolation.id === isolationId &&
+      "pitch_confidence" in isolation &&
+      typeof isolation.pitch_confidence === "number",
+  );
+}
+
+/**
+ * A job is done when the sound is playable; its notes arrive shortly after, written by a separate
+ * worker. Resolves true once they are there, false if they never come or the wait is cancelled.
+ */
+export async function waitForNotes(
+  clipId: string,
+  isolationId: string,
+  signal: AbortSignal,
+): Promise<boolean> {
+  const deadline = Date.now() + NOTES_TIMEOUT_MS;
+  const url = await engineFileUrl(`clips/${encodeURIComponent(clipId)}/trackmap.json`);
+  while (Date.now() < deadline && !signal.aborted) {
+    try {
+      const response = await fetch(url, { cache: "no-store", signal });
+      if (response.ok && hasTranscription(await response.json(), isolationId)) return true;
+    } catch {
+      // A failed poll is not a failed transcription; the next one decides.
+    }
+    await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+  }
+  return false;
+}
+
 export async function getJob(jobId: string): Promise<Job> {
   const { token, engineUrl } = await session();
   return readJob(
