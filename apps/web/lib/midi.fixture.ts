@@ -1,5 +1,5 @@
 import type { ScoreInput, ScoreNote, ScoreResult } from "./score";
-import type { CompletedNote, LiveNoteEvent, NoteStream } from "./midi";
+import type { CompletedNote, ControlKind, LiveNoteEvent, NoteStream, TalkBinding, TalkControlOptions } from "./midi";
 
 type FixtureCase = {
   name: string;
@@ -16,6 +16,8 @@ type MidiModule = {
     clock: () => number,
     options?: { selectedDeviceId?: string; defaultVelocity?: number },
   ) => NoteStream;
+  classifyControl: (bytes: readonly number[], binding: TalkBinding) => ControlKind;
+  createTalkControl: (options: TalkControlOptions) => (bytes: readonly number[]) => boolean;
 };
 
 type ScoreModule = {
@@ -27,6 +29,7 @@ const SCORE_MODULE_PATH: string = "./score.ts";
 
 const midiModule: MidiModule = await import(MIDI_MODULE_PATH);
 const scoreModule: ScoreModule = await import(SCORE_MODULE_PATH);
+const { classifyControl, createTalkControl } = midiModule;
 
 const parseMidiBytes = midiModule.parseMidiBytes;
 const createNoteStream = midiModule.createNoteStream;
@@ -180,10 +183,69 @@ function testTakeRecordingAndScoring(): void {
   stream.dispose();
 }
 
+function testTalkControl(): void {
+  const PEDAL_DOWN = [0xb0, 64, 127];
+  const PEDAL_UP = [0xb0, 64, 0];
+  const PAD_ON = [0x99, 36, 100];
+  const PAD_OFF = [0x89, 36, 0];
+  const KEY_ON = [0x90, 60, 100];
+  const MOD_WHEEL = [0xb0, 1, 90];
+
+  let presses = 0;
+  let binding: TalkBinding = { kind: "default" };
+  let learning = false;
+  const handle = createTalkControl({
+    getBinding: () => binding,
+    isLearning: () => learning,
+    onPress: () => {
+      presses += 1;
+    },
+    onLearned: (chosen) => {
+      binding = chosen;
+      learning = false;
+    },
+  });
+
+  assertEqual(handle(KEY_ON), false, "A keyboard note is music");
+  assertEqual(handle(MOD_WHEEL), false, "Other controls are left alone");
+  assertEqual(presses, 0, "Music never presses the talk button");
+
+  assertEqual(handle(PEDAL_DOWN), true, "The pedal is a control");
+  assertEqual(handle([0xb0, 64, 100]), true, "A pedal still going down is a control");
+  assertEqual(presses, 1, "A pedal travelling down counts once");
+  assertEqual(handle(PEDAL_UP), true, "Releasing the pedal is a control");
+  assertEqual(presses, 1, "Releasing does not press");
+
+  assertEqual(handle(PAD_ON), true, "A pad is never a played note");
+  assertEqual(handle(PAD_OFF), true, "Releasing a pad is never a played note");
+  assertEqual(presses, 2, "A pad presses the talk button");
+
+  learning = true;
+  assertEqual(handle([0xb0, 115, 0]), true, "Learning swallows a released button");
+  assertEqual(binding.kind, "default", "A released button is not chosen");
+  assertEqual(handle([0xb0, 115, 127]), true, "Learning swallows the chosen button");
+  assertEqual(binding.kind, "cc", "The chosen button is remembered");
+  assertEqual(presses, 2, "Choosing a button does not press it");
+  assertEqual(handle([0xb0, 115, 0]), true, "Its release is consumed");
+
+  assertEqual(handle(PEDAL_DOWN), false, "The pedal is free once another button is chosen");
+  assertEqual(handle(PAD_ON), true, "Pads still never score as notes");
+  assertEqual(presses, 2, "A pad no longer talks once another button is chosen");
+  assertEqual(handle(PAD_OFF), true, "Its release neither");
+  assertEqual(handle([0xb0, 115, 127]), true, "The chosen button is a control");
+  assertEqual(presses, 3, "The chosen button talks");
+
+  assertEqual(classifyControl([0x99, 40, 90], { kind: "note", channel: 9, pitch: 40 }), "press", "A chosen pad");
+  assertEqual(classifyControl([0x90, 60, 90], { kind: "note", channel: 0, pitch: 60 }), "press", "A chosen key");
+  assertEqual(classifyControl([0x90, 62, 90], { kind: "note", channel: 0, pitch: 60 }), "pass", "Any other key");
+  assertEqual(classifyControl([0x90, 60, 0], { kind: "note", channel: 0, pitch: 60 }), "consume", "Its release");
+}
+
 const FIXTURES: readonly FixtureCase[] = [
   { name: "parseMidiBytes message decoding and clamping", run: testParseMidiBytes },
   { name: "createNoteStream live event routing and subscriptions", run: testNoteStreamLiveEvents },
   { name: "take recording aligned to audio clock and score integration", run: testTakeRecordingAndScoring },
+  { name: "talk button from pedal, pads and a chosen control", run: testTalkControl },
 ];
 
 for (const fixture of FIXTURES) {

@@ -313,10 +313,152 @@ export function createNoteStream(
  * Connects to Web MIDI inputs when supported by the host browser.
  * Feeds incoming MIDI messages directly into the note stream.
  */
+export type TalkBinding =
+  | { kind: "default" }
+  | { kind: "cc"; number: number }
+  | { kind: "note"; channel: number; pitch: number };
+
+export type ControlKind = "press" | "consume" | "pass";
+
+const MIDI_STATUS_CC: number = 0xb0;
+const MIDI_CHANNEL_MASK: number = 0x0f;
+const PAD_CHANNEL: number = 9;
+const SUSTAIN_CC: number = 64;
+const CC_PRESSED_FROM: number = 64;
+
+/**
+ * Decides whether a MIDI message is the talk button rather than music. By default that is the sustain
+ * pedal or any drum pad, which arrive on channel 10 and must never be scored as played notes.
+ */
+export function classifyControl(bytes: Uint8Array | readonly number[], binding: TalkBinding): ControlKind {
+  const status = (bytes[0] ?? 0) & MIDI_STATUS_MASK;
+  const channel = (bytes[0] ?? 0) & MIDI_CHANNEL_MASK;
+  const data = bytes[1] ?? 0;
+  const value = bytes[2] ?? 0;
+  const isNote = status === MIDI_STATUS_NOTE_ON || status === MIDI_STATUS_NOTE_OFF;
+  const isPress = status === MIDI_STATUS_NOTE_ON && value > 0;
+
+  if (status === MIDI_STATUS_CC) {
+    const number = binding.kind === "cc" ? binding.number : SUSTAIN_CC;
+    if (binding.kind === "note" || data !== number) return "pass";
+    return value >= CC_PRESSED_FROM ? "press" : "consume";
+  }
+  if (!isNote) return "pass";
+  if (binding.kind === "note" && channel === binding.channel && data === binding.pitch) {
+    return isPress ? "press" : "consume";
+  }
+  if (channel !== PAD_CHANNEL) return "pass";
+  return binding.kind === "default" && isPress ? "press" : "consume";
+}
+
+/** The binding a message would become when the player chooses it as their talk button. */
+export function talkBindingFromMidi(bytes: Uint8Array | readonly number[]): TalkBinding | null {
+  const status = (bytes[0] ?? 0) & MIDI_STATUS_MASK;
+  const value = bytes[2] ?? 0;
+  if (status === MIDI_STATUS_CC && value > 0) return { kind: "cc", number: bytes[1] ?? 0 };
+  if (status === MIDI_STATUS_NOTE_ON && value > 0) {
+    return { kind: "note", channel: (bytes[0] ?? 0) & MIDI_CHANNEL_MASK, pitch: bytes[1] ?? 0 };
+  }
+  return null;
+}
+
+export type TalkControlOptions = {
+  getBinding: () => TalkBinding;
+  isLearning: () => boolean;
+  onPress: () => void;
+  onLearned: (binding: TalkBinding) => void;
+};
+
+/**
+ * Turns MIDI into single talk-button presses and returns true for every message that was a control
+ * and must not reach the note stream. A pedal can report many values on the way down, so a press only
+ * counts once until the control is released.
+ */
+export function createTalkControl({
+  getBinding,
+  isLearning,
+  onPress,
+  onLearned,
+}: TalkControlOptions): (bytes: Uint8Array | readonly number[]) => boolean {
+  let held = false;
+
+  return (bytes) => {
+    if (isLearning()) {
+      const learned = talkBindingFromMidi(bytes);
+      if (learned !== null) {
+        held = true;
+        onLearned(learned);
+      }
+      return true;
+    }
+    const kind = classifyControl(bytes, getBinding());
+    if (kind === "pass") return false;
+    if (kind === "press" && !held) onPress();
+    held = kind === "press";
+    return true;
+  };
+}
+
+const TALK_BINDING_KEY = "mixray.talkButton";
+export const DEFAULT_TALK_BINDING: TalkBinding = { kind: "default" };
+
+function isTalkBinding(value: unknown): value is TalkBinding {
+  if (typeof value !== "object" || value === null) return false;
+  if (!("kind" in value)) return false;
+  if (value.kind === "default") return true;
+  if (value.kind === "cc") return "number" in value && typeof value.number === "number";
+  return (
+    value.kind === "note" &&
+    "channel" in value &&
+    typeof value.channel === "number" &&
+    "pitch" in value &&
+    typeof value.pitch === "number"
+  );
+}
+
+let storedBinding: TalkBinding | null = null;
+const bindingListeners = new Set<() => void>();
+
+/** The remembered talk button. Storage can be missing or hold junk; the default then applies. */
+export function loadTalkBinding(): TalkBinding {
+  if (storedBinding !== null) return storedBinding;
+  try {
+    const parsed: unknown = JSON.parse(window.localStorage.getItem(TALK_BINDING_KEY) ?? "null");
+    storedBinding = isTalkBinding(parsed) ? parsed : DEFAULT_TALK_BINDING;
+  } catch {
+    storedBinding = DEFAULT_TALK_BINDING;
+  }
+  return storedBinding;
+}
+
+export function saveTalkBinding(binding: TalkBinding): void {
+  storedBinding = binding;
+  try {
+    window.localStorage.setItem(TALK_BINDING_KEY, JSON.stringify(binding));
+  } catch {
+    // The choice still applies for this visit.
+  }
+  for (const listener of bindingListeners) listener();
+}
+
+export function subscribeTalkBinding(listener: () => void): () => void {
+  bindingListeners.add(listener);
+  return () => {
+    bindingListeners.delete(listener);
+  };
+}
+
+export function talkBindingLabel(binding: TalkBinding): string {
+  if (binding.kind === "default") return "pedal or any pad";
+  if (binding.kind === "cc") return `control ${binding.number}`;
+  return `note ${binding.pitch}`;
+}
+
 export function connectWebMidi(
   stream: NoteStream,
   onDevices: DeviceChangeListener,
   selectedDeviceId: string = "all",
+  onControl: (bytes: Uint8Array) => boolean = () => false,
 ): () => void {
   if (typeof navigator === "undefined" || typeof navigator.requestMIDIAccess !== "function") {
     onDevices([]);
@@ -344,7 +486,7 @@ export function connectWebMidi(
           return;
         }
         const data = event.data;
-        if (data === null || data.length < 3) return;
+        if (data === null || data.length < 3 || onControl(data)) return;
         stream.feedMidiBytes(data, input.id);
       };
     }
