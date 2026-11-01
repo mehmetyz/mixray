@@ -1,13 +1,16 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
+import { followTrack, waitForTrackFrames } from "@/lib/engine/client";
 import { drawEnergyCurve, drawMiniRoll } from "@/lib/studio/canvas";
 import { firstSoundingBar, formatPitchRange } from "@/lib/studio/format";
 import { RecipeCard } from "./RecipeCard";
 import { useStudio } from "./StudioContext";
 import { TimelineRuler } from "./StudioShell";
 import { useThemeListener } from "./ThemeToggle";
+import { VideoMaskStage } from "./VideoMaskStage";
 
 const CAMELOT_KEYS: Record<string, string> = {
   "A minor": "8A",
@@ -87,8 +90,35 @@ function getRomanNumeral(keyTonic: string, keyMode: string, chordLabel: string):
 }
 
 export function XRayView() {
+  const router = useRouter();
   const { clipId, trackMap, selectedIsolation, selectedIsolationId, currentTime, duration, seek } =
     useStudio();
+  const [trackingOn, setTrackingOn] = useState<boolean>(false);
+  const [trackingBusy, setTrackingBusy] = useState<boolean>(false);
+  const [trackingError, setTrackingError] = useState<string | null>(null);
+  const selectedTrack = trackMap.video?.tracks.find(
+    (track) => track.isolation_id === selectedIsolationId,
+  );
+
+  const toggleTracking = async () => {
+    if (selectedTrack === undefined || trackingBusy) return;
+    if (trackingOn || selectedTrack.visible.length > 0) {
+      setTrackingOn(!trackingOn);
+      return;
+    }
+    setTrackingError(null);
+    setTrackingBusy(true);
+    try {
+      await followTrack(clipId, selectedTrack.id);
+      await waitForTrackFrames(selectedTrack.masks_url);
+      router.refresh();
+      setTrackingOn(true);
+    } catch (error: unknown) {
+      setTrackingError(error instanceof Error ? error.message : "Could not track this area.");
+    } finally {
+      setTrackingBusy(false);
+    }
+  };
   const themeTick = useThemeListener();
 
   const notesCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -211,6 +241,44 @@ export function XRayView() {
     <>
       <section className="flex min-w-0 flex-1 flex-col bg-bg lg:overflow-y-auto">
         <TimelineRuler />
+
+        {trackMap.video !== undefined ? (
+          <>
+            <VideoMaskStage
+              video={trackMap.video}
+              demoQuartetMode={false}
+              selectedTargetId={selectedTrack?.id ?? ""}
+              followedTrackId={trackingOn ? selectedTrack?.id : undefined}
+            />
+            <div className="flex items-center justify-between gap-3 border-b border-line bg-surface px-4 py-2 text-xs">
+              {selectedTrack === undefined ? (
+                <span className="text-muted">
+                  Draw an area on the video in Isolate to track it here.
+                </span>
+              ) : (
+                <>
+                  <span role={trackingError !== null ? "alert" : undefined} className="text-muted">
+                    {trackingError ??
+                      (trackingBusy
+                        ? `SAM 3.1 is following ${selectedTrack.label}…`
+                        : `Follow ${selectedTrack.label} while the video plays.`)}
+                  </span>
+                  <button
+                    type="button"
+                    aria-pressed={trackingOn}
+                    disabled={trackingBusy}
+                    onClick={() => void toggleTracking()}
+                    className={`mono-num shrink-0 cursor-pointer rounded-icon border px-2.5 py-1 text-[11px] font-semibold disabled:cursor-wait disabled:opacity-60 ${
+                      trackingOn ? "border-accent text-accent" : "border-line-2 text-text-2"
+                    }`}
+                  >
+                    {trackingBusy ? "TRACKING…" : trackingOn ? "TRACK ON" : "TRACK OFF"}
+                  </button>
+                </>
+              )}
+            </div>
+          </>
+        ) : null}
 
         {/* Hero Audio Intelligence KPI Grid */}
         <div className="grid grid-cols-2 divide-x divide-y divide-line border-b border-line bg-surface/90 sm:grid-cols-4 sm:divide-y-0">

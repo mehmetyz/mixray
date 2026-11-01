@@ -1,7 +1,6 @@
 export const JOB_STATUSES = ["queued", "running", "done", "error"] as const;
-// "segmenting" and "naming" are the tap flow: SAM 3.1 finds the region, Muse Spark names it, and
-// only then does the text separation start. A stage the client does not know throws, so both
-// belong here as soon as the engine can report them.
+// "naming" is the area flow: Muse Spark names the drawn area, and only then does the separation
+// start. "segmenting" remains in jobs written before it. A stage the client does not know throws.
 export const JOB_STAGES = [
   "listening",
   "segmenting",

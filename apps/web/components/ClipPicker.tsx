@@ -8,11 +8,26 @@ import {
   useState,
   type ChangeEvent,
   type DragEvent,
+  type PointerEvent as ReactPointerEvent,
 } from "react";
 import { clipSeconds, clipWindow, MAX_CLIP_SECONDS, type ClipWindow } from "@/lib/audio/clip";
 import { trimToClip } from "@/lib/audio/trim";
-import { startIsolation, uploadClip, waitForJob } from "@/lib/engine/client";
+import {
+  getStoredVideo,
+  startAreaIsolation,
+  startIsolation,
+  uploadClip,
+  waitForJob,
+} from "@/lib/engine/client";
 import type { JobStage } from "@/lib/engine/types";
+import {
+  MIN_DRAG_PIXELS,
+  scaleVideoArea,
+  videoAreaFromDrag,
+  type PixelSize,
+  type StagePoint,
+  type VideoArea,
+} from "@/lib/studio/area";
 import { formatClockSeconds } from "@/lib/studio/format";
 import { inspectMediaFile, type MediaPreview } from "@/lib/studio/media-preview";
 import { ScreenHeading } from "./ScreenHeading";
@@ -33,6 +48,17 @@ type PipelineStage = {
 };
 
 type DragMode = "move" | "resize-left" | "resize-right";
+
+type AreaDrag = {
+  start: StagePoint;
+  end: StagePoint;
+};
+
+type PickedArea = {
+  area: VideoArea;
+  source: PixelSize;
+  time: number;
+};
 
 const SUGGESTION_QUICK_PRESETS: readonly string[] = [
   "Piano",
@@ -58,6 +84,8 @@ export function ClipPicker() {
 
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [videoObjectUrl, setVideoObjectUrl] = useState<string | null>(null);
+  const [areaDrag, setAreaDrag] = useState<AreaDrag | null>(null);
+  const [pickedArea, setPickedArea] = useState<PickedArea | null>(null);
   const [audioObjectUrl, setAudioObjectUrl] = useState<string | null>(null);
   const [preview, setPreview] = useState<MediaPreview | null>(null);
   const [windowRange, setWindowRange] = useState<ClipWindow>({ start: 0, end: MAX_CLIP_SECONDS });
@@ -168,7 +196,42 @@ export function ClipPicker() {
     }
   };
 
+  const pointOnStage = (event: ReactPointerEvent<HTMLDivElement>): StagePoint => {
+    const box = event.currentTarget.getBoundingClientRect();
+    return { x: event.clientX - box.left, y: event.clientY - box.top };
+  };
+
+  const finishAreaDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const element = videoElementRef.current;
+    if (areaDrag === null || element === null) return;
+    const end = pointOnStage(event);
+    if (Math.hypot(end.x - areaDrag.start.x, end.y - areaDrag.start.y) < MIN_DRAG_PIXELS) {
+      setAreaDrag(null);
+      togglePlay();
+      return;
+    }
+    setAreaDrag({ start: areaDrag.start, end });
+    if (isPlaying) togglePlay();
+    const stage = event.currentTarget.getBoundingClientRect();
+    const picture = element.getBoundingClientRect();
+    const shiftX = stage.left - picture.left;
+    const shiftY = stage.top - picture.top;
+    const source = { width: element.videoWidth, height: element.videoHeight };
+    setPickedArea({
+      area: videoAreaFromDrag(
+        { x: areaDrag.start.x + shiftX, y: areaDrag.start.y + shiftY },
+        { x: end.x + shiftX, y: end.y + shiftY },
+        { width: picture.width, height: picture.height },
+        source,
+      ),
+      source,
+      time: element.currentTime,
+    });
+  };
+
   const handleFileChosen = async (file: File) => {
+    setAreaDrag(null);
+    setPickedArea(null);
     stopPlayback();
     setErrorMessage(null);
     setUploadState("inspecting");
@@ -363,7 +426,20 @@ export function ClipPicker() {
         throw new Error(finished.error ?? "Processing failed on engine.");
       }
 
-      if (initialPrompt.length > 0) {
+      if (pickedArea !== null) {
+        setUploadState("isolating");
+        const stored = await getStoredVideo(job.trackmapUrl);
+        const lastFrame = Math.floor(clipSeconds(windowRange) * stored.fps) - 1;
+        const frame = Math.round((pickedArea.time - windowRange.start) * stored.fps);
+        await startAreaIsolation({
+          jobId: job.id,
+          area: scaleVideoArea(pickedArea.area, pickedArea.source, stored),
+          frame: Math.min(lastFrame, Math.max(0, frame)),
+        });
+        await waitForJob(job.id, {
+          onStage: (j) => setActiveStage(j.stage),
+        });
+      } else if (initialPrompt.length > 0) {
         setUploadState("isolating");
         await startIsolation({ jobId: job.id, prompt: initialPrompt });
         await waitForJob(job.id, {
@@ -615,8 +691,20 @@ export function ClipPicker() {
           {preview.kind === "video" && videoObjectUrl !== null ? (
             <div className="relative overflow-hidden rounded-well border border-line bg-black">
               <div
-                onClick={togglePlay}
-                className="relative aspect-video max-h-52 w-full cursor-pointer select-none mx-auto flex items-center justify-center bg-black/90"
+                onPointerDown={(event) => {
+                  event.currentTarget.setPointerCapture(event.pointerId);
+                  const point = pointOnStage(event);
+                  setPickedArea(null);
+                  setAreaDrag({ start: point, end: point });
+                }}
+                onPointerMove={(event) => {
+                  if (areaDrag !== null && pickedArea === null) {
+                    setAreaDrag({ start: areaDrag.start, end: pointOnStage(event) });
+                  }
+                }}
+                onPointerUp={finishAreaDrag}
+                onPointerCancel={() => setAreaDrag(null)}
+                className="relative aspect-video max-h-52 w-full touch-none cursor-crosshair select-none mx-auto flex items-center justify-center bg-black/90"
                 title={isPlaying ? "Pause" : "Play"}
               >
                 <video
@@ -629,6 +717,37 @@ export function ClipPicker() {
                   onPause={() => setIsPlaying(false)}
                   className="h-full max-h-52 w-auto object-contain"
                 />
+                {areaDrag !== null ? (
+                  <div
+                    className="pointer-events-none absolute rounded-xs border border-accent bg-accent/15"
+                    style={{
+                      left: Math.min(areaDrag.start.x, areaDrag.end.x),
+                      top: Math.min(areaDrag.start.y, areaDrag.end.y),
+                      width: Math.abs(areaDrag.end.x - areaDrag.start.x),
+                      height: Math.abs(areaDrag.end.y - areaDrag.start.y),
+                    }}
+                  />
+                ) : null}
+              </div>
+
+              <div className="flex items-center justify-between gap-3 border-t border-line-2 bg-surface px-3 py-1.5 text-[11px] text-muted">
+                <span>
+                  {pickedArea !== null
+                    ? `Area selected at ${formatClockSeconds(pickedArea.time)}. Mixray will isolate what is in it.`
+                    : "Drag over the instrument on the video to pick its sound. Click to play or pause."}
+                </span>
+                {pickedArea !== null ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPickedArea(null);
+                      setAreaDrag(null);
+                    }}
+                    className="shrink-0 cursor-pointer text-text-2 hover:text-text"
+                  >
+                    Clear
+                  </button>
+                ) : null}
               </div>
 
               {/* Video Player Transport Controls Bar */}

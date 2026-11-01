@@ -1,5 +1,6 @@
 import { MAX_CLIP_SECONDS } from "@/lib/audio/clip";
 import { EngineError, parseEngineSession, parseJob, type EngineSession, type Job } from "./types";
+import type { PixelSize, VideoArea } from "@/lib/studio/area";
 
 const TOKEN_ROUTE = "/api/engine-token";
 const TOKEN_SAFETY_SECONDS = 30;
@@ -18,6 +19,16 @@ export type IsolateRequest = {
   jobId: string;
   prompt: string;
   label?: string;
+};
+
+export type AreaRequest = {
+  jobId: string;
+  area: VideoArea;
+  frame: number;
+};
+
+export type StoredVideo = PixelSize & {
+  fps: number;
 };
 
 export type WaitOptions = {
@@ -87,6 +98,71 @@ export async function startIsolation({ jobId, prompt, label }: IsolateRequest): 
       body: JSON.stringify(label === undefined ? { prompt } : { prompt, label }),
     }),
   );
+}
+
+export async function startAreaIsolation({ jobId, area, frame }: AreaRequest): Promise<Job> {
+  const { token, engineUrl } = await session();
+  return readJob(
+    await fetch(`${engineUrl}/jobs/${encodeURIComponent(jobId)}/track`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ ...area, frame }),
+    }),
+  );
+}
+
+/** The size and frame rate of the engine's stored copy, which an area is addressed in. */
+export async function getStoredVideo(trackmapUrl: string): Promise<StoredVideo> {
+  const response = await fetch(await engineFileUrl(trackmapUrl), { cache: "no-store" });
+  if (!response.ok) throw new EngineError("Could not read the uploaded video.");
+  const trackMap: unknown = await response.json();
+  if (typeof trackMap === "object" && trackMap !== null && "video" in trackMap) {
+    const video = trackMap.video;
+    if (
+      typeof video === "object" &&
+      video !== null &&
+      "width" in video &&
+      "height" in video &&
+      "fps" in video &&
+      typeof video.width === "number" &&
+      typeof video.height === "number" &&
+      typeof video.fps === "number"
+    ) {
+      return { width: video.width, height: video.height, fps: video.fps };
+    }
+  }
+  throw new EngineError("The uploaded clip has no video.");
+}
+
+export async function followTrack(jobId: string, trackId: string): Promise<void> {
+  const { token, engineUrl } = await session();
+  const path = `${encodeURIComponent(jobId)}/tracks/${encodeURIComponent(trackId)}/follow`;
+  const response = await fetch(`${engineUrl}/jobs/${path}`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}` },
+  });
+  if (!response.ok) throw new EngineError("Could not start tracking this area.");
+}
+
+/** Following writes its result into the track's own sidecar, so that file is what gets polled. */
+export async function waitForTrackFrames(masksUrl: string): Promise<void> {
+  const deadline = Date.now() + POLL_TIMEOUT_MS;
+
+  while (Date.now() < deadline) {
+    const response = await fetch(masksUrl, { cache: "no-store" });
+    if (response.ok) {
+      const track: unknown = await response.json();
+      if (typeof track === "object" && track !== null) {
+        if ("follow_error" in track && typeof track.follow_error === "string") {
+          throw new EngineError(track.follow_error);
+        }
+        if ("frames" in track && Array.isArray(track.frames) && track.frames.length > 0) return;
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+  }
+
+  throw new EngineError("Tracking is taking too long. Try again.");
 }
 
 export async function getJob(jobId: string): Promise<Job> {

@@ -69,7 +69,7 @@ export default async function AddPage() {
         <div className="space-y-1.5 text-[11px] text-text-2">
           <div className="rounded-well border border-line-2 bg-inset px-2.5 py-1.5">
             <span className="font-semibold text-text">Isolate</span>
-            <p className="text-muted leading-tight">Tap any sound or enter text prompt to separate audio.</p>
+            <p className="text-muted leading-tight">Drag over a sound on the video or enter a text prompt to separate audio.</p>
           </div>
           <div className="rounded-well border border-line-2 bg-inset px-2.5 py-1.5">
             <span className="font-semibold text-text">Analyze (X-Ray)</span>

@@ -1,6 +1,12 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type PointerEvent } from "react";
+import {
+  MIN_DRAG_PIXELS,
+  videoAreaFromDrag,
+  type StagePoint,
+  type VideoArea,
+} from "@/lib/studio/area";
 import type { TimeRange, Video, VideoTrack } from "@/lib/trackmap/trackmap.generated";
 import { useStudio } from "./StudioContext";
 
@@ -24,8 +30,18 @@ export interface VideoMaskStageProps {
   video?: Video;
   demoQuartetMode: boolean;
   selectedTargetId: string;
-  onSelectTarget: (targetId: string, prompt: string, label: string, isolationId?: string) => void;
+  onSelectTarget?: (targetId: string, prompt: string, label: string, isolationId?: string) => void;
+  /** Present on the screen where a sound is chosen: dragging over the video draws an area. */
+  onSelectArea?: (area: VideoArea, frame: number) => void;
+  areaBusy?: boolean;
+  /** The only real track whose masks are drawn; following is opt-in on the Analyze screen. */
+  followedTrackId?: string;
 }
+
+type AreaDrag = {
+  start: StagePoint;
+  end: StagePoint;
+};
 
 export const QUARTET_DEMO_TARGETS: readonly MaskTarget[] = [
   {
@@ -188,10 +204,15 @@ export function VideoMaskStage({
   demoQuartetMode,
   selectedTargetId,
   onSelectTarget,
+  onSelectArea,
+  areaBusy = false,
+  followedTrackId,
 }: VideoMaskStageProps) {
   const { currentTime, duration, playing, togglePlay } = useStudio();
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [masksByTrack, setMasksByTrack] = useState<Record<string, MaskFrame[]>>({});
+  const [areaDrag, setAreaDrag] = useState<AreaDrag | null>(null);
+  const [dragActive, setDragActive] = useState<boolean>(false);
 
   const stageWidth = video?.width && video.width > 0 ? video.width : 1280;
   const stageHeight = video?.height && video.height > 0 ? video.height : 720;
@@ -223,7 +244,7 @@ export function VideoMaskStage({
       const results: Record<string, MaskFrame[]> = {};
 
       for (const track of video.tracks) {
-        if (!track.masks_url || track.masks_url.trim().length === 0) continue;
+        if (track.visible.length === 0 || track.masks_url.trim().length === 0) continue;
         try {
           const res = await fetch(track.masks_url);
           if (res.ok) {
@@ -254,7 +275,48 @@ export function VideoMaskStage({
     return null;
   }
 
-  const targets = toStageTargets(video);
+  const targets =
+    video === undefined
+      ? toStageTargets(video)
+      : toStageTargets(video).filter((target) => target.id === followedTrackId);
+  const pointFromEvent = (event: PointerEvent<HTMLDivElement>): StagePoint => {
+    const box = event.currentTarget.getBoundingClientRect();
+    return { x: event.clientX - box.left, y: event.clientY - box.top };
+  };
+
+  const finishAreaDrag = (event: PointerEvent<HTMLDivElement>) => {
+    setDragActive(false);
+    if (areaDrag === null || onSelectArea === undefined) return;
+    const end = pointFromEvent(event);
+    const box = event.currentTarget.getBoundingClientRect();
+    const dragged = Math.hypot(end.x - areaDrag.start.x, end.y - areaDrag.start.y);
+    if (dragged < MIN_DRAG_PIXELS) {
+      setAreaDrag(null);
+      togglePlay();
+      return;
+    }
+    setAreaDrag({ start: areaDrag.start, end });
+    if (playing) togglePlay();
+    const lastFrame = Math.max(0, Math.floor(duration * videoFps) - 1);
+    onSelectArea(
+      videoAreaFromDrag(
+        areaDrag.start,
+        end,
+        { width: box.width, height: box.height },
+        { width: stageWidth, height: stageHeight },
+      ),
+      Math.min(lastFrame, Math.round(currentTime * videoFps)),
+    );
+  };
+
+  const hudLabel =
+    onSelectArea !== undefined
+      ? areaBusy
+        ? "NAMING THE AREA"
+        : "DRAG OVER A SOUND"
+      : followedTrackId !== undefined || video === undefined
+        ? "SAM 3.1 TRACKING"
+        : "VIDEO";
   const activeTarget = targets.find((item) => item.id === selectedTargetId) ?? targets[0];
   const playPercent = duration > 0 ? Math.min(100, Math.max(0, (currentTime / duration) * 100)) : 0;
   const hasSelection = selectedTargetId.length > 0;
@@ -281,6 +343,8 @@ export function VideoMaskStage({
       }
     }
 
+    if (video !== undefined) return [];
+
     const demoPath = DEMO_QUARTET_SVG_PATHS[track.id];
     if (demoPath !== undefined) {
       return [demoPath];
@@ -296,7 +360,23 @@ export function VideoMaskStage({
           {/* Main Video Viewport (16:9 standard) */}
           <div
             className="group relative aspect-video w-full overflow-hidden rounded-well border border-line bg-inset select-none"
-            onClick={togglePlay}
+            onClick={onSelectArea === undefined ? togglePlay : undefined}
+            onPointerDown={(event) => {
+              if (onSelectArea === undefined || areaBusy) return;
+              event.currentTarget.setPointerCapture(event.pointerId);
+              const point = pointFromEvent(event);
+              setAreaDrag({ start: point, end: point });
+              setDragActive(true);
+            }}
+            onPointerMove={(event) => {
+              if (areaDrag === null || !dragActive) return;
+              setAreaDrag({ start: areaDrag.start, end: pointFromEvent(event) });
+            }}
+            onPointerUp={finishAreaDrag}
+            onPointerCancel={() => {
+              setDragActive(false);
+              setAreaDrag(null);
+            }}
           >
             {video !== undefined ? (
               <video
@@ -304,7 +384,7 @@ export function VideoMaskStage({
                 src={video.url}
                 muted
                 playsInline
-                className="h-full w-full object-cover transition-opacity duration-300 opacity-100 brightness-100"
+                className="h-full w-full object-contain transition-opacity duration-300 opacity-100 brightness-100"
               />
             ) : (
               <div className="pointer-events-none absolute inset-0 flex items-center justify-center opacity-30">
@@ -342,13 +422,13 @@ export function VideoMaskStage({
                     aria-pressed={isSelected}
                     onClick={(e) => {
                       e.stopPropagation();
-                      onSelectTarget(target.id, target.prompt, target.label, target.isolationId);
+                      onSelectTarget?.(target.id, target.prompt, target.label, target.isolationId);
                     }}
                     onKeyDown={(e) => {
                       if (e.key === "Enter" || e.key === " ") {
                         e.preventDefault();
                         e.stopPropagation();
-                        onSelectTarget(target.id, target.prompt, target.label, target.isolationId);
+                        onSelectTarget?.(target.id, target.prompt, target.label, target.isolationId);
                       }
                     }}
                     filter={isSelected ? "url(#accent-mask-glow)" : undefined}
@@ -371,15 +451,27 @@ export function VideoMaskStage({
             <div className="pointer-events-none absolute top-2.5 right-3 left-3 flex items-center justify-between">
               <span className="mono-num inline-flex items-center gap-1.5 rounded-full border border-line-2 bg-surface/85 px-2.5 py-0.5 text-[10px] font-medium text-text-2 backdrop-blur-xs">
                 <span className="h-1.5 w-1.5 rounded-full bg-accent" />
-                SAM 3.1 TRACKING {activeTarget ? `· ${activeTarget.label.toUpperCase()}` : ""}
+                {hudLabel} {activeTarget ? `· ${activeTarget.label.toUpperCase()}` : ""}
               </span>
               <span className="mono-num rounded-full border border-line-2 bg-surface/85 px-2 py-0.5 text-[10px] text-muted backdrop-blur-xs">
                 {playing ? "PLAYING" : "PAUSED"}
               </span>
             </div>
 
+            {areaDrag !== null && (dragActive || areaBusy) ? (
+              <div
+                className="pointer-events-none absolute rounded-xs border border-accent bg-accent/15"
+                style={{
+                  left: Math.min(areaDrag.start.x, areaDrag.end.x),
+                  top: Math.min(areaDrag.start.y, areaDrag.end.y),
+                  width: Math.abs(areaDrag.end.x - areaDrag.start.x),
+                  height: Math.abs(areaDrag.end.y - areaDrag.start.y),
+                }}
+              />
+            ) : null}
+
             {/* Interactive Target Buttons / Badges */}
-            {targets.map((target) => {
+            {(video === undefined ? targets : []).map((target) => {
               const selected = target.id === selectedTargetId;
               const isVisible = isTimeInRanges(currentTime, target.visible);
 
@@ -390,7 +482,7 @@ export function VideoMaskStage({
                   aria-pressed={selected}
                   onClick={(e) => {
                     e.stopPropagation();
-                    onSelectTarget(target.id, target.prompt, target.label, target.isolationId);
+                    onSelectTarget?.(target.id, target.prompt, target.label, target.isolationId);
                   }}
                   className={`absolute flex cursor-pointer flex-col justify-between rounded-icon p-1.5 text-left transition-all duration-150 ${target.positionClass} ${
                     !isVisible

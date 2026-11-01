@@ -99,13 +99,14 @@ Desktop-first DAW frame (`100dvh` on `lg+`, scrollable stacked panels on mobile)
   - Eyebrow `01 · ADD MEDIA`, title **"Drop a song or video you own. Pick up to 30 seconds."**
   - **Drop zone:** dashed `1px` `--control` border, `--inset` fill, accepts MP3, WAV, FLAC, M4A, MP4, MOV (`≤ 50 MB`, `≤ 6 min`).
   - **ClipPicker** (shown once a file is chosen): file name + duration, 8-frame filmstrip above the waveform for video files, waveform with a scrubbable/draggable `≤ 30 s` window outlined in `--accent`, mono `start → end (duration)` readout, local window preview button.
+  - **Area selection** (video files): dragging over the preview draws an area in `--accent`; once the clip is uploaded, Muse Spark names the area and that sound is isolated. A plain click plays or pauses.
   - **Rights & contributor-mode gate:** checkbox `"I own this file or have the rights to use it."` plus one-line disclosure `"Clips are sent to Meta SAM and Muse models in contributor mode and may be used by Meta to improve its models."` Primary `Open in Pick →` button stays disabled until checked. Audio trims in-browser via `trimToClip` (`WAV`) before `uploadClip`; video uploads whole (`≤ 50 MB`).
 - **Right inspector:** **Precomputed demos** (`Supersaw sketch · 128 BPM · Am` + Quartet visual mask preview) with zero GPU wait, plus pipeline notes.
 
 ### 3.2 Pick a sound (`/c/[id]/pick`)
 
 - **Center lanes:**
-  - **Video stage** (shown when `trackMap.video` exists, or when previewing the Quartet visual-mask demo): 16:9 `--inset` panel with `<video>` and interactive `<button aria-pressed>` mask regions. Selected mask uses `1px` `--accent` border and crisp monochrome label badge; unselected masks use dashed `--control` borders; background dims subtly. Below the video sits an **On-screen** visibility lane (`video.tracks[].visible`).
+  - **Video stage** (shown when `trackMap.video` exists, or when previewing the Quartet visual-mask demo): 16:9 `--inset` panel with `<video>` and interactive `<button aria-pressed>` mask regions. Selected mask uses `1px` `--accent` border and crisp monochrome label badge; unselected masks use dashed `--control` borders; background dims subtly. On a real video, dragging over the frame draws an area in `--accent`; Muse Spark names it and that name drives the separation. A plain click plays or pauses.
   - **Three stacked waveform lanes** (`144px` label column + full-width scrubbable canvas, `role="img"` + `aria-label`):
     1. **Full mix** (`S` solo button, waveform in `--rest` when audible, `--muted-wave` when muted)
     2. **Picked sound** (`--accent` dot, label + method `SAM Audio` / `Demucs`, `S` solo button, waveform in `--accent` when audible)
@@ -120,6 +121,7 @@ Desktop-first DAW frame (`100dvh` on `lg+`, scrollable stacked panels on mobile)
 ### 3.3 X-Ray (`/c/[id]/xray`)
 
 - **Center lanes:**
+  - **Video stage** (shown when `trackMap.video` exists): the same stage as Isolate, with a `TRACK ON / OFF` `aria-pressed` toggle below it for a sound chosen by area. The first switch-on asks SAM 3.1 to follow the area through the clip; its mask and the **On-screen** lane (`video.tracks[].visible`) then show while the video plays.
   - **4-stat strip:** `TEMPO` (`BPM`), `KEY` (`tonic mode`), `RANGE` (e.g. `A4–G5`), `ENTERS` (e.g. `Bar 9`).
   - **Four bar-aligned lanes (`88px` label column):**
     1. `Sections`: `trackMap.sections` blocks (`drop` highlighted).
