@@ -280,3 +280,7 @@ export function parseRecipeSummary(recipe: Recipe | undefined): ParsedRecipe {
   };
 }
 
+/** The one-based bar playing at this time. Before the first bar line counts as bar 1. */
+export function barAtTime(time: number, downbeats: readonly number[]): number {
+  return Math.max(1, downbeats.filter((downbeat) => downbeat <= time).length);
+}

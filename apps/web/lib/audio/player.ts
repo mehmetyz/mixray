@@ -18,6 +18,7 @@ export type PlayerEvents = {
 const CROSSFADE_SECONDS = 0.02;
 const DRIFT_TOLERANCE_SECONDS = 0.2;
 const TICK_MILLISECONDS = 50;
+const DUCKED_VOLUME = 0.2;
 const DRIFT_SYNC_INTERVAL_MS = 1000;
 
 type Track = {
@@ -114,6 +115,11 @@ export class StemPlayer {
       track.gain.gain.setValueAtTime(track.gain.gain.value, this.context.currentTime);
       track.gain.gain.linearRampToValueAtTime(stem === name ? 1 : 0, endsAt);
     }
+  }
+
+  /** Turns the track down while the player speaks, so the microphone can hear them over it. */
+  setDucked(ducked: boolean): void {
+    for (const track of this.tracks.values()) track.element.volume = ducked ? DUCKED_VOLUME : 1;
   }
 
   setRate(rate: number): void {

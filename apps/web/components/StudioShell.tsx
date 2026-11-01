@@ -5,7 +5,7 @@ import { usePathname } from "next/navigation";
 import type { MouseEvent, ReactNode } from "react";
 import type { StemName } from "@/lib/audio/player";
 import type { ClipStepId, NavState } from "@/lib/steps";
-import { formatBarBeat, formatClockSeconds, methodShortLabel } from "@/lib/studio/format";
+import { barAtTime, formatBarBeat, formatClockSeconds, methodShortLabel } from "@/lib/studio/format";
 import { AppHeader } from "./AppHeader";
 import { useStudio, type BarLoop } from "./StudioContext";
 
@@ -36,8 +36,7 @@ const LOOP_LENGTH_BARS = 4;
 
 /** Loops the four bars starting where the player is, which is what a player reaches for. */
 function loopFromCurrentBar(time: number, downbeats: number[]): BarLoop {
-  const reached = downbeats.filter((downbeat) => downbeat <= time).length;
-  const startBar = Math.max(1, reached);
+  const startBar = barAtTime(time, downbeats);
   return {
     startBar,
     endBar: Math.max(startBar, Math.min(startBar + LOOP_LENGTH_BARS - 1, downbeats.length)),

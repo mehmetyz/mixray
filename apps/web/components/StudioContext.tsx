@@ -88,6 +88,7 @@ export type StudioContextValue = {
   seek: (seconds: number) => void;
   /** The player's own clock, finer than the `currentTime` state a render reads. */
   getPlaybackTime: () => number;
+  setDucked: (ducked: boolean) => void;
   /** The sound is ready but its notes are still being written. */
   notesPending: boolean;
   setRatePercent: (percent: number) => void;
@@ -334,6 +335,10 @@ export function StudioProvider({ clipId, initialTrackMap, children }: StudioProv
     [],
   );
 
+  const setDucked = useCallback((ducked: boolean) => {
+    playerRef.current?.setDucked(ducked);
+  }, []);
+
   const seek = useCallback(
     (seconds: number) => {
       const clamped = Math.max(0, Math.min(trackMap.duration, seconds));
@@ -446,6 +451,7 @@ export function StudioProvider({ clipId, initialTrackMap, children }: StudioProv
       togglePlay,
       seek,
       getPlaybackTime,
+      setDucked,
       notesPending,
       setRatePercent,
       setLoopBars,
@@ -476,6 +482,7 @@ export function StudioProvider({ clipId, initialTrackMap, children }: StudioProv
       togglePlay,
       seek,
       getPlaybackTime,
+      setDucked,
       notesPending,
       setRatePercent,
       setLoopBars,
