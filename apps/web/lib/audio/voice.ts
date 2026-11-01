@@ -1,7 +1,9 @@
+import { SpeechGate } from "./vad";
 import { encodeWav } from "./wav";
 
 const TARGET_SAMPLE_RATE = 16_000;
 const PROCESSOR_BUFFER_SIZE = 4_096;
+const PRE_ROLL_CHUNKS = 4;
 
 export class VoiceRecordingError extends Error {
   override name = "VoiceRecordingError";
@@ -67,15 +69,36 @@ function stopTracks(stream: MediaStream): void {
   for (const track of stream.getTracks()) track.stop();
 }
 
-/** Captures microphone audio as the mono 16-bit PCM WAV accepted by Muse Voice Transcribe. */
-export async function startVoiceRecording(): Promise<VoiceRecording> {
+function toWavBlob(chunks: Float32Array[], sampleRate: number): Blob {
+  const samples = resampleToTarget(combineSamples(chunks), sampleRate);
+  return new Blob([encodeWav({ channels: [samples], sampleRate: TARGET_SAMPLE_RATE })], { type: "audio/wav" });
+}
+
+function levelOf(samples: Float32Array): number {
+  let sum = 0;
+  for (const sample of samples) sum += sample * sample;
+  return Math.sqrt(sum / Math.max(1, samples.length));
+}
+
+export type HandsFreeOptions = {
+  /** Receives each spoken phrase as the mono 16-bit PCM WAV accepted by Muse Voice Transcribe. */
+  onPhrase: (wav: Blob) => void;
+  onSpeaking: (speaking: boolean) => void;
+  /** True while the phrase would be our own voice feedback, or one is still being transcribed. */
+  shouldIgnore: () => boolean;
+};
+
+/** Listens continuously, so commands need no free hand. Echo cancellation keeps the track out. */
+export async function startHandsFreeListening(options: HandsFreeOptions): Promise<() => Promise<void>> {
   if (!navigator.mediaDevices?.getUserMedia) {
-    throw new VoiceRecordingError("Microphone recording is unavailable. Use a text command instead.");
+    throw new VoiceRecordingError("Microphone is unavailable. Use a text command instead.");
   }
 
   let stream: MediaStream;
   try {
-    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+    });
   } catch {
     throw new VoiceRecordingError("Microphone access was not granted. Use a text command instead.");
   }
@@ -85,45 +108,60 @@ export async function startVoiceRecording(): Promise<VoiceRecording> {
     context = new AudioContext();
   } catch {
     stopTracks(stream);
-    throw new VoiceRecordingError("Microphone recording is unavailable. Use a text command instead.");
+    throw new VoiceRecordingError("Microphone is unavailable. Use a text command instead.");
   }
+
   const source = context.createMediaStreamSource(stream);
   const processor = context.createScriptProcessor(PROCESSOR_BUFFER_SIZE, 1, 1);
   const silentGain = context.createGain();
-  const chunks: Float32Array[] = [];
-  let isFinished = false;
+  const gate = new SpeechGate();
+  const seconds = PROCESSOR_BUFFER_SIZE / context.sampleRate;
+  let preRoll: Float32Array[] = [];
+  let phrase: Float32Array[] | null = null;
 
   silentGain.gain.value = 0;
   processor.onaudioprocess = (event: AudioProcessingEvent) => {
-    if (!isFinished) chunks.push(mixToMono(event.inputBuffer));
+    const chunk = mixToMono(event.inputBuffer);
+    if (options.shouldIgnore()) {
+      gate.reset();
+      preRoll = [];
+      if (phrase !== null) options.onSpeaking(false);
+      phrase = null;
+      return;
+    }
+    const gateEvent = gate.push(levelOf(chunk), seconds);
+    if (gateEvent === "started") {
+      phrase = [...preRoll];
+      options.onSpeaking(true);
+    }
+    if (phrase !== null) {
+      phrase.push(chunk);
+    } else {
+      preRoll = [...preRoll, chunk].slice(-PRE_ROLL_CHUNKS);
+    }
+    if (gateEvent === "ended" || gateEvent === "discarded") {
+      const finished = phrase;
+      phrase = null;
+      preRoll = [];
+      options.onSpeaking(false);
+      if (gateEvent === "ended" && finished !== null) {
+        options.onPhrase(toWavBlob(finished, context.sampleRate));
+      }
+    }
   };
 
   source.connect(processor);
   processor.connect(silentGain);
   silentGain.connect(context.destination);
+  // Not awaited: a context waiting for a click must not hold up turning voice on.
+  void context.resume();
 
-  async function finish(): Promise<void> {
-    if (isFinished) return;
-    isFinished = true;
+  return async () => {
+    processor.onaudioprocess = null;
     processor.disconnect();
     source.disconnect();
     silentGain.disconnect();
     stopTracks(stream);
     await context.close();
-  }
-
-  return {
-    async stop(): Promise<Blob> {
-      await finish();
-      const samples = resampleToTarget(combineSamples(chunks), context.sampleRate);
-      if (samples.length === 0) {
-        throw new VoiceRecordingError("No microphone audio was recorded. Use a text command instead.");
-      }
-      const wav = encodeWav({ channels: [samples], sampleRate: TARGET_SAMPLE_RATE });
-      return new Blob([wav], { type: "audio/wav" });
-    },
-    async cancel(): Promise<void> {
-      await finish();
-    },
   };
 }

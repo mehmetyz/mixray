@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
-import { VoiceRecordingError, startVoiceRecording, type VoiceRecording } from "@/lib/audio/voice";
+import { VoiceRecordingError, startHandsFreeListening } from "@/lib/audio/voice";
 import {
   parseVoiceAssistantMessage,
   type ParsedVoiceMessage,
@@ -31,55 +31,10 @@ type ChatMessage = {
   time: string;
 };
 
-interface SpeechRecognitionResultItem {
-  transcript: string;
-  confidence: number;
-}
-
-interface SpeechRecognitionResultList {
-  length: number;
-  [index: number]: {
-    isFinal: boolean;
-    length: number;
-    [index: number]: SpeechRecognitionResultItem;
-  };
-}
-
-interface SpeechRecognitionEventLike {
-  resultIndex: number;
-  results: SpeechRecognitionResultList;
-}
-
-interface SpeechRecognitionErrorEventLike {
-  error: string;
-  message?: string;
-}
-
-interface SpeechRecognitionInstance {
-  continuous: boolean;
-  interimResults: boolean;
-  lang: string;
-  start: () => void;
-  stop: () => void;
-  abort: () => void;
-  onresult: ((event: SpeechRecognitionEventLike) => void) | null;
-  onerror: ((event: SpeechRecognitionErrorEventLike) => void) | null;
-  onend: (() => void) | null;
-}
-
-type SpeechRecognitionConstructor = new () => SpeechRecognitionInstance;
-
 declare global {
   interface Window {
-    SpeechRecognition?: SpeechRecognitionConstructor;
-    webkitSpeechRecognition?: SpeechRecognitionConstructor;
     webkitAudioContext?: typeof AudioContext;
   }
-}
-
-function getSpeechRecognitionConstructor(): SpeechRecognitionConstructor | null {
-  if (typeof window === "undefined") return null;
-  return window.SpeechRecognition ?? window.webkitSpeechRecognition ?? null;
 }
 
 function playAssistantChime() {
@@ -120,6 +75,8 @@ function speakFeedback(text: string) {
 }
 
 const VOICE_ENDPOINT = "/api/voice";
+const VOICE_PREFERENCE_KEY = "mixray.voice";
+const VOICE_OFF = "off";
 
 function isRecord(value: unknown): value is JsonRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -156,7 +113,7 @@ export function CoachPanel({
     togglePlay,
   } = useStudio();
 
-  // Stable callback refs to prevent SpeechRecognition effect churn
+  // Stable callback refs, so a playback update never restarts the microphone
   const onAnalyzeTakeRef = useRef(onAnalyzeTake);
   useEffect(() => {
     onAnalyzeTakeRef.current = onAnalyzeTake;
@@ -177,12 +134,9 @@ export function CoachPanel({
     togglePlayRef.current = togglePlay;
   }, [togglePlay]);
 
-  // Assistant states: Hands-free wake word is OFF by default for optimal performance
-  const [isAssistantEnabled, setIsAssistantEnabled] = useState<boolean>(false);
-  const [isWakeActive, setIsWakeActive] = useState<boolean>(false);
-  const [liveInterimText, setLiveInterimText] = useState<string>("");
+  const [isVoiceOn, setIsVoiceOn] = useState<boolean>(false);
+  const [isHearing, setIsHearing] = useState<boolean>(false);
   const [lastActionNotice, setLastActionNotice] = useState<string | null>(null);
-  const [isSingleTapRecording, setIsSingleTapRecording] = useState<boolean>(false);
   const [isTranscribing, setIsTranscribing] = useState<boolean>(false);
   const [isTextInputOpen, setIsTextInputOpen] = useState<boolean>(false);
   const [textCommand, setTextCommand] = useState<string>("");
@@ -190,20 +144,12 @@ export function CoachPanel({
     {
       id: "initial-welcome",
       sender: "mixray",
-      text: 'Voice assistant in standby. Tap "Tap to Speak (Mic)" to command, or toggle "Wake Word" for hands-free listening.',
+      text: "Turn voice on and keep both hands on the keys. Just say a command: loop 4 to 8, slow 70 percent, play, or analyze my take.",
       time: "Now",
     },
   ]);
 
-  const recognitionRef = useRef<SpeechRecognitionInstance | null>(null);
-  const isAssistantEnabledRef = useRef<boolean>(isAssistantEnabled);
-  useEffect(() => {
-    isAssistantEnabledRef.current = isAssistantEnabled;
-  }, [isAssistantEnabled]);
-
-  const wakeTimerRef = useRef<number | null>(null);
-  const voiceRecordingRef = useRef<VoiceRecording | null>(null);
-  const lastProcessedTranscriptRef = useRef<string>("");
+  const isTranscribingRef = useRef<boolean>(false);
 
   const addChatMessage = useCallback((sender: "user" | "mixray", text: string) => {
     const time = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -215,15 +161,7 @@ export function CoachPanel({
 
   const executeVoiceIntent = useCallback(
     (parsed: ParsedVoiceMessage, rawTranscript: string) => {
-      // Trigger visual wake glow and audio chime
-      setIsWakeActive(true);
       playAssistantChime();
-      if (wakeTimerRef.current !== null) {
-        window.clearTimeout(wakeTimerRef.current);
-      }
-      wakeTimerRef.current = window.setTimeout(() => {
-        setIsWakeActive(false);
-      }, 3500);
 
       addChatMessage("user", rawTranscript);
 
@@ -260,197 +198,94 @@ export function CoachPanel({
     [addChatMessage],
   );
 
-  // Initialize and run continuous hands-free speech recognition (Web Speech API)
-  // Stable effect that does NOT re-run during playback or state updates
-  useEffect(() => {
-    const SpeechConstructor = getSpeechRecognitionConstructor();
-    if (SpeechConstructor === null) {
-      return;
-    }
-
-    if (!isAssistantEnabled) {
-      if (recognitionRef.current !== null) {
-        try {
-          recognitionRef.current.abort();
-        } catch {
-          // ignore
-        }
-        recognitionRef.current = null;
-      }
-      return;
-    }
-
-    let disposed = false;
-    let restartTimer: number | null = null;
-    let recognition: SpeechRecognitionInstance;
-    try {
-      recognition = new SpeechConstructor();
-    } catch {
-      return;
-    }
-
-    recognition.continuous = true;
-    recognition.interimResults = true;
-    recognition.lang = "en-US";
-
-    recognition.onresult = (event: SpeechRecognitionEventLike) => {
-      let interim = "";
-      for (let i = event.resultIndex; i < event.results.length; i++) {
-        const res = event.results[i];
-        if (res === undefined) continue;
-        const item = res[0];
-        if (item === undefined) continue;
-
-        const transcript = item.transcript.trim();
-
-        if (res.isFinal) {
-          if (transcript.length > 0 && transcript !== lastProcessedTranscriptRef.current) {
-            lastProcessedTranscriptRef.current = transcript;
-            setLiveInterimText("");
-            const parsed = parseVoiceAssistantMessage(transcript);
-            if (parsed.wakeWordDetected || parsed.intent.kind !== "unknown") {
-              executeVoiceIntent(parsed, transcript);
-            }
-          }
-        } else {
-          interim += item.transcript;
-        }
-      }
-
-      if (interim.length > 0) {
-        setLiveInterimText(interim);
-        const lowerInterim = interim.toLowerCase();
-
-        // Detect wake word or command immediately in interim results
-        if (/\b(?:mix\s*ray|mixray|mix-ray)\b/i.test(lowerInterim)) {
-          setIsWakeActive(true);
-          const parsedInterim = parseVoiceAssistantMessage(interim);
-          if (
-            (parsedInterim.intent.kind === "greeting" ||
-              parsedInterim.intent.kind === "action" ||
-              parsedInterim.intent.kind === "play_pause") &&
-            interim !== lastProcessedTranscriptRef.current
-          ) {
-            lastProcessedTranscriptRef.current = interim;
-            executeVoiceIntent(parsedInterim, interim);
-          }
-        }
-      }
-    };
-
-    recognition.onerror = (event: SpeechRecognitionErrorEventLike) => {
-      if (event.error === "no-speech" || event.error === "network") {
-        return;
-      }
-      if (
-        event.error === "not-allowed" ||
-        event.error === "service-not-allowed" ||
-        event.error === "audio-capture"
-      ) {
-        setIsAssistantEnabled(false);
-        setLastActionNotice("Microphone permission required for hands-free assistant.");
-      }
-    };
-
-    recognition.onend = () => {
-      if (disposed || !isAssistantEnabledRef.current) return;
-      // Restart with a safe 1000ms delay to never starve the JS thread
-      if (restartTimer !== null) {
-        window.clearTimeout(restartTimer);
-      }
-      restartTimer = window.setTimeout(() => {
-        if (disposed || !isAssistantEnabledRef.current) return;
-        try {
-          recognition.start();
-        } catch {
-          // already started or blocked
-        }
-      }, 1000);
-    };
-
-    recognitionRef.current = recognition;
-    try {
-      recognition.start();
-    } catch {
-      // already active
-    }
-
-    return () => {
-      disposed = true;
-      if (restartTimer !== null) {
-        window.clearTimeout(restartTimer);
-      }
-      if (recognitionRef.current !== null) {
-        try {
-          recognitionRef.current.abort();
-        } catch {
-          // ignore
-        }
-        recognitionRef.current = null;
-      }
-    };
-  }, [isAssistantEnabled, executeVoiceIntent]);
-
-  const requestMicAccess = async () => {
-    try {
-      if (typeof navigator !== "undefined" && navigator.mediaDevices?.getUserMedia) {
-        await navigator.mediaDevices.getUserMedia({ audio: true });
-        setIsAssistantEnabled(true);
-        setLastActionNotice("Microphone connected! Say 'Hello Mixray'.");
-      }
-    } catch {
-      setLastActionNotice("Microphone permission denied in browser settings.");
-      setIsAssistantEnabled(false);
-    }
-  };
-
-  // Single-tap fallback recording (Meta Muse Voice Transcribe route /api/voice)
-  const handleSingleTapMic = async () => {
-    if (isTranscribing) return;
-
-    if (isSingleTapRecording) {
-      setIsSingleTapRecording(false);
-      const recording = voiceRecordingRef.current;
-      voiceRecordingRef.current = null;
-      if (recording === null) return;
-
+  const transcribePhrase = useCallback(
+    async (wav: Blob) => {
+      isTranscribingRef.current = true;
       setIsTranscribing(true);
-      setLastActionNotice("Transcribing voice command...");
       try {
-        const audio = await recording.stop();
         const form = new FormData();
-        form.append("audio", audio, "command.wav");
+        form.append("audio", wav, "command.wav");
         const res = await fetch(VOICE_ENDPOINT, { method: "POST", body: form });
         const json: unknown = await res.json();
         if (!res.ok) {
           setLastActionNotice(messageFromResponse(json) ?? "Transcription failed");
           return;
         }
-        const parsedRes = parseVoiceResponse(json);
-        if (parsedRes && parsedRes.transcript.length > 0) {
-          const parsed = parseVoiceAssistantMessage(parsedRes.transcript);
-          executeVoiceIntent(parsed, parsedRes.transcript);
-        } else {
-          setLastActionNotice("No speech detected. Try again.");
+        const transcript = parseVoiceResponse(json)?.transcript ?? "";
+        if (transcript.length === 0) return;
+        const parsed = parseVoiceAssistantMessage(transcript);
+        // The microphone is always open, so talk that is not a command is left alone.
+        if (parsed.intent.kind === "unknown") {
+          setLastActionNotice(`Heard "${transcript}". Not a command.`);
+          return;
         }
-      } catch (err: unknown) {
-        setLastActionNotice(
-          err instanceof VoiceRecordingError ? err.message : "Voice processing error",
-        );
+        executeVoiceIntent(parsed, transcript);
+      } catch {
+        setLastActionNotice("Voice transcription is unavailable. Try again.");
       } finally {
+        isTranscribingRef.current = false;
         setIsTranscribing(false);
       }
-    } else {
-      try {
-        const recording = await startVoiceRecording();
-        voiceRecordingRef.current = recording;
-        setIsSingleTapRecording(true);
-        setLastActionNotice("Recording... tap microphone again to send.");
-      } catch (err: unknown) {
-        setLastActionNotice(
-          err instanceof VoiceRecordingError ? err.message : "Microphone unavailable",
-        );
-      }
+    },
+    [executeVoiceIntent],
+  );
+
+  useEffect(() => {
+    if (!isVoiceOn) return;
+    let disposed = false;
+    let stopListening: (() => Promise<void>) | null = null;
+    void startHandsFreeListening({
+      onPhrase: (wav) => void transcribePhrase(wav),
+      onSpeaking: setIsHearing,
+      // Our own spoken feedback must not be heard as a command.
+      shouldIgnore: () => isTranscribingRef.current || window.speechSynthesis?.speaking === true,
+    })
+      .then((stop) => {
+        if (disposed) void stop();
+        else stopListening = stop;
+      })
+      .catch((err: unknown) => {
+        setIsVoiceOn(false);
+        setLastActionNotice(err instanceof VoiceRecordingError ? err.message : "Microphone unavailable");
+      });
+    return () => {
+      disposed = true;
+      void stopListening?.();
+    };
+  }, [isVoiceOn, transcribePhrase]);
+
+  // Someone who already allowed the microphone should not need a free hand to turn voice on again.
+  useEffect(() => {
+    let cancelled = false;
+    let turnedOff = false;
+    try {
+      turnedOff = window.localStorage.getItem(VOICE_PREFERENCE_KEY) === VOICE_OFF;
+    } catch {
+      // Storage can be unavailable; voice then simply follows the permission.
+    }
+    if (turnedOff) return;
+    void navigator.permissions
+      ?.query({ name: "microphone" })
+      .then((status) => {
+        if (!cancelled && status.state === "granted") setIsVoiceOn(true);
+      })
+      .catch(() => {
+        // Some browsers cannot be asked about the microphone; the button still works.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const toggleVoice = () => {
+    const next = !isVoiceOn;
+    setIsVoiceOn(next);
+    setIsHearing(false);
+    try {
+      if (next) window.localStorage.removeItem(VOICE_PREFERENCE_KEY);
+      else window.localStorage.setItem(VOICE_PREFERENCE_KEY, VOICE_OFF);
+    } catch {
+      // The choice still applies for this visit.
     }
   };
 
@@ -482,16 +317,9 @@ export function CoachPanel({
           <div className="relative flex h-7 w-7 items-center justify-center rounded-full bg-accent/15 text-accent">
             <span
               className={`h-2.5 w-2.5 rounded-full bg-accent transition-all duration-300 ${
-                isWakeActive
-                  ? "scale-150 animate-ping"
-                  : isAssistantEnabled
-                    ? "animate-pulse"
-                    : "opacity-40"
+                isHearing ? "scale-150 animate-ping" : isVoiceOn ? "animate-pulse" : "opacity-40"
               }`}
             />
-            {isWakeActive ? (
-              <span className="absolute inset-0 rounded-full border border-accent animate-ping" />
-            ) : null}
           </div>
           <div>
             <div className="flex items-center gap-1.5">
@@ -501,60 +329,43 @@ export function CoachPanel({
               </span>
             </div>
             <span className="mono-num block text-[10px] text-muted">
-              {isWakeActive
-                ? "⚡ Wake phrase active!"
-                : isAssistantEnabled
-                  ? 'Listening for "Hello Mixray"'
-                  : "Wake word standby (tap to speak)"}
+              {!isVoiceOn
+                ? "Voice is off"
+                : isTranscribing
+                  ? "Reading your command…"
+                  : isHearing
+                    ? "Hearing you…"
+                    : "Listening. Just say a command."}
             </span>
           </div>
         </div>
 
         <button
           type="button"
-          onClick={() => setIsAssistantEnabled((prev) => !prev)}
-          className={`cursor-pointer rounded-full px-2.5 py-1 text-[11px] font-medium transition ${
-            isAssistantEnabled
+          aria-pressed={isVoiceOn}
+          onClick={toggleVoice}
+          className={`shrink-0 cursor-pointer whitespace-nowrap rounded-full px-2.5 py-1 text-[11px] font-medium transition ${
+            isVoiceOn
               ? "border border-accent/40 bg-accent/15 text-accent hover:bg-accent/25"
               : "border border-line-2 bg-inset text-muted hover:text-text"
           }`}
         >
-          {isAssistantEnabled ? "Wake: On" : "Wake: Off"}
+          {isVoiceOn ? "Voice: On" : "Voice: Off"}
         </button>
       </div>
 
-      {/* Active Live Transcript / Status Banner */}
-      {isWakeActive ? (
-        <div className="rounded-card border border-accent bg-accent/10 px-3 py-2 text-xs font-medium text-accent flex items-center justify-between shadow-xs">
-          <span>⚡ Listening: Say a command...</span>
-          <span className="font-mono text-[11px]">&quot;Hello Mixray&quot;</span>
-        </div>
-      ) : liveInterimText.length > 0 ? (
-        <div className="rounded-card border border-line-2 bg-inset px-3 py-2 text-xs text-text flex items-center gap-2">
-          <span className="h-2 w-2 rounded-full bg-accent animate-ping shrink-0" />
-          <span className="truncate font-mono text-[11px] text-accent">&quot;{liveInterimText}&quot;</span>
-        </div>
-      ) : lastActionNotice !== null ? (
-        <div className="rounded-card border border-line-2 bg-inset/90 px-3 py-2 text-xs text-text flex items-center justify-between">
+      {/* Status Banner */}
+      {lastActionNotice !== null ? (
+        <div role="status" className="flex items-center justify-between gap-2 rounded-card border border-line-2 bg-inset/90 px-3 py-2 text-xs text-text">
           <span className="truncate">{lastActionNotice}</span>
-          <div className="flex items-center gap-2">
-            {!isAssistantEnabled && lastActionNotice.includes("permission") ? (
-              <button
-                type="button"
-                onClick={requestMicAccess}
-                className="cursor-pointer rounded-xs bg-accent px-1.5 py-0.5 text-[10px] font-medium text-accent-ink"
-              >
-                Connect Mic
-              </button>
-            ) : null}
-            <button
-              type="button"
-              onClick={() => setLastActionNotice(null)}
-              className="cursor-pointer text-muted hover:text-text"
-            >
-              ×
-            </button>
-          </div>
+          <button
+            type="button"
+            aria-label="Dismiss"
+            onClick={() => setLastActionNotice(null)}
+            className="cursor-pointer text-muted hover:text-text"
+          >
+            ×
+          </button>
         </div>
       ) : null}
 
@@ -762,31 +573,15 @@ export function CoachPanel({
         </div>
       </div>
 
-      {/* Tap-to-Speak Fallback & Optional Text Command */}
+      {/* Text command, for when speaking is not an option */}
       <div className="pt-1 space-y-2 border-t border-line">
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={handleSingleTapMic}
-            disabled={isTranscribing}
-            className={`flex-1 h-8 cursor-pointer rounded-icon border text-xs font-semibold flex items-center justify-center gap-1.5 transition ${
-              isSingleTapRecording
-                ? "border-accent bg-accent text-accent-ink animate-pulse"
-                : "border-line-2 bg-surface text-text hover:border-control"
-            }`}
-          >
-            <span className="h-2 w-2 rounded-full bg-current" />
-            <span>{isSingleTapRecording ? "Tap to Finish" : "Tap to Speak (Mic)"}</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setIsTextInputOpen((prev) => !prev)}
-            className="h-8 px-2.5 cursor-pointer rounded-icon border border-line-2 bg-surface text-xs text-text-2 hover:text-text"
-          >
-            {isTextInputOpen ? "Hide" : "Type"}
-          </button>
-        </div>
+        <button
+          type="button"
+          onClick={() => setIsTextInputOpen((prev) => !prev)}
+          className="h-8 w-full px-2.5 cursor-pointer rounded-icon border border-line-2 bg-surface text-xs text-text-2 hover:border-control"
+        >
+          {isTextInputOpen ? "Hide text command" : "Type a command"}
+        </button>
 
         {isTextInputOpen ? (
           <form onSubmit={handleTextSubmit} className="flex gap-1.5">

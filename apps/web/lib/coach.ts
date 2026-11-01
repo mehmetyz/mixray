@@ -396,7 +396,7 @@ export function parseVoiceAssistantMessage(phrase: string): ParsedVoiceMessage {
       kind: "unknown",
       description: wakeWordDetected
         ? `Heard "${clean}", try "slow down", "play", or "loop bar 4 to 8".`
-        : "Didn't catch that. Say 'Hello Mixray' or tap the microphone.",
+        : "Didn't catch that. Try: loop 4 to 8, slow 70 percent, play.",
     },
     wakeWordDetected,
     cleanTranscript: clean,
