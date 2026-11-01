@@ -85,6 +85,8 @@ export type StudioContextValue = {
   setMonitor: (stem: StemName) => void;
   togglePlay: () => void;
   seek: (seconds: number) => void;
+  /** The player's own clock, finer than the `currentTime` state a render reads. */
+  getPlaybackTime: () => number;
   setRatePercent: (percent: number) => void;
   setLoopBars: (bars: BarLoop | null) => void;
   setUseDemucsCleaner: (enabled: boolean) => void;
@@ -145,7 +147,7 @@ export function StudioProvider({ clipId, initialTrackMap, children }: StudioProv
   const [problemBar, setProblemBar] = useState<ProblemBarMark | null>(null);
   const [handFilter, setHandFilter] = useState<HandFilter>("both");
   const [simplifiedBars, setSimplifiedBars] = useState<number[]>([]);
-  const [useDemucsCleaner, setUseDemucsCleaner] = useState<boolean>(false);
+  const [demucsPreviewOn, setUseDemucsCleaner] = useState<boolean>(false);
   const [isSynthesizedPreview, setIsSynthesizedPreview] = useState<boolean>(false);
   const [coachEntries, setCoachEntries] = useState<CoachActionEntry[]>([]);
 
@@ -155,6 +157,10 @@ export function StudioProvider({ clipId, initialTrackMap, children }: StudioProv
   const latestRateRef = useRef<number>(100);
   const latestLoopRef = useRef<LoopRange | null>(null);
   const pendingPlayRef = useRef<boolean>(false);
+
+  // A listening preview on Isolate only: every later screen shows the notes of the selected sound,
+  // so it has to play and export that same sound.
+  const useDemucsCleaner = demucsPreviewOn && (pathname?.endsWith("/pick") ?? false);
 
   const selectedIsolation = useMemo(() => {
     const exact = trackMap.isolations.find((item) => item.id === requestedIsoId);
@@ -301,6 +307,11 @@ export function StudioProvider({ clipId, initialTrackMap, children }: StudioProv
       .catch(() => setPlaying(false));
   }, []);
 
+  const getPlaybackTime = useCallback(
+    () => playerRef.current?.currentTime ?? latestTimeRef.current,
+    [],
+  );
+
   const seek = useCallback(
     (seconds: number) => {
       const clamped = Math.max(0, Math.min(trackMap.duration, seconds));
@@ -412,6 +423,7 @@ export function StudioProvider({ clipId, initialTrackMap, children }: StudioProv
       setMonitor,
       togglePlay,
       seek,
+      getPlaybackTime,
       setRatePercent,
       setLoopBars,
       setUseDemucsCleaner,
@@ -440,6 +452,7 @@ export function StudioProvider({ clipId, initialTrackMap, children }: StudioProv
       setMonitor,
       togglePlay,
       seek,
+      getPlaybackTime,
       setRatePercent,
       setLoopBars,
       applyCoachAction,

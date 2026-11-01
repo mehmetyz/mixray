@@ -221,9 +221,6 @@ export function XRayView() {
 
   const rangeText = formatPitchRange(selectedIsolation?.range, notes);
   const entersText = firstSoundingBar(notes, trackMap.downbeats);
-  const confidence = selectedIsolation?.pitch_confidence;
-  const isApproximateReading = confidence !== undefined && confidence < 0.65;
-  const confidencePct = confidence !== undefined ? Math.round(confidence * 100) : null;
   const keyLabel = `${trackMap.key.tonic} ${trackMap.key.mode}`;
   const camelotKey = CAMELOT_KEYS[keyLabel] ?? null;
 
@@ -295,7 +292,7 @@ export function XRayView() {
               <span className="mono-num text-xs font-semibold text-muted">BPM</span>
             </div>
             <span className="mono-num block mt-0.5 text-[11px] text-text-2">
-              {Math.round(trackMap.tempo.confidence * 100)}% beat stability
+              Estimated from the audio
             </span>
           </div>
 
@@ -318,7 +315,7 @@ export function XRayView() {
               </span>
             </div>
             <span className="mono-num block mt-0.5 text-[11px] text-text-2">
-              {Math.round(trackMap.key.confidence * 100)}% key certainty
+              Estimated from the audio
             </span>
           </div>
 
@@ -449,30 +446,9 @@ export function XRayView() {
                   {notes.length}
                 </span>
               </div>
-              {isApproximateReading ? (
-                <span className="mt-1.5 inline-block rounded-xs border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-500">
-                  Approximate
-                </span>
-              ) : null}
             </div>
 
             <div className="space-y-1">
-              {confidencePct !== null ? (
-                <div className="space-y-0.5">
-                  <div className="flex justify-between text-[10px] text-muted font-mono">
-                    <span>Fidelity</span>
-                    <span className="font-semibold text-text">{confidencePct}%</span>
-                  </div>
-                  <div className="h-1.5 w-full rounded-full bg-surface-2 overflow-hidden">
-                    <div
-                      style={{ width: `${confidencePct}%` }}
-                      className={`h-full rounded-full ${
-                        confidencePct > 80 ? "bg-accent" : "bg-amber-500"
-                      }`}
-                    />
-                  </div>
-                </div>
-              ) : null}
               <span className="mono-num block text-[10px] text-muted">Basic Pitch extraction</span>
             </div>
           </div>
@@ -514,17 +490,10 @@ export function XRayView() {
 
       {/* Side Intelligence & Recipe Panel */}
       <aside className="flex w-full shrink-0 flex-col gap-4 border-t border-line bg-surface p-5 lg:w-84 lg:border-t-0 lg:border-l lg:overflow-y-auto">
-        {isApproximateReading ? (
-          <div className="rounded-well border border-amber-500/30 bg-amber-500/10 p-3.5 text-xs leading-relaxed text-amber-500">
-            <strong className="block font-semibold">
-              Approximate Reading ({confidencePct}% confidence)
-            </strong>
-            <span className="block mt-1 text-text-2 text-[11px] leading-normal">
-              Complex or detuned timbre detected. The extracted notes provide a faithful harmonic
-              approximation for learning on keyboard.
-            </span>
-          </div>
-        ) : null}
+        <p className="rounded-well border border-line-2 bg-inset p-3.5 text-[11px] leading-normal text-text-2">
+          Notes, tempo and key are read automatically from the audio, so some may be wrong. Trust your
+          ear over the screen.
+        </p>
 
         {/* Sound Summary Card */}
         <div>

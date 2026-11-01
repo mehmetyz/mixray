@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState, type FormEvent } from "react";
+import { useRef, useState, type FormEvent } from "react";
 import { startAreaIsolation, startIsolation, waitForJob } from "@/lib/engine/client";
 import type { Job, JobStage } from "@/lib/engine/types";
 import type { VideoArea } from "@/lib/studio/area";
@@ -36,6 +36,8 @@ export function PickView() {
   const [promptInput, setPromptInput] = useState<string>("");
   const [workingStage, setWorkingStage] = useState<JobStage | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [workingSeconds, setWorkingSeconds] = useState<number>(0);
+  const workingTimer = useRef<number | null>(null);
 
   const matchedTrack = trackMap.video?.tracks.find(
     (track) => track.isolation_id === selectedIsolationId,
@@ -45,6 +47,8 @@ export function PickView() {
   const runJob = async (firstStage: JobStage, start: () => Promise<Job>) => {
     setErrorMessage(null);
     setWorkingStage(firstStage);
+    setWorkingSeconds(0);
+    workingTimer.current = window.setInterval(() => setWorkingSeconds((seconds) => seconds + 1), 1000);
     try {
       const initialJob = await start();
       let finalJob = initialJob;
@@ -63,6 +67,7 @@ export function PickView() {
         error instanceof Error ? error.message : "Could not isolate that sound right now.",
       );
     } finally {
+      if (workingTimer.current !== null) window.clearInterval(workingTimer.current);
       setWorkingStage(null);
     }
   };
@@ -190,7 +195,11 @@ export function PickView() {
             <p className="text-xs text-muted">Point or type to separate any stem</p>
           </div>
           <span className="mono-num rounded-full border border-line-2 bg-surface-2 px-2.5 py-0.5 text-xs font-medium text-text-2">
-            {useDemucsCleaner ? "DEMUCS" : "SAM AUDIO"}
+            {useDemucsCleaner
+              ? "DEMUCS"
+              : selectedIsolation === undefined
+                ? "SAM AUDIO"
+                : methodShortLabel(selectedIsolation.method).toUpperCase()}
           </span>
         </div>
 
@@ -302,7 +311,7 @@ export function PickView() {
               ))}
             </div>
             <p className="text-xs text-text-2">
-              Typically ~15–20 seconds on GPU (instant if cached).
+              {workingSeconds} s so far. Separating a sound can take a few minutes.
             </p>
           </div>
         ) : null}
@@ -355,9 +364,9 @@ export function PickView() {
         {fallbackAlternative !== null ? (
           <div className="space-y-2.5 rounded-card border border-line-2 bg-surface-2/40 p-3.5 shadow-xs">
             <div className="flex items-center justify-between">
-              <span className="text-xs font-semibold text-text">Cleaner Version</span>
+              <span className="text-xs font-semibold text-text">Alternative version</span>
               <span className="mono-num rounded-full border border-line-2 bg-bg px-2 py-0.5 text-[10px] uppercase text-text-2">
-                {useDemucsCleaner ? "DEMUCS ACTIVE" : "SAM AUDIO ACTIVE"}
+                {useDemucsCleaner ? "PREVIEW ON" : "PREVIEW OFF"}
               </span>
             </div>
 
@@ -370,10 +379,11 @@ export function PickView() {
               />
               <div className="space-y-0.5 text-xs">
                 <span className="block font-medium text-text">
-                  Use Demucs alternative ({fallbackAlternative.name})
+                  Preview the Demucs {fallbackAlternative.name} stem
                 </span>
                 <span className="block text-xs leading-relaxed text-text-2">
-                  Switch to hear both versions and keep the one that sounds cleaner.
+                  For listening here only. Analyze, Practice and Export use the selected sound, so
+                  playback matches its notes.
                 </span>
               </div>
             </label>
