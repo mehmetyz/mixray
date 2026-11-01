@@ -126,6 +126,8 @@ PROMPT_STEM_KEYWORDS: StemKeywordMatches = (
     ),
 )
 PROMPT_TOKEN_PATTERN = re.compile(r"[a-z]+")
+# Sounds whose names contain an instrument word. Matched as whole phrases before the keywords above.
+EVENT_PHRASES = (" car horn ", " vehicle horn ")
 
 
 class FallbackStem(TypedDict):
@@ -139,7 +141,11 @@ class FallbackStem(TypedDict):
 
 def stem_for_prompt(prompt: str) -> StemName | None:
     """Return the standard Demucs stem named by a natural-language prompt, if any."""
-    prompt_tokens = frozenset(PROMPT_TOKEN_PATTERN.findall(prompt.lower()))
+    words = PROMPT_TOKEN_PATTERN.findall(prompt.lower())
+    phrase = f" {' '.join(words)} "
+    if any(event in phrase for event in EVENT_PHRASES):
+        return None
+    prompt_tokens = frozenset(words)
     for stem, keywords in PROMPT_STEM_KEYWORDS:
         if prompt_tokens.intersection(keywords):
             return stem

@@ -235,6 +235,10 @@ def _routing_fixture() -> None:
         ("organ", "demucs", False),
         ("person talking", "demucs", False),
         ("car honking", "sam_event", False),
+        ("car horn", "sam_event", False),
+        ("vehicle horn", "sam_event", False),
+        ("french horn", "demucs", False),
+        ("brass horn", "demucs", False),
     ):
         assert route_for_prompt(sound) == route, sound
         assert prompt_has_notes(sound) is has_notes, sound
@@ -318,6 +322,47 @@ def _melody_preservation_fixture() -> None:
         52,
         76,
     ]
+
+    def line(notes: list[transcribe.Note]) -> list[tuple[int, float, float]]:
+        return [
+            (note["pitch"], round(note["start"], 3), round(note["end"], 3))
+            for note in transcribe.top_voice(notes)
+        ]
+
+    overlapping = [
+        _timed_note(72, 0.0, 0.9),
+        _timed_note(71, 0.5, 1.4),
+        _timed_note(69, 1.0, 1.9),
+    ]
+    assert line(overlapping) == [(72, 0.0, 0.5), (71, 0.5, 1.0), (69, 1.0, 1.9)]
+    assert overlapping == [
+        _timed_note(72, 0.0, 0.9),
+        _timed_note(71, 0.5, 1.4),
+        _timed_note(69, 1.0, 1.9),
+    ], "raw notes stay untouched for the X-Ray view"
+
+    assert [start for _, start, _ in line(descending_with_pedal)] == [0.0, 0.5, 1.0, 1.5, 2.0]
+
+    held_under_a_short_note = [_timed_note(72, 0.0, 2.0), _timed_note(60, 0.5, 0.9)]
+    assert line(held_under_a_short_note) == [(72, 0.0, 0.5), (60, 0.5, 0.9)]
+
+    chord = [_timed_note(60, 1.0, 2.0), _timed_note(64, 1.0, 2.0), _timed_note(67, 1.0, 2.0)]
+    assert line(chord) == [(67, 1.0, 2.0)]
+
+    chord_a_frame_apart = [_timed_note(60, 1.0, 2.0), _timed_note(67, 1.012, 2.0)]
+    assert line(chord_a_frame_apart) == [(67, 1.0, 2.0)]
+
+    repeated_pitch = [
+        _timed_note(60, 0.0, 0.4),
+        _timed_note(60, 0.5, 0.9),
+        _timed_note(60, 1.0, 1.4),
+    ]
+    assert line(repeated_pitch) == [(60, 0.0, 0.4), (60, 0.5, 0.9), (60, 1.0, 1.4)]
+
+    short_notes = [_timed_note(60, 0.0, 0.03), _timed_note(62, 0.03, 0.06)]
+    assert line(short_notes) == [(60, 0.0, 0.03), (62, 0.03, 0.06)]
+
+    assert transcribe.top_voice([]) == []
 
     beats = [index * QUARTER_NOTE_SECONDS for index in range(BEATS_PER_SIXTEENTH_RUN)]
     run = [

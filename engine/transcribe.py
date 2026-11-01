@@ -46,7 +46,8 @@ TRANSCRIBE_TIMEOUT_SECONDS = 300
 MIDI_MIN = 0
 MIDI_MAX = 127
 EASY_LOW_MIDI = 60
-EASY_HIGH_MIDI = 84
+# The on-screen keyboard ends at B5, and a part must never ask for a key it cannot show.
+EASY_HIGH_MIDI = 83
 
 # Basic Pitch reports amplitudes in 0..1; MIDI velocity is 1..127, and zero is invalid in the
 # TrackMap contract even for a very quiet predicted note.
@@ -80,6 +81,8 @@ BASS_BASIC_PITCH_MINIMUM_NOTE_LENGTH_MILLISECONDS = 127.70
 # real guitar mixtures it scored 0.671 against 0.634. No other class has real note labels to prove
 # a gain with, so the longer gate applies to guitar alone.
 GUITAR_BASIC_PITCH_MINIMUM_NOTE_LENGTH_MILLISECONDS = 127.70
+# Basic Pitch reads onsets on an 11.6 ms grid, so one struck chord can land a frame or two apart.
+CHORD_ONSET_SECONDS = 0.025
 BASIC_PITCH_MELODIA_TRICK = True
 
 REGISTER_LOWER_PERCENTILE = 10.0
@@ -542,41 +545,24 @@ def _mean_confidence(amplitudes: list[float]) -> float:
     return round(sum(amplitudes) / len(amplitudes), ROUND_CONFIDENCE)
 
 
-def _subtract_intervals(note: Note, blocked: list[tuple[float, float]]) -> list[Note]:
-    """Keep only portions of a lower note that are not occupied by an already higher voice."""
-    fragments = [(note["start"], note["end"])]
-    for blocked_start, blocked_end in blocked:
-        remaining: list[tuple[float, float]] = []
-        for start, end in fragments:
-            if blocked_end <= start or blocked_start >= end:
-                remaining.append((start, end))
-                continue
-            if start < blocked_start:
-                remaining.append((start, min(end, blocked_start)))
-            if blocked_end < end:
-                remaining.append((max(start, blocked_end), end))
-        fragments = remaining
-    return [
-        {
-            "start": start,
-            "end": end,
-            "pitch": note["pitch"],
-            "velocity": note["velocity"],
-        }
-        for start, end in fragments
-        if end > start
-    ]
-
-
 def top_voice(notes: list[Note]) -> list[Note]:
-    """Remove every lower overlapping voice, preserving exposed portions of a non-chord note."""
-    blocked: list[tuple[float, float]] = []
-    selected: list[Note] = []
-    for note in sorted(notes, key=lambda item: (-item["pitch"], item["start"], item["end"])):
-        selected.extend(_subtract_intervals(note, blocked))
-        blocked.append((note["start"], note["end"]))
-        blocked.sort()
-    return sorted(selected, key=lambda item: (item["start"], item["pitch"], item["end"]))
+    """Reduce notes to one melody line without moving any onset.
+
+    Each onset contributes its highest note, and a later onset only shortens the note before it. A
+    note ringing under a later one is not restarted when that note ends: nobody played it again.
+    """
+    melody: list[Note] = []
+    for note in sorted(notes, key=lambda item: (item["start"], -item["pitch"], item["end"])):
+        previous = melody[-1] if melody else None
+        if previous is None:
+            melody.append(note)
+        elif note["start"] - previous["start"] <= CHORD_ONSET_SECONDS:
+            if note["pitch"] > previous["pitch"]:
+                melody[-1] = {**note, "start": previous["start"]}
+        else:
+            melody[-1] = {**previous, "end": min(previous["end"], note["start"])}
+            melody.append(note)
+    return melody
 
 
 def _eighth_grid(beats: list[float]) -> list[float]:
