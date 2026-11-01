@@ -105,7 +105,7 @@ One column, one job.
 ### 3.4 Practice (`/c/[id]/learn`)
 
 - **Center:** `Easy | Intermediate`, MIDI input, the problem bar when the coach marks one. Piano roll with the part and your take. Keyboard `C4–B5` with `A`–`L` hints and which sound the keys play.
-- **Right:** a `Voice: On/Off` switch. Voice listens continuously because both hands are on the keys: phrases go to Muse Voice Transcribe, talk that is not a command is ignored, and a typed command is the fallback. The coach's messages, your take's hit rate and timing, `Get feedback`, `Continue to Export`.
+- **Right:** the talk button, because both hands are on the keys: a sustain pedal or any drum pad by default, or a control the player chooses, plus `V` and an on-screen `Talk` button. A press opens the microphone for one phrase and turns the track down; the phrase goes to Muse Voice Transcribe and the microphone closes. Meta has no text-to-speech, so replies are a short sound and a line on screen saying what was heard and what changed; a typed command is the fallback. Also the coach's messages, your take's hit rate and timing, `Get feedback`, `What you can say`, `Continue to Export`.
 
 ### 3.5 Export (`/c/[id]/take`)
 

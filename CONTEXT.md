@@ -115,6 +115,12 @@ Decisions and current state. The plan is in `SPEC.md`, the UI in `DESIGN.md`, th
 - Done (Nov 1): every screen was cut down to what is real for the clip. Removed the demo link, invented labels
   and fixed durations; the Add screen now states contributor mode. Notes arrive after the sound is playable, so
   the client waits for them. The demo route still exists, unlinked, and holds no real audio.
+- Done (Nov 1): voice no longer listens all the time. A sustain pedal, any drum pad or a control the player
+  chooses (also `V` and a button) opens the microphone for one phrase and turns the track down. Meta has no
+  text-to-speech, so replies are a short sound and a line on screen; the system voice is gone. About 40 phrases
+  now drive playback, bars, loops, tempo, what is heard, part, sound, screen and octave. Run in a browser with a
+  fake microphone and fake MIDI input, spoken phrases going through Muse Voice Transcribe. Not yet run with a
+  real microphone or the Launchkey, whose pads must be in Drum mode for the default to match.
 - Open: whether vocals, bass and guitar should default to Demucs. SAM Audio does not beat it on notes
   and returned only empty draws on a real guitar video; `AGENTS.md` and `SPEC.md` still call Demucs a
   fallback. Tempo and key accuracy; a full isolation takes up to about 5 minutes; drum hits to pads are
