@@ -83,6 +83,7 @@ BASS_BASIC_PITCH_MINIMUM_NOTE_LENGTH_MILLISECONDS = 127.70
 GUITAR_BASIC_PITCH_MINIMUM_NOTE_LENGTH_MILLISECONDS = 127.70
 # Basic Pitch reads onsets on an 11.6 ms grid, so one struck chord can land a frame or two apart.
 CHORD_ONSET_SECONDS = 0.025
+ACCOMPANIMENT_VELOCITY_RATIO = 0.7
 BASIC_PITCH_MELODIA_TRICK = True
 
 REGISTER_LOWER_PERCENTILE = 10.0
@@ -582,29 +583,41 @@ def _nearest_grid_time(time: float, grid: list[float]) -> float:
 
 
 def snap_to_eighths(notes: list[Note], beats: list[float]) -> list[Note]:
-    """Snap note bounds to the analysed clip grid, keeping short notes at grid resolution."""
+    """Place notes on the eighth grid, one note to a slot.
+
+    Several notes can land on one slot. A clearly quieter one is accompaniment and is dropped, while
+    similar loudness means a fast run: the note nearest the slot takes it and the others keep their
+    own time, so a sixteenth run stays a run instead of a stack of keys to press at once.
+    """
     grid = _eighth_grid(beats)
     if not grid:
         return []
-    snapped: list[Note] = []
+    by_slot: dict[float, list[Note]] = {}
     for note in notes:
-        start = _nearest_grid_time(note["start"], grid)
-        end = _nearest_grid_time(note["end"], grid)
-        if end <= start:
-            start_index = bisect_right(grid, start)
-            if start_index < len(grid):
-                end = grid[start_index]
-            else:
-                continue
-        snapped.append(
-            {
-                "start": round(start, ROUND_SECONDS),
-                "end": round(end, ROUND_SECONDS),
-                "pitch": note["pitch"],
-                "velocity": note["velocity"],
-            }
-        )
-    return snapped
+        by_slot.setdefault(_nearest_grid_time(note["start"], grid), []).append(note)
+
+    snapped: list[Note] = []
+    for slot, group in sorted(by_slot.items()):
+        floor = max(note["velocity"] for note in group) * ACCOMPANIMENT_VELOCITY_RATIO
+        kept = [note for note in group if note["velocity"] >= floor]
+        nearest = min(kept, key=lambda note: (abs(note["start"] - slot), -note["pitch"]))
+        for note in kept:
+            start = slot if note is nearest else note["start"]
+            end = _nearest_grid_time(note["end"], grid)
+            if end <= start:
+                following = bisect_right(grid, start)
+                if following >= len(grid):
+                    continue
+                end = grid[following]
+            snapped.append(
+                {
+                    "start": round(start, ROUND_SECONDS),
+                    "end": round(end, ROUND_SECONDS),
+                    "pitch": note["pitch"],
+                    "velocity": note["velocity"],
+                }
+            )
+    return sorted(snapped, key=lambda note: note["start"])
 
 
 def _octave_shift(notes: list[Note]) -> int:

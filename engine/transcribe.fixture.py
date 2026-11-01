@@ -374,6 +374,40 @@ def _melody_preservation_fixture() -> None:
         for index in range(SIXTEENTH_RUN_LENGTH)
     ]
     assert len(transcribe.snap_to_eighths(run, beats)) == SIXTEENTH_RUN_LENGTH
+    placed = transcribe.snap_to_eighths(run, beats)
+    assert len({note["start"] for note in placed}) == SIXTEENTH_RUN_LENGTH, "no two keys at once"
+
+    quiet: transcribe.Note = {"start": 0.05, "end": 0.2, "pitch": 60, "velocity": 40}
+    loud: transcribe.Note = {"start": 0.1, "end": 0.4, "pitch": 72, "velocity": 96}
+    assert [note["pitch"] for note in transcribe.snap_to_eighths([quiet, loud], beats)] == [72]
+
+
+def _downbeat_fixture() -> None:
+    """The bar line sits where each bar fits one chord, wherever the clip happens to start."""
+    from analyze import PITCH_CLASS_COUNT, _chord_templates, _downbeat_phase, _match_chord
+
+    frames_per_beat = 10
+    triads = ((0, 4, 7), (9, 0, 4), (5, 9, 0), (7, 11, 2))
+    beats = [float(index) for index in range(28)]
+    frame_times = np.arange(len(beats) * frames_per_beat) / frames_per_beat
+    for true_phase in range(4):
+        chroma = np.zeros((PITCH_CLASS_COUNT, frame_times.size))
+        for frame, time in enumerate(frame_times):
+            bar = int((time - true_phase) // 4)
+            chroma[list(triads[bar % len(triads)]), frame] = 1.0
+        assert _downbeat_phase(beats, chroma, frame_times) == true_phase
+    assert _downbeat_phase(beats[:2], chroma, frame_times) == 0
+
+    # Am7 holds both an A minor and a C major triad; the bass decides which is named.
+    am7 = np.zeros(PITCH_CLASS_COUNT)
+    am7[[9, 0, 4, 7]] = 1.0
+    bass_on = np.zeros(PITCH_CLASS_COUNT)
+    bass_on[9] = 1.0
+    assert _match_chord(am7, _chord_templates(), bass_on)["label"] == "Am"
+    bass_on = np.zeros(PITCH_CLASS_COUNT)
+    bass_on[0] = 1.0
+    assert _match_chord(am7, _chord_templates(), bass_on)["label"] == "C"
+    assert _match_chord(am7 * 0, _chord_templates(), bass_on)["strength"] == 0.0
 
 
 def main() -> None:
@@ -392,6 +426,7 @@ def main() -> None:
         _bass_second_pass_fixture(directory)
         _drum_prompt_bypass_fixture(directory)
     _routing_fixture()
+    _downbeat_fixture()
     _confidence_fixture()
     _empty_vote_fixture()
     _melody_preservation_fixture()

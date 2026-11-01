@@ -159,12 +159,14 @@ METRICAL_FACTORS = (0.5, 2.0)
 # Onset-peak spacing is offered as a beat, a half-beat, a two-beat and a four-beat period.
 SPACING_FACTORS = (0.5, 1.0, 2.0, 4.0)
 PHASE_SEARCH_STEPS = 24
-# How much of each bar to skip before reading its chord, so the previous chord's decay does
-# not outweigh the new chord's attack.
-BAR_SETTLE_FRACTION = 0.125
+# Notes that name a chord's root sit in these octaves. The root only has to break a tie between
+# triads that share notes, so it adds to the harmony's match rather than deciding it.
+BASS_LOWEST_NOTE = "C1"
+BASS_OCTAVES = 3
+BASS_BINS_PER_OCTAVE = 36
+ROOT_EVIDENCE_WEIGHT = 0.25
 
 # Harmonic change needs a previous frame to compare against.
-MIN_FRAMES_FOR_NOVELTY = 2
 MIN_PEAKS_FOR_SPACING = 4
 # The tempo prior: music clusters here, which is what keeps a grid at a fifth of the real tempo
 # from winning on alignment alone.
@@ -369,54 +371,6 @@ def _beat_confidence(beats: list[float]) -> float:
     return round(max(0.0, min(1.0, 1.0 - spread)), 3)
 
 
-def _chroma_novelty(chroma: "np.ndarray") -> "np.ndarray":
-    """How much the harmony changes from each analysis frame to the next."""
-    import numpy as np
-
-    if chroma.shape[1] < MIN_FRAMES_FOR_NOVELTY:
-        return np.zeros(chroma.shape[1], dtype=float)
-    change = np.abs(np.diff(chroma, axis=1)).sum(axis=0)
-    return np.concatenate(([0.0], change))
-
-
-def _downbeat_phase(
-    beats: list[float],
-    onset_envelope: "np.ndarray",
-    chroma: "np.ndarray",
-    sample_rate: int,
-) -> int:
-    """Pick which of the four beats in a bar carries the bar line.
-
-    Assumes 4/4 and judges each phase on two kinds of evidence, because accent alone is not
-    enough: onset strength, since the kick lands on the bar line, and harmonic change, since the
-    chord changes there too. Measured on the evaluation set, scoring by accent alone put the bar
-    lines a beat out on a clip where a lead sits in the same register as the piano and dropped
-    chord agreement from 100 % to 75 %, while the chord changes were in the right place all along.
-
-    The two are summed after each is divided by its own mean, so neither scale dominates.
-    """
-    import librosa
-    import numpy as np
-
-    if not beats:
-        return 0
-    times = np.asarray(beats, dtype=float)
-    onset_frames = np.clip(
-        librosa.time_to_frames(times, sr=sample_rate), 0, onset_envelope.size - 1
-    )
-    novelty = _chroma_novelty(chroma)
-    chroma_frames = np.clip(librosa.time_to_frames(times, sr=sample_rate), 0, novelty.size - 1)
-
-    accent = onset_envelope[onset_frames]
-    change = novelty[chroma_frames]
-    accent_mean = float(accent.mean()) or 1.0
-    change_mean = float(change.mean()) or 1.0
-    evidence = accent / accent_mean + change / change_mean
-
-    scores = [float(evidence[phase::BEATS_PER_BAR].mean()) for phase in range(BEATS_PER_BAR)]
-    return int(np.argmax(scores))
-
-
 def _chord_templates() -> "np.ndarray":
     """The 24 major and minor triads as unit-length chroma vectors, major first."""
     import numpy as np
@@ -434,7 +388,40 @@ def _chord_templates() -> "np.ndarray":
     return templates
 
 
-def _match_chord(chroma: "np.ndarray", templates: "np.ndarray") -> ChordMatch:
+def _downbeat_phase(
+    beats: list[float], harmonic_chroma: "np.ndarray", frame_times: "np.ndarray"
+) -> int:
+    """Pick which of the four beats in a bar carries the bar line.
+
+    Assumes 4/4. Chords usually hold for a bar, so the right phase is the one whose bars each fit a
+    single triad best. Accent and frame-to-frame harmonic change were tried first and got 15 of 24
+    shifted versions of a clip with known bars; this got all 24, because a harmonic chroma leaves
+    out the drums and most of the crowd noise that made the two evidence types disagree.
+    """
+    import numpy as np
+
+    if len(beats) < BEATS_PER_BAR:
+        return 0
+    templates = _chord_templates()
+    scores: list[float] = []
+    for phase in range(BEATS_PER_BAR):
+        bar_lines = beats[phase::BEATS_PER_BAR]
+        fits: list[float] = []
+        for start, end in itertools.pairwise(bar_lines):
+            frames = (frame_times >= start) & (frame_times < end)
+            if not frames.any():
+                continue
+            bar = harmonic_chroma[:, frames].mean(axis=1)
+            energy = float(np.linalg.norm(bar))
+            if energy > 0.0:
+                fits.append(float((templates @ (bar / energy)).max()))
+        scores.append(sum(fits) / len(fits) if fits else 0.0)
+    return scores.index(max(scores))
+
+
+def _match_chord(
+    chroma: "np.ndarray", templates: "np.ndarray", bass_chroma: "np.ndarray"
+) -> ChordMatch:
     """Name the triad whose template points most nearly the same way as this bar's chroma."""
     import numpy as np
 
@@ -449,6 +436,12 @@ def _match_chord(chroma: "np.ndarray", templates: "np.ndarray") -> ChordMatch:
         }
 
     similarities = templates @ (chroma / energy)
+    bass_energy = float(bass_chroma.sum())
+    if bass_energy > 0.0:
+        bass_share = bass_chroma / bass_energy
+        similarities = similarities + ROOT_EVIDENCE_WEIGHT * np.concatenate(
+            (bass_share, bass_share)
+        )
     best = int(np.argmax(similarities))
     pitch_class = best % PITCH_CLASS_COUNT
     is_minor = best >= PITCH_CLASS_COUNT
@@ -484,29 +477,31 @@ def _bar_bounds(downbeats: list[float], duration: float) -> list[tuple[float, fl
 
 
 def _chords_per_bar(
-    chroma: "np.ndarray",
+    harmonic_chroma: "np.ndarray",
+    bass_chroma: "np.ndarray",
     frame_times: "np.ndarray",
     bars: list[tuple[float, float]],
 ) -> list[ChordSpan]:
-    """Average the chroma inside each bar and name the chord it spells.
+    """Name each bar's chord from its harmony, with the bass on its first beat as root evidence.
 
-    The opening slice of each bar is skipped. A sustained chord rings across the bar line, so the
-    first moments of a bar carry the previous chord's decay as much as the new chord's attack, and
-    averaging the whole bar lets the old chord win. Measured on a clip where a piano and a lead
-    share an octave, four of sixteen bars were named with the chord of the bar before; skipping the
-    opening eighth is what separates an attack from a decay without assuming anything about tempo.
-    If the skip would leave no frames, the whole bar is used rather than dropping the bar.
+    Triads alone cannot tell Am7 from C or Cmaj7 from Em, because each pair shares three notes. The
+    note under the first beat usually can. On a clip with known chords this named all of a seven
+    bar progression (a half-diminished bar as its nearest triad) where the harmony alone got two,
+    and was never worse on versions of the same clip with instruments removed.
     """
     templates = _chord_templates()
     chords: list[ChordSpan] = []
     for index, (start, end) in enumerate(bars):
-        settled = start + (end - start) * BAR_SETTLE_FRACTION
-        window = (frame_times >= settled) & (frame_times < end)
-        if not bool(window.any()):
-            window = (frame_times >= start) & (frame_times < end)
+        window = (frame_times >= start) & (frame_times < end)
         if not bool(window.any()):
             continue
-        match = _match_chord(chroma[:, window].mean(axis=1), templates)
+        first_beat = (frame_times >= start) & (frame_times < start + (end - start) / BEATS_PER_BAR)
+        root_frames = first_beat if bool(first_beat.any()) else window
+        match = _match_chord(
+            harmonic_chroma[:, window].mean(axis=1),
+            templates,
+            bass_chroma[:, root_frames].mean(axis=1),
+        )
         chords.append(
             {
                 "bar": index,
@@ -727,10 +722,21 @@ def analyze_wav(wav_path: Path) -> TrackAnalysis:
 
     grid = _beat_grid(onset_envelope, sample_rate, duration)
     beats = grid["beats"]
-    phase = _downbeat_phase(beats, onset_envelope, chroma, sample_rate)
+    harmonic = librosa.effects.harmonic(samples)
+    harmonic_chroma = librosa.feature.chroma_cqt(y=harmonic, sr=sample_rate)[:, : frame_times.size]
+    bass_chroma = librosa.feature.chroma_cqt(
+        y=harmonic,
+        sr=sample_rate,
+        fmin=librosa.note_to_hz(BASS_LOWEST_NOTE),
+        n_octaves=BASS_OCTAVES,
+        bins_per_octave=BASS_BINS_PER_OCTAVE,
+    )[:, : frame_times.size]
+    phase = _downbeat_phase(beats, harmonic_chroma, frame_times)
     downbeats = beats[phase::BEATS_PER_BAR]
 
-    chords = _chords_per_bar(chroma, frame_times, _bar_bounds(downbeats, duration))
+    chords = _chords_per_bar(
+        harmonic_chroma, bass_chroma, frame_times, _bar_bounds(downbeats, duration)
+    )
     return {
         "tempo": {
             "bpm": round(grid["bpm"], 2),
