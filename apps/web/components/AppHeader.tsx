@@ -1,5 +1,6 @@
 import Link from "next/link";
 import type { NavState } from "@/lib/steps";
+import { MixrayLogo } from "./MixrayLogo";
 import { StepNav } from "./StepNav";
 import { ThemeToggle } from "./ThemeToggle";
 
@@ -15,14 +16,10 @@ export function AppHeader({ nav }: AppHeaderProps) {
       <div className="flex min-w-0 items-center">
         <Link
           href="/"
-          className="flex shrink-0 items-center gap-2 text-base font-bold lowercase tracking-tight text-text transition hover:opacity-85"
+          className="flex shrink-0 items-center transition hover:opacity-85"
+          aria-label="Mixray Home"
         >
-          <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-accent/15 text-accent font-mono text-xs font-black shadow-xs">
-            mx
-          </div>
-          <span className="text-base font-bold tracking-tight">
-            mi<span className="text-accent">x</span>ray
-          </span>
+          <MixrayLogo size="md" />
         </Link>
       </div>
 
