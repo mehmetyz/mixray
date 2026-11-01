@@ -109,6 +109,12 @@ Decisions and current state. The plan is in `SPEC.md`, the UI in `DESIGN.md`, th
   listens continuously through Muse Voice Transcribe, with the browser's speech service removed. Verified by
   fixtures, pitch measured on a test tone in a browser, and a spoken phrase through the gate, transcription and
   parser. Not yet run with a real microphone in the app or with the Launchkey.
+- Done (Nov 1): bar lines come from how well each bar fits one chord, and chord names use the bass on the
+  first beat; on a test clip with known notes bars went from a beat off to correct and chords reached 6 of 7
+  exact, measured on one clip and shifted versions of it. The easy part no longer stacks notes on one slot.
+- Done (Nov 1): every screen was cut down to what is real for the clip. Removed the demo link, invented labels
+  and fixed durations; the Add screen now states contributor mode. Notes arrive after the sound is playable, so
+  the client waits for them. The demo route still exists, unlinked, and holds no real audio.
 - Open: whether vocals, bass and guitar should default to Demucs. SAM Audio does not beat it on notes
   and returned only empty draws on a real guitar video; `AGENTS.md` and `SPEC.md` still call Demucs a
   fallback. Tempo and key accuracy; a full isolation takes up to about 5 minutes; drum hits to pads are
