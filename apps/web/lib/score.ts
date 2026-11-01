@@ -74,7 +74,8 @@ function createBarRanges(downbeats: number[], durationSeconds: number): BarRange
     if (startSeconds === undefined) continue;
     const endSeconds = downbeats[index + 1] ?? durationSeconds;
     if (endSeconds <= startSeconds) continue;
-    ranges.push({ index, startSeconds, endSeconds });
+    // A clip rarely starts exactly on a bar line, and the notes before the first one still count.
+    ranges.push({ index, startSeconds: ranges.length === 0 ? 0 : startSeconds, endSeconds });
   }
 
   return ranges;
