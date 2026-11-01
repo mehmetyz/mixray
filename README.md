@@ -3,7 +3,7 @@
 **Point at a sound. Hear it alone. Learn to play it.**
 
 Drop in a track or a video you own, pick one sound out of the mix — by typing what you want, by
-taking a suggestion, or by tapping the instrument in the video — and Mixray isolates it, shows
+taking a suggestion, or by drawing over the instrument in the video — and Mixray isolates it, shows
 what it plays, and teaches you to play it on a keyboard with a coach that listens to your take.
 
 Built for the **Meta Global AI Developer Hackathon** (Oct 26 – Nov 4, 2026).
@@ -11,7 +11,7 @@ Built for the **Meta Global AI Developer Hackathon** (Oct 26 – Nov 4, 2026).
 ## Meta models
 
 - **SAM Audio** (open weights, self-hosted on Modal): prompted sound separation — the core of the product
-- **SAM 3.1**: turns a tap on a video frame into a tracked region, so pointing at an instrument becomes a prompt
+- **SAM 3.1**: follows a selected instrument through the video as a Track overlay on the Analyze screen
 - **Muse Spark**: listens to the clip, suggests sounds worth isolating, and coaches the practice session through tool calls
 - **Muse Spark Open** (open weights, via Baseten partner inference): the Sound Recipe for each isolated sound
 - **Muse Voice Transcribe**: hands-free commands while both hands are on the keys

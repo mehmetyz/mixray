@@ -19,12 +19,15 @@ Decisions and current state. The plan is in `SPEC.md`, the UI in `DESIGN.md`, th
   suggestion chip, or a tap on the video) → analyze it → learn it on a **keyboard only**. Any sound
   can be isolated, including a guitar riff, but it is always learned on keys; instrument-specific
   learning is a post-hackathon idea.
-- **SAM Audio is the main separator**, Demucs is only a fallback for standard instruments. Arbitrary
-  prompts ("supersaw lead", "pluck") are the product; Demucs only knows six fixed stems. Where each
-  one wins is a measured routing decision, not a preference.
-- **SAM 3.1** turns a tap on a video frame into tracked regions. The region is cropped and named by
-  Muse Spark, and that name drives separation; the mask is never fed to SAM Audio, because the mask
-  path measured an order of magnitude slower and leaked neighbouring sounds.
+- **Routing is measured, not preferred** (`engine/fallback.py`): a solo recording is served
+  unseparated; vocals, bass and guitar in a band go to SAM Audio `large` (spans, 8 draws, Judge pick),
+  and to Demucs when every draw is empty; piano, organ, synth, strings, drums and speech go to Demucs;
+  horn, footsteps, dog and siren go to SAM Audio with one draw. Notes are only claimed for vocals, bass,
+  guitar and piano, or a solo recording. Level gates answer "not found" for an absent sound.
+- **The user draws an area, on Add or Isolate.** Muse Spark names the crop and that name drives
+  separation. **SAM 3.1** only draws the Track overlay switched on in Analyze (640 px, 5 fps, forward
+  from the selected frame); the mask is never fed to SAM Audio, because the mask path measured an
+  order of magnitude slower and leaked neighbouring sounds.
 - **Clip ≤ 30 s** (≈ 16 bars at 128 BPM): enough for a hook, and it bounds the cost of every model
   call.
 - **Upload goes straight to Modal**, with the audio trimmed in the browser first and a 7-day
@@ -91,6 +94,20 @@ Decisions and current state. The plan is in `SPEC.md`, the UI in `DESIGN.md`, th
 - Done (Oct 30): push-to-talk voice commands run on Muse Voice Transcribe. The endpoint needs a JSON
   `request` part beside the `audio` part, and it writes numbers as words, so the command parser reads
   spoken numbers.
+- Done (Nov 1): routing above, area selection on Add and Isolate, and the Track toggle in Analyze.
+  Live on a dev server: piano area named `Piano Keyboard`, served unseparated, 327 notes;
+  guitar area fell back to Demucs after 8 empty draws, 106 notes; Track took 65 s and 181 s. Production
+  still runs the older engine, and the area and Track UI has not been run in a browser against the
+  new engine.
+- Measured (Nov 1), 50 ms note F1: solo guitar 0.87, solo piano 0.53, band vocals/bass/guitar SAM Audio
+  0.68 against Demucs 0.71 (n=7), piano in a band 0.48. Tempo is right on 7/12 clips, key on 5/12.
+- Done (Nov 1): the evaluation scripts, the datasets and every test video of unverified licence were
+  deleted from the working copy. Measuring again means rebuilding that harness; the figures above are
+  what remains. Run the engine checks with `uv run --all-groups`, because `numpy` comes from those.
+- Open: whether vocals, bass and guitar should default to Demucs. SAM Audio does not beat it on notes
+  and returned only empty draws on a real guitar video; `AGENTS.md` and `SPEC.md` still call Demucs a
+  fallback. Tempo and key accuracy; a full isolation takes up to about 5 minutes; `top_voice` moves
+  onsets in the easy part; drum hits to pads are measured for kick only and not built.
 - Open: demo content (an owned 30 s clip with a clear lead, and a 30 s video of a keyboard with a
   second sound source visible). SAM 3.1 takes MP4/H.264, so anything in another container is
   transcoded first.

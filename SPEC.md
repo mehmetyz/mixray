@@ -25,7 +25,7 @@ Read this file fully before any task. `AGENTS.md` has the working rules, `DESIGN
 - **Reach.** Every musician has a sound they want to learn, and it works on your own tracks and
   your own videos rather than on a fixed catalogue.
 - **Meta models doing the real work.** SAM Audio isolates any sound from a text or visual prompt;
-  SAM 3.1 turns a tap on a video into that visual prompt; Muse Spark listens, suggests, summarises
+  SAM 3.1 follows a selected area through the video; Muse Spark names it, listens, suggests, summarises
   and coaches through tool calls; Muse Voice Transcribe keeps both hands on the keys; Muse Spark
   Open writes the sound recipe.
 - **Depth over surface.** Prompted separation with a measured fallback, a beat grid, chords,
@@ -39,7 +39,7 @@ Read this file fully before any task. `AGENTS.md` has the working rules, `DESIGN
 1. **Add.** Drop an audio or video file you own (mp3/wav/mp4/mov, ≤ 6 min) and choose a **clip of up to 30 s**: the part with the sound you want (16 bars at 128 BPM). Demo clips are one click.
 2. **Pick a sound.**
    - *Any clip:* Muse Spark listens and suggests what it hears as chips ("supersaw lead", "piano chords", "pluck", "sub bass", "vocal chop"). Tap a chip or type your own prompt.
-   - *Video clip:* or tap a person or instrument in the frame. SAM 3.1 tracks it through the clip and that mask becomes the prompt.
+   - *Video clip:* or drag over an instrument in the frame, on Add or Isolate. Muse Spark names the area and that name becomes the prompt. SAM 3.1 follows the area on demand from the Analyze screen.
    - SAM Audio returns **the sound** and **the rest of the mix**. Listen with `Sound / Rest / Full mix`. If the result is weak for a standard instrument, the Demucs stem is offered as "cleaner version".
 3. **X-Ray.** For the picked sound: tempo, key, chords under it, its notes on a piano roll, its range, and a **sound recipe** (what synth/patch it is). One Muse sentence: *"A detuned supersaw lead in A minor, mostly eighth notes between A4 and E5, entering on bar 9."*
 4. **Learn (keyboard).** Falling-notes / piano roll of the sound's part. *Easy* = melody in the right hand; *Intermediate* = plus left-hand root/fifth from the chords. Loop bars, slow down without pitch change, play on a MIDI keyboard (Web MIDI) or on-screen keys. Deterministic timing/pitch scoring.
@@ -54,8 +54,8 @@ Accounts, database, payments, mobile app, guitar/drum learning (keyboard only), 
 ```
 Browser (apps/web, Next.js on Vercel)                     Modal (engine/, Python, GPU)
  ├─ Add: upload + clip picker ── POST /jobs ──────────────▶ ingest: decode, trim ≤30 s, hash, video frames @10 fps
- ├─ Pick: chips / prompt / tap ─ POST /jobs/{id}/isolate ─▶ suggest  (Muse Spark: what sounds are in the clip)
- │                                                          track    (SAM 3.1 via Meta API: tap point/prompt → masks)
+ ├─ Pick: chips / prompt / area ─ POST /jobs/{id}/isolate ─▶ suggest  (Muse Spark: what sounds are in the clip)
+ │                                                          track    (SAM 3.1 via Meta API: area box → masks, on demand)
  │                                                          isolate  (SAM Audio: text or visual prompt → sound + rest)
  │                                                          fallback (Demucs htdemucs_6s for standard instruments)
  ├─ X-Ray ◀── trackmap.json ───────────────────────────────  analyze  (librosa: beats, key, chords on the full clip)
@@ -79,7 +79,7 @@ Browser (apps/web, Next.js on Vercel)                     Modal (engine/, Python
 |---|---|---|
 | ingest | ffmpeg | Decode, trim to ≤ 30 s, mono+stereo 48 kHz, SHA-256 id; for video also frames at 10 fps (≤ 300 frames) and a 720p web copy. |
 | suggest | Muse Spark (audio in) | Returns 3–6 short sound labels usable as SAM Audio prompts. Structured output. |
-| track | SAM 3.1 (Meta API) | Input: a tap point (or a text prompt) on the first frame where the object is visible. Output: per-frame masks (compact polygons) + visibility lane. Also drawn in the UI. |
+| track | SAM 3.1 (Meta API) | Input: the box drawn on a frame, when Track is switched on. Output: per-frame masks (compact polygons) + visibility lane. Also drawn in the UI. |
 | isolate | SAM Audio (Meta, open weights, on Modal GPU) | Text prompt or visual prompt (masks from `track`). Output: `sound` and `rest` WAV. fp32. Cache per (clip, prompt). |
 | fallback | Demucs `htdemucs_6s` | Run once per clip in parallel; if the prompt maps to piano/guitar/bass/vocals/drums, offer that stem as an alternative and use whichever gives higher pitch confidence for transcription. |
 | analyze | librosa | Beats + BPM, downbeats, chords per bar (chroma templates, per-bar vote), key from chords, energy, on the full clip. |
@@ -91,7 +91,7 @@ Browser (apps/web, Next.js on Vercel)                     Modal (engine/, Python
 | Model | Where | Purpose |
 |---|---|---|
 | SAM Audio (open weights) | `isolate` on Modal | Pull one sound out of the mix from a text or visual prompt. **Core feature.** |
-| SAM 3.1 (Meta Model API) | `track` | Tap a person/instrument in a video → tracked masks → visual prompt for SAM Audio. |
+| SAM 3.1 (Meta Model API) | `track` | Follow a selected area through a video → tracked masks drawn in the UI. |
 | Muse Spark, audio-capable (Meta Model API) | `suggest`, summary, `/api/coach` | Hears the clip and suggests sounds; one-line X-Ray summary; coach feedback + tool calls. |
 | Muse Voice Transcribe (realtime WS) | voice proxy | Hands-free practice commands. |
 | Muse Spark Open (open weights, Baseten partner inference) | `recipe` | Sound recipe. 816B MoE, too large to self-host (see §9). |

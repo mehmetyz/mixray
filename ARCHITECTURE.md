@@ -46,7 +46,8 @@ upload → analyze → isolate → transcribe → arrange → learn
 | GET | `/health` | liveness |
 | POST | `/jobs` | multipart upload, returns the clip id and its trackmap URL |
 | POST | `/jobs/{id}/isolate` | separate one prompted sound |
-| POST | `/jobs/{id}/track` | turn a tap on a video frame into a tracked region |
+| POST | `/jobs/{id}/track` | name an area drawn on a video frame, then isolate that sound |
+| POST | `/jobs/{id}/tracks/{track}/follow` | follow a named area through the clip with SAM 3.1 |
 | GET | `/jobs/{id}` | job state |
 | GET | `/files/{path}` | serve a produced file |
 
@@ -59,9 +60,10 @@ browser.
   auxiliary ranker stack is left unloaded at `from_pretrained` time, which drops roughly 7 GB of
   weights that only matter when drawing multiple candidates; a 30 s clip then separates in about
   5 s at a 14.3 GB peak.
-- **SAM 3.1** turns a tap into tracked polygons. The masked region is cropped and named by Muse
-  Spark, and that **name** drives separation — the mask itself is never fed to SAM Audio, because
-  the mask path measured an order of magnitude slower and leaked neighbouring sounds.
+- **Area selection:** the area drawn on a frame is cropped and named by Muse Spark, and that **name**
+  drives separation. **SAM 3.1** only draws the on-demand Track overlay, at 640 px and 5 fps; a mask
+  is never fed to SAM Audio, because that path measured an order of magnitude slower and leaked
+  neighbouring sounds.
 - **Muse Spark** gets the audio for suggestions and summaries, and the computed per-bar score for
   coaching. It is never asked to invent a number: every figure in a summary is checked against the
   analysis before it is shown.
