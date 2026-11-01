@@ -1,7 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
+import { arrangementOctaveOffset, KeySampler } from "@/lib/audio/key-sampler";
 import { drawLearnPianoRoll, type PlayedNoteDot } from "@/lib/studio/canvas";
+import { addToTake } from "@/lib/studio/take";
 import { midiToNoteName } from "@/lib/studio/format";
 import { requestCoach } from "@/lib/coach";
 import {
@@ -68,6 +70,8 @@ export function LearnView() {
     currentTime,
     duration,
     seek,
+    getPlaybackTime,
+    playing,
     monitor,
     setMonitor,
     loopRange,
@@ -102,10 +106,49 @@ export function LearnView() {
     height: 320,
   });
 
-  const currentTimeRef = useRef<number>(currentTime);
+  const playingRef = useRef<boolean>(playing);
   useEffect(() => {
-    currentTimeRef.current = currentTime;
-  }, [currentTime]);
+    playingRef.current = playing;
+  }, [playing]);
+
+  const playbackClockRef = useRef(getPlaybackTime);
+  useEffect(() => {
+    playbackClockRef.current = getPlaybackTime;
+  }, [getPlaybackTime]);
+
+  const samplerRef = useRef<KeySampler | null>(null);
+  const [sampledSound, setSampledSound] = useState<{ id: string; ready: boolean } | null>(null);
+  const soundForKeys = selectedIsolation?.sound_wav_url ?? selectedIsolation?.sound_url;
+  const notesForKeys = selectedIsolation?.notes;
+  const easyPartForKeys = selectedIsolation?.arrangements?.easy;
+
+  useEffect(() => {
+    if (soundForKeys === undefined || notesForKeys === undefined || notesForKeys.length === 0) return;
+    const sampler = new KeySampler();
+    samplerRef.current = sampler;
+    let cancelled = false;
+    const offset = arrangementOctaveOffset(easyPartForKeys ?? [], notesForKeys);
+    void sampler
+      .load(soundForKeys, notesForKeys, offset)
+      .catch(() => false)
+      .then((ready) => {
+        if (!cancelled) setSampledSound({ id: selectedIsolationId, ready });
+      });
+    return () => {
+      cancelled = true;
+      samplerRef.current = null;
+      void sampler.dispose();
+    };
+  }, [soundForKeys, notesForKeys, easyPartForKeys, selectedIsolationId]);
+
+  const keySoundLabel =
+    sampledSound?.id === selectedIsolationId
+      ? sampledSound.ready
+        ? `Keys play ${selectedIsolation?.label ?? "this sound"}`
+        : "Keys play a simple synth"
+      : notesForKeys !== undefined && notesForKeys.length > 0
+        ? "Loading key sound…"
+        : "Keys play a simple synth";
 
   const [noteStream, setNoteStream] = useState<NoteStream | null>(null);
 
@@ -175,18 +218,23 @@ export function LearnView() {
   );
 
   useEffect(() => {
-    const stream = createNoteStream(() => currentTimeRef.current);
+    const stream = createNoteStream(() => playbackClockRef.current());
     setNoteStream(stream);
 
     const unsubscribe = stream.subscribe((event) => {
       if (event.kind === "note_on") {
-        startMonitorNote(event.pitch);
+        if (samplerRef.current?.noteOn(event.pitch, event.velocity) !== true) {
+          startMonitorNote(event.pitch);
+        }
         setLastPlayedLabel(`${midiToNoteName(event.pitch)} · MIDI ${event.pitch}`);
-        setPlayedDots((prev) => [
-          ...prev.slice(-48),
-          { time: event.onsetSeconds, pitch: event.pitch, offsetMs: 0 },
-        ]);
+        // Keys pressed while paused are for finding notes: there is no moment to score them against.
+        if (playingRef.current) {
+          setPlayedDots((prev) =>
+            addToTake(prev, { time: event.onsetSeconds, pitch: event.pitch, offsetMs: 0 }),
+          );
+        }
       } else if (event.kind === "note_off") {
+        samplerRef.current?.noteOff(event.pitch);
         stopMonitorNote(event.pitch);
       }
     });
@@ -337,7 +385,10 @@ export function LearnView() {
                 <span className="eyebrow hidden sm:inline">Stem:</span>
                 <select
                   value={selectedIsolationId}
-                  onChange={(event) => selectIsolation(event.target.value)}
+                  onChange={(event) => {
+                    setPlayedDots([]);
+                    selectIsolation(event.target.value);
+                  }}
                   className="mono-num h-8 rounded-lg border border-line-2 bg-inset px-3 text-xs font-semibold text-text focus:border-accent focus:outline-none"
                 >
                   {trackMap.isolations.map((iso) => (
@@ -358,7 +409,10 @@ export function LearnView() {
               <button
                 type="button"
                 aria-pressed={level === "easy"}
-                onClick={() => setLevel("easy")}
+                onClick={() => {
+                  setPlayedDots([]);
+                  setLevel("easy");
+                }}
                 className={`cursor-pointer rounded-md px-3 py-1 font-medium transition ${
                   level === "easy" ? "bg-text text-bg shadow-xs" : "text-text-2 hover:text-text"
                 }`}
@@ -368,7 +422,10 @@ export function LearnView() {
               <button
                 type="button"
                 aria-pressed={level === "intermediate"}
-                onClick={() => setLevel("intermediate")}
+                onClick={() => {
+                  setPlayedDots([]);
+                  setLevel("intermediate");
+                }}
                 className={`cursor-pointer rounded-md px-3 py-1 font-medium transition ${
                   level === "intermediate" ? "bg-text text-bg shadow-xs" : "text-text-2 hover:text-text"
                 }`}
@@ -530,7 +587,9 @@ export function LearnView() {
                   </button>
                 </div>
               </div>
-              <span className="mono-num text-text-2 text-[11px] font-medium">{lastPlayedLabel}</span>
+              <span className="mono-num text-text-2 text-[11px] font-medium">
+                {keySoundLabel} · {lastPlayedLabel}
+              </span>
             </div>
 
             <div className="relative h-28 w-full select-none overflow-x-auto rounded-card border border-line-2 bg-inset p-1.5 shadow-xs">
