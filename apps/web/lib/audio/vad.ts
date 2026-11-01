@@ -1,12 +1,16 @@
 export type SpeechGateEvent = "started" | "ended" | "discarded";
 
-const MIN_LEVEL = 0.012;
-const NOISE_RATIO = 3;
+const MIN_LEVEL = 0.006;
+const NOISE_RATIO = 2;
+// A voice this far below its own peak has stopped, even with music still in the room.
+const END_RATIO = 0.2;
+// Someone already talking while the room is measured must not raise the bar above their voice.
+const MAX_ROOM_LEVEL = 0.05;
 const NOISE_SMOOTHING = 0.05;
 const ONSET_SECONDS = 0.12;
-const HANG_SECONDS = 0.7;
-const MIN_SPEECH_SECONDS = 0.35;
-export const MAX_SPEECH_SECONDS = 9;
+const HANG_SECONDS = 0.5;
+const MIN_SPEECH_SECONDS = 0.2;
+export const MAX_SPEECH_SECONDS = 4.5;
 
 /**
  * Decides when someone is speaking from microphone loudness alone: louder than an adapting room
@@ -19,9 +23,16 @@ export class SpeechGate {
   private quietFor = 0;
   private spokenFor = 0;
   private inSpeech = false;
+  private peak = 0;
+
+  /** The microphone only opens on a press, so the room has to be measured before anyone speaks. */
+  learnRoom(level: number): void {
+    this.noise = Math.max(this.noise, Math.min(level, MAX_ROOM_LEVEL));
+  }
 
   push(level: number, seconds: number): SpeechGateEvent | null {
-    const isLoud = level > Math.max(MIN_LEVEL, this.noise * NOISE_RATIO);
+    const threshold = Math.max(MIN_LEVEL, this.noise * NOISE_RATIO);
+    const isLoud = level > threshold;
 
     if (!this.inSpeech) {
       if (!isLoud) {
@@ -34,11 +45,13 @@ export class SpeechGate {
       this.inSpeech = true;
       this.spokenFor = this.loudFor;
       this.quietFor = 0;
+      this.peak = level;
       return "started";
     }
 
+    this.peak = Math.max(this.peak, level);
     this.spokenFor += seconds;
-    this.quietFor = isLoud ? 0 : this.quietFor + seconds;
+    this.quietFor = level > Math.max(threshold, this.peak * END_RATIO) ? 0 : this.quietFor + seconds;
     if (this.quietFor < HANG_SECONDS && this.spokenFor < MAX_SPEECH_SECONDS) return null;
     const voiced = this.spokenFor - this.quietFor;
     this.reset();
@@ -49,6 +62,7 @@ export class SpeechGate {
     this.loudFor = 0;
     this.quietFor = 0;
     this.spokenFor = 0;
+    this.peak = 0;
     this.inSpeech = false;
   }
 }

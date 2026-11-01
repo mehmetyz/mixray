@@ -1,17 +1,24 @@
 import assert from "node:assert/strict";
 import type { CoachAction, CoachReply } from "./coach";
+import type { ParsedVoiceMessage, StudioCommand } from "./voice-commands";
 
 type ParseVoiceCoachCommand = (phrase: string) => CoachAction | null;
 
-type CoachModule = {
+type VoiceModule = {
   parseVoiceCoachCommand: ParseVoiceCoachCommand;
+  parseVoiceAssistantMessage: (phrase: string) => ParsedVoiceMessage;
+};
+
+type CoachModule = {
   parseCoachModelReply: (reply: unknown, barCount: number) => CoachReply;
   INVALID_COACH_REPLY_MESSAGE: string;
 };
 
 const COACH_MODULE_PATH: string = "./coach.ts";
+const VOICE_MODULE_PATH: string = "./voice-commands.ts";
 const coachModule: CoachModule = await import(COACH_MODULE_PATH);
-const parseVoiceCoachCommand: ParseVoiceCoachCommand = coachModule.parseVoiceCoachCommand;
+const voiceModule: VoiceModule = await import(VOICE_MODULE_PATH);
+const { parseVoiceCoachCommand, parseVoiceAssistantMessage } = voiceModule;
 const parseCoachModelReply = coachModule.parseCoachModelReply;
 const invalidCoachReplyMessage = coachModule.INVALID_COACH_REPLY_MESSAGE;
 
@@ -196,7 +203,95 @@ function testStubbedModelReplyValidation(): void {
   console.log("PASS parseCoachModelReply stubbed-response fixtures");
 }
 
+function studioCommandOf(phrase: string): StudioCommand | null {
+  const { intent } = parseVoiceAssistantMessage(phrase);
+  return intent.kind === "studio" ? intent.command : null;
+}
+
+const STUDIO_PHRASES: readonly (readonly [string, StudioCommand])[] = [
+  ["Play.", { name: "play" }],
+  ["Resume", { name: "play" }],
+  ["Stop.", { name: "pause" }],
+  ["hold on", { name: "pause" }],
+  ["hey mixray, pause", { name: "pause" }],
+  ["From the top.", { name: "restart" }],
+  ["Play it again", { name: "restart" }],
+  ["Start over", { name: "restart" }],
+  ["Go to bar five.", { name: "seek_bar", bar: 5 }],
+  ["bar 12", { name: "seek_bar", bar: 12 }],
+  ["Go to bar bar five.", { name: "seek_bar", bar: 5 }],
+  ["Back two bars.", { name: "seek_relative", bars: -2 }],
+  ["forward 4 bars", { name: "seek_relative", bars: 4 }],
+  ["Next bar", { name: "seek_relative", bars: 1 }],
+  ["previous bar", { name: "seek_relative", bars: -1 }],
+  ["Loop this bar", { name: "loop_here", bars: 1 }],
+  ["loop this this bar", { name: "loop_here", bars: 1 }],
+  ["Loop these four bars", { name: "loop_here", bars: 4 }],
+  ["Loop two bars", { name: "loop_here", bars: 2 }],
+  ["Loop", { name: "loop_here", bars: 4 }],
+  ["Loop off.", { name: "loop_off" }],
+  ["Stop the loop", { name: "loop_off" }],
+  ["Slower", { name: "tempo_step", delta: -10 }],
+  // With music in the room the transcript loses the first sound of "slower".
+  ["Lower.", { name: "tempo_step", delta: -10 }],
+  ["Slow it down.", { name: "tempo_step", delta: -10 }],
+  ["A little faster please", { name: "tempo_step", delta: 10 }],
+  ["Speed up", { name: "tempo_step", delta: 10 }],
+  ["Solo", { name: "monitor", stem: "sound" }],
+  ["Just the sound", { name: "monitor", stem: "sound" }],
+  ["The rest", { name: "monitor", stem: "rest" }],
+  ["Backing track", { name: "monitor", stem: "rest" }],
+  ["Full mix", { name: "monitor", stem: "mix" }],
+  ["With the band", { name: "monitor", stem: "mix" }],
+  ["Easy", { name: "level", level: "easy" }],
+  ["Switch to intermediate", { name: "level", level: "intermediate" }],
+  ["Switch to the bass", { name: "select_sound", sound: "bass" }],
+  ["Listen to piano.", { name: "select_sound", sound: "piano" }],
+  ["Go to analyze", { name: "go_to", screen: "xray" }],
+  ["Open export", { name: "go_to", screen: "take" }],
+  ["Go to the isolate screen", { name: "go_to", screen: "pick" }],
+  ["Octave up", { name: "octave", delta: 1 }],
+  ["Down an octave", { name: "octave", delta: -1 }],
+  ["What is the key?", { name: "tell", fact: "key" }],
+  ["What's the tempo", { name: "tell", fact: "tempo" }],
+  ["Which bar is this", { name: "tell", fact: "bar" }],
+  ["What can I say?", { name: "help" }],
+];
+
+function testStudioCommands(): void {
+  for (const [phrase, expected] of STUDIO_PHRASES) {
+    assert.deepEqual(studioCommandOf(phrase), expected, phrase);
+  }
+  console.log(`PASS studio commands, ${STUDIO_PHRASES.length} phrases`);
+}
+
+function testPhrasesThatStayWithTheCoachTools(): void {
+  const actionOf = (phrase: string): CoachAction | null => {
+    const { intent } = parseVoiceAssistantMessage(phrase);
+    return intent.kind === "action" ? intent.action : null;
+  };
+  assert.deepEqual(actionOf("Loop four to eight."), { name: "set_loop", args: { start_bar: 4, end_bar: 8 } });
+  assert.deepEqual(actionOf("Loop bars 5 to 8"), { name: "set_loop", args: { start_bar: 5, end_bar: 8 } });
+  assert.deepEqual(actionOf("Slow down to 70%."), { name: "set_tempo", args: { percent: 70 } });
+  assert.deepEqual(actionOf("Half speed"), { name: "set_tempo", args: { percent: 50 } });
+  assert.deepEqual(actionOf("Normal speed"), { name: "set_tempo", args: { percent: 100 } });
+  assert.deepEqual(actionOf("Switch to normal speed"), { name: "set_tempo", args: { percent: 100 } });
+  assert.deepEqual(actionOf("Use both hands"), { name: "switch_hand", args: { hand: "both" } });
+  assert.deepEqual(actionOf("Practice left hand"), { name: "switch_hand", args: { hand: "left" } });
+  assert.deepEqual(actionOf("Simplify bar six"), { name: "simplify_bar", args: { bar: 6 } });
+
+  assert.equal(parseVoiceAssistantMessage("How did I do?").intent.kind, "analyze");
+  assert.equal(parseVoiceAssistantMessage("Analyze my take").intent.kind, "analyze");
+  assert.equal(parseVoiceAssistantMessage("Reset").intent.kind, "reset");
+  assert.equal(parseVoiceAssistantMessage("Reset everything").intent.kind, "reset");
+  assert.equal(parseVoiceAssistantMessage("Hey mixray").intent.kind, "greeting");
+  assert.equal(parseVoiceAssistantMessage("The weather is nice today").intent.kind, "unknown");
+  console.log("PASS phrases that stay with the Coach tools");
+}
+
 testVoiceCommandParsing();
+testStudioCommands();
+testPhrasesThatStayWithTheCoachTools();
 testStubbedModelReplyValidation();
 console.log("All coach fixtures passed.");
 

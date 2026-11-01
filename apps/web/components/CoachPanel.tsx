@@ -1,13 +1,29 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
-import { VoiceRecordingError, startHandsFreeListening } from "@/lib/audio/voice";
+import { useRouter } from "next/navigation";
 import {
-  parseVoiceAssistantMessage,
-  type ParsedVoiceMessage,
-} from "@/lib/coach";
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type FormEvent,
+  type RefObject,
+} from "react";
+import { playEarcon } from "@/lib/audio/earcons";
+import { VoiceRecordingError, listenForPhrase } from "@/lib/audio/voice";
+import { talkBindingLabel, type TalkBinding } from "@/lib/midi";
 import type { ScoreBar, ScoreResult } from "@/lib/score";
+import { STEP_LABELS } from "@/lib/steps";
+import { barAtTime } from "@/lib/studio/format";
+import {
+  VOICE_COMMAND_HELP,
+  matchSoundByName,
+  parseVoiceAssistantMessage,
+  type PracticeLevel,
+  type StudioCommand,
+  type VoiceIntent,
+} from "@/lib/voice-commands";
 import { useStudio } from "./StudioContext";
 
 export interface CoachPanelProps {
@@ -16,6 +32,13 @@ export interface CoachPanelProps {
   onAnalyzeTake: () => void;
   coachMessage: string | null;
   isCoachThinking: boolean;
+  talkTriggerRef: RefObject<() => void>;
+  talkBinding: TalkBinding;
+  isChoosingTalkButton: boolean;
+  onChooseTalkButton: () => void;
+  onResetTalkButton: () => void;
+  onSetLevel: (level: PracticeLevel) => void;
+  onShiftOctave: (delta: number) => void;
 }
 
 type JsonRecord = Record<string, unknown>;
@@ -24,59 +47,26 @@ type VoiceResponse = {
   transcript: string;
 };
 
-type ChatMessage = {
-  id: string;
-  sender: "user" | "mixray";
-  text: string;
-  time: string;
+type VoicePhase = "idle" | "opening" | "listening" | "hearing" | "reading";
+
+type VoiceExchange = {
+  heard: string;
+  reply: string;
 };
 
-declare global {
-  interface Window {
-    webkitAudioContext?: typeof AudioContext;
-  }
-}
-
-function playAssistantChime() {
-  if (typeof window === "undefined") return;
-  try {
-    const AudioCtx = window.AudioContext ?? window.webkitAudioContext;
-    if (!AudioCtx) return;
-    const ctx = new AudioCtx();
-    const now = ctx.currentTime;
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.type = "sine";
-    osc.frequency.setValueAtTime(587.33, now); // D5
-    osc.frequency.exponentialRampToValueAtTime(880, now + 0.1); // A5
-    gain.gain.setValueAtTime(0.001, now);
-    gain.gain.linearRampToValueAtTime(0.09, now + 0.02);
-    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.22);
-    osc.connect(gain).connect(ctx.destination);
-    osc.start(now);
-    osc.stop(now + 0.24);
-  } catch {
-    // Ignore audio context exceptions
-  }
-}
-
-function speakFeedback(text: string) {
-  if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
-  try {
-    window.speechSynthesis.cancel();
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.rate = 1.05;
-    utterance.pitch = 1.0;
-    utterance.lang = "en-US";
-    window.speechSynthesis.speak(utterance);
-  } catch {
-    // Ignore speech synthesis exceptions
-  }
-}
-
 const VOICE_ENDPOINT = "/api/voice";
-const VOICE_PREFERENCE_KEY = "mixray.voice";
-const VOICE_OFF = "off";
+const TEMPO_MIN_PERCENT = 40;
+const TEMPO_MAX_PERCENT = 100;
+// One press can reach us twice when a controller exposes two MIDI ports.
+const TALK_DEBOUNCE_MS = 250;
+
+const PHASE_LABELS: Record<VoicePhase, string> = {
+  idle: "Press the talk button, then speak",
+  opening: "Opening the microphone…",
+  listening: "Speak now",
+  hearing: "Hearing you…",
+  reading: "Reading your command…",
+};
 
 function isRecord(value: unknown): value is JsonRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -101,197 +91,224 @@ export function CoachPanel({
   onAnalyzeTake,
   coachMessage,
   isCoachThinking,
+  talkTriggerRef,
+  talkBinding,
+  isChoosingTalkButton,
+  onChooseTalkButton,
+  onResetTalkButton,
+  onSetLevel,
+  onShiftOctave,
 }: CoachPanelProps) {
-  const {
-    problemBar,
-    loopBars,
-    applyCoachAction,
-    resetCoachOverrides,
-    togglePlay,
-  } = useStudio();
+  const studio = useStudio();
+  const { problemBar, loopBars, setDucked } = studio;
+  const router = useRouter();
 
-  // Stable callback refs, so a playback update never restarts the microphone
-  const onAnalyzeTakeRef = useRef(onAnalyzeTake);
-  useEffect(() => {
-    onAnalyzeTakeRef.current = onAnalyzeTake;
-  }, [onAnalyzeTake]);
-
-  const applyCoachActionRef = useRef(applyCoachAction);
-  useEffect(() => {
-    applyCoachActionRef.current = applyCoachAction;
-  }, [applyCoachAction]);
-
-  const resetCoachOverridesRef = useRef(resetCoachOverrides);
-  useEffect(() => {
-    resetCoachOverridesRef.current = resetCoachOverrides;
-  }, [resetCoachOverrides]);
-
-  const togglePlayRef = useRef(togglePlay);
-  useEffect(() => {
-    togglePlayRef.current = togglePlay;
-  }, [togglePlay]);
-
-  const [isVoiceOn, setIsVoiceOn] = useState<boolean>(false);
-  const [isHearing, setIsHearing] = useState<boolean>(false);
-  const [lastActionNotice, setLastActionNotice] = useState<string | null>(null);
-  const [isTranscribing, setIsTranscribing] = useState<boolean>(false);
+  const [phase, setPhase] = useState<VoicePhase>("idle");
+  const [exchange, setExchange] = useState<VoiceExchange | null>(null);
+  const [isHelpOpen, setIsHelpOpen] = useState<boolean>(false);
   const [isTextInputOpen, setIsTextInputOpen] = useState<boolean>(false);
   const [textCommand, setTextCommand] = useState<string>("");
-  const [messages, setMessages] = useState<ChatMessage[]>(() => [
-    {
-      id: "initial-welcome",
-      sender: "mixray",
-      text: "Turn voice on and keep both hands on the keys. Just say a command: loop 4 to 8, slow 70 percent, play, or analyze my take.",
-      time: "Now",
-    },
-  ]);
 
-  const isTranscribingRef = useRef<boolean>(false);
+  const runStudioCommand = (command: StudioCommand, description: string): string => {
+    const { trackMap, playing, togglePlay, seek, getPlaybackTime, ratePercent } = studio;
+    const downbeats = trackMap.downbeats;
+    const barCount = Math.max(1, downbeats.length);
+    const clampBar = (bar: number) => Math.max(1, Math.min(barCount, bar));
+    const seekToBar = (bar: number) => seek(downbeats[clampBar(bar) - 1] ?? 0);
+    const currentBar = barAtTime(getPlaybackTime(), downbeats);
 
-  const addChatMessage = useCallback((sender: "user" | "mixray", text: string) => {
-    const time = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-    setMessages((prev) => [
-      ...prev.slice(-6),
-      { id: `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, sender, text, time },
-    ]);
-  }, []);
-
-  const executeVoiceIntent = useCallback(
-    (parsed: ParsedVoiceMessage, rawTranscript: string) => {
-      playAssistantChime();
-
-      addChatMessage("user", rawTranscript);
-
-      const intent = parsed.intent;
-      if (intent.kind === "action") {
-        applyCoachActionRef.current(intent.action);
-        setLastActionNotice(intent.description);
-        addChatMessage("mixray", `${intent.description}. Keep practicing!`);
-        speakFeedback(intent.description);
-      } else if (intent.kind === "analyze") {
-        setLastActionNotice("Analyzing performance take...");
-        addChatMessage("mixray", "Analyzing your timing and hit rates with Muse Spark...");
-        speakFeedback("Analyzing your take.");
-        onAnalyzeTakeRef.current();
-      } else if (intent.kind === "play_pause") {
-        togglePlayRef.current();
-        setLastActionNotice("Playback toggled");
-        addChatMessage("mixray", "Playback toggled.");
-        speakFeedback("Playback toggled.");
-      } else if (intent.kind === "reset") {
-        resetCoachOverridesRef.current();
-        setLastActionNotice("Studio overrides reset");
-        addChatMessage("mixray", "Tempo and loop markers restored to default.");
-        speakFeedback("Studio reset.");
-      } else if (intent.kind === "greeting") {
-        setLastActionNotice("Listening! Say a command...");
-        addChatMessage("mixray", intent.description);
-        speakFeedback("Listening!");
-      } else {
-        setLastActionNotice(intent.description);
-        addChatMessage("mixray", intent.description);
+    switch (command.name) {
+      case "play":
+        if (!playing) togglePlay();
+        return description;
+      case "pause":
+        if (playing) togglePlay();
+        return description;
+      case "restart":
+        seek(studio.loopRange?.startSeconds ?? 0);
+        if (!playing) togglePlay();
+        return description;
+      case "seek_bar":
+        seekToBar(command.bar);
+        return `Bar ${clampBar(command.bar)}`;
+      case "seek_relative":
+        seekToBar(currentBar + command.bars);
+        return `Bar ${clampBar(currentBar + command.bars)}`;
+      case "loop_here": {
+        const endBar = clampBar(currentBar + command.bars - 1);
+        studio.setLoopBars({ startBar: currentBar, endBar });
+        return `Looping bars ${currentBar}–${endBar}`;
       }
-    },
-    [addChatMessage],
-  );
-
-  const transcribePhrase = useCallback(
-    async (wav: Blob) => {
-      isTranscribingRef.current = true;
-      setIsTranscribing(true);
-      try {
-        const form = new FormData();
-        form.append("audio", wav, "command.wav");
-        const res = await fetch(VOICE_ENDPOINT, { method: "POST", body: form });
-        const json: unknown = await res.json();
-        if (!res.ok) {
-          setLastActionNotice(messageFromResponse(json) ?? "Transcription failed");
-          return;
-        }
-        const transcript = parseVoiceResponse(json)?.transcript ?? "";
-        if (transcript.length === 0) return;
-        const parsed = parseVoiceAssistantMessage(transcript);
-        // The microphone is always open, so talk that is not a command is left alone.
-        if (parsed.intent.kind === "unknown") {
-          setLastActionNotice(`Heard "${transcript}". Not a command.`);
-          return;
-        }
-        executeVoiceIntent(parsed, transcript);
-      } catch {
-        setLastActionNotice("Voice transcription is unavailable. Try again.");
-      } finally {
-        isTranscribingRef.current = false;
-        setIsTranscribing(false);
+      case "loop_off":
+        studio.setLoopBars(null);
+        return description;
+      case "tempo_step": {
+        const percent = Math.max(
+          TEMPO_MIN_PERCENT,
+          Math.min(TEMPO_MAX_PERCENT, ratePercent + command.delta),
+        );
+        studio.setRatePercent(percent);
+        return `Tempo ${percent}%`;
       }
-    },
-    [executeVoiceIntent],
-  );
-
-  useEffect(() => {
-    if (!isVoiceOn) return;
-    let disposed = false;
-    let stopListening: (() => Promise<void>) | null = null;
-    void startHandsFreeListening({
-      onPhrase: (wav) => void transcribePhrase(wav),
-      onSpeaking: setIsHearing,
-      // Our own spoken feedback must not be heard as a command.
-      shouldIgnore: () => isTranscribingRef.current || window.speechSynthesis?.speaking === true,
-    })
-      .then((stop) => {
-        if (disposed) void stop();
-        else stopListening = stop;
-      })
-      .catch((err: unknown) => {
-        setIsVoiceOn(false);
-        setLastActionNotice(err instanceof VoiceRecordingError ? err.message : "Microphone unavailable");
-      });
-    return () => {
-      disposed = true;
-      void stopListening?.();
-    };
-  }, [isVoiceOn, transcribePhrase]);
-
-  // Someone who already allowed the microphone should not need a free hand to turn voice on again.
-  useEffect(() => {
-    let cancelled = false;
-    let turnedOff = false;
-    try {
-      turnedOff = window.localStorage.getItem(VOICE_PREFERENCE_KEY) === VOICE_OFF;
-    } catch {
-      // Storage can be unavailable; voice then simply follows the permission.
-    }
-    if (turnedOff) return;
-    void navigator.permissions
-      ?.query({ name: "microphone" })
-      .then((status) => {
-        if (!cancelled && status.state === "granted") setIsVoiceOn(true);
-      })
-      .catch(() => {
-        // Some browsers cannot be asked about the microphone; the button still works.
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  const toggleVoice = () => {
-    const next = !isVoiceOn;
-    setIsVoiceOn(next);
-    setIsHearing(false);
-    try {
-      if (next) window.localStorage.removeItem(VOICE_PREFERENCE_KEY);
-      else window.localStorage.setItem(VOICE_PREFERENCE_KEY, VOICE_OFF);
-    } catch {
-      // The choice still applies for this visit.
+      case "monitor":
+        studio.setMonitor(command.stem);
+        return description;
+      case "level":
+        onSetLevel(command.level);
+        return description;
+      case "select_sound": {
+        const sound = matchSoundByName(trackMap.isolations, command.sound);
+        if (sound === undefined) return `No sound called "${command.sound}" in this clip`;
+        studio.selectIsolation(sound.id);
+        return `Practicing ${sound.label}`;
+      }
+      case "go_to":
+        router.push(takeHref.replace("/take", `/${command.screen}`));
+        return `Opening ${STEP_LABELS[command.screen]}`;
+      case "octave":
+        onShiftOctave(command.delta);
+        return description;
+      case "tell":
+        if (command.fact === "bar") return `Bar ${currentBar} of ${barCount}`;
+        if (command.fact === "tempo") {
+          return `${Math.round(trackMap.tempo.bpm)} BPM, playing at ${ratePercent}%`;
+        }
+        return `Key: ${trackMap.key.tonic} ${trackMap.key.mode}`;
+      case "help":
+        setIsHelpOpen(true);
+        return description;
     }
   };
+
+  const runIntent = (intent: VoiceIntent): string => {
+    switch (intent.kind) {
+      case "studio":
+        return runStudioCommand(intent.command, intent.description);
+      case "action":
+        studio.applyCoachAction(intent.action);
+        return intent.description;
+      case "analyze":
+        onAnalyzeTake();
+        return intent.description;
+      case "reset":
+        studio.resetCoachOverrides();
+        return intent.description;
+      case "greeting":
+      case "unknown":
+        return intent.description;
+    }
+  };
+
+  // Always the latest closure: a command must act on the playing state of the moment it was spoken.
+  const runCommandRef = useRef<(phrase: string) => void>(() => undefined);
+  useEffect(() => {
+    runCommandRef.current = (phrase) => {
+      const { intent } = parseVoiceAssistantMessage(phrase);
+      playEarcon(intent.kind === "unknown" ? "unknown" : "done");
+      setExchange({ heard: phrase, reply: runIntent(intent) });
+    };
+  });
+
+  const isReadingRef = useRef<boolean>(false);
+
+  const transcribePhrase = useCallback(async (wav: Blob) => {
+    isReadingRef.current = true;
+    setPhase("reading");
+    try {
+      const form = new FormData();
+      form.append("audio", wav, "command.wav");
+      const res = await fetch(VOICE_ENDPOINT, { method: "POST", body: form });
+      const json: unknown = await res.json();
+      if (!res.ok) {
+        playEarcon("unknown");
+        setExchange({ heard: "", reply: messageFromResponse(json) ?? "Transcription failed. Try again." });
+        return;
+      }
+      const transcript = parseVoiceResponse(json)?.transcript ?? "";
+      if (transcript.length === 0) {
+        playEarcon("unknown");
+        setExchange({ heard: "", reply: "Didn't catch that. Press and try again." });
+        return;
+      }
+      runCommandRef.current(transcript);
+    } catch {
+      playEarcon("unknown");
+      setExchange({ heard: "", reply: "Voice is unavailable. Type the command instead." });
+    } finally {
+      isReadingRef.current = false;
+      setPhase("idle");
+    }
+  }, []);
+
+  const listeningRef = useRef<AbortController | null>(null);
+  const lastPressRef = useRef<number>(0);
+
+  const pressTalk = useCallback(() => {
+    const now = performance.now();
+    if (isReadingRef.current || now - lastPressRef.current < TALK_DEBOUNCE_MS) return;
+    lastPressRef.current = now;
+
+    if (listeningRef.current !== null) {
+      listeningRef.current.abort();
+      return;
+    }
+    const controller = new AbortController();
+    const { signal } = controller;
+    listeningRef.current = controller;
+    setPhase("opening");
+    const stopListening = () => {
+      listeningRef.current = null;
+      setDucked(false);
+    };
+    // A permission prompt can hold the promise open, so cancelling must not wait for it.
+    signal.addEventListener("abort", () => {
+      stopListening();
+      setPhase("idle");
+    });
+    void listenForPhrase({
+      signal,
+      onOpen: () => setDucked(true),
+      onReady: () => {
+        setPhase("listening");
+        playEarcon("listening");
+      },
+      onSpeaking: (speaking) => {
+        if (!signal.aborted) setPhase(speaking ? "hearing" : "listening");
+      },
+    })
+      .then((wav) => {
+        if (signal.aborted || wav === null) return;
+        stopListening();
+        void transcribePhrase(wav);
+      })
+      .catch((err: unknown) => {
+        if (signal.aborted) return;
+        stopListening();
+        setPhase("idle");
+        playEarcon("unknown");
+        setExchange({
+          heard: "",
+          reply: err instanceof VoiceRecordingError ? err.message : "Microphone unavailable.",
+        });
+      });
+  }, [setDucked, transcribePhrase]);
+
+  useEffect(() => {
+    talkTriggerRef.current = pressTalk;
+  }, [pressTalk, talkTriggerRef]);
+
+  useEffect(
+    () => () => {
+      listeningRef.current?.abort();
+    },
+    [],
+  );
 
   const handleTextSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const clean = textCommand.trim();
     if (clean.length === 0) return;
-    const parsed = parseVoiceAssistantMessage(clean);
-    executeVoiceIntent(parsed, clean);
+    runCommandRef.current(clean);
     setTextCommand("");
   };
 
@@ -307,99 +324,72 @@ export function CoachPanel({
 
   return (
     <aside className="flex w-full shrink-0 flex-col gap-3.5 border-t border-line bg-surface p-4 lg:w-80 lg:border-t-0 lg:border-l lg:overflow-y-auto">
-      {/* Voice Assistant Header */}
-      <div className="flex items-center justify-between border-b border-line pb-3">
-        <div className="flex items-center gap-2.5">
-          <div className="relative flex h-7 w-7 items-center justify-center rounded-full bg-accent/15 text-accent">
-            <span
-              className={`h-2.5 w-2.5 rounded-full bg-accent transition-all duration-300 ${
-                isHearing ? "scale-150 animate-ping" : isVoiceOn ? "animate-pulse" : "opacity-40"
-              }`}
-            />
-          </div>
-          <div>
-            <div className="flex items-center gap-1.5">
-              <span className="text-sm font-semibold text-text">Coach</span>
-            </div>
-            <span className="mono-num block text-[10px] text-muted">
-              {!isVoiceOn
-                ? "Voice is off"
-                : isTranscribing
-                  ? "Reading your command…"
-                  : isHearing
-                    ? "Hearing you…"
-                    : "Listening. Just say a command."}
-            </span>
-          </div>
-        </div>
-
-        <button
-          type="button"
-          aria-pressed={isVoiceOn}
-          onClick={toggleVoice}
-          className={`shrink-0 cursor-pointer whitespace-nowrap rounded-full px-2.5 py-1 text-[11px] font-medium transition ${
-            isVoiceOn
-              ? "border border-accent/40 bg-accent/15 text-accent hover:bg-accent/25"
-              : "border border-line-2 bg-inset text-muted hover:text-text"
-          }`}
-        >
-          {isVoiceOn ? "Voice: On" : "Voice: Off"}
-        </button>
-      </div>
-
-      {/* Status Banner */}
-      {lastActionNotice !== null ? (
-        <div role="status" className="flex items-center justify-between gap-2 rounded-card border border-line-2 bg-inset/90 px-3 py-2 text-xs text-text">
-          <span className="truncate">{lastActionNotice}</span>
+      {/* Talk button */}
+      <div className="space-y-2 border-b border-line pb-3">
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-sm font-semibold text-text">Coach</span>
           <button
             type="button"
-            aria-label="Dismiss"
-            onClick={() => setLastActionNotice(null)}
-            className="cursor-pointer text-muted hover:text-text"
+            aria-pressed={phase !== "idle" && phase !== "reading"}
+            onClick={pressTalk}
+            disabled={phase === "reading"}
+            className={`h-8 shrink-0 cursor-pointer rounded-icon border px-3 text-xs font-semibold transition disabled:cursor-default ${
+              phase === "idle"
+                ? "border-line-2 bg-surface-2 text-text hover:border-accent hover:text-accent"
+                : "border-accent bg-accent/15 text-accent"
+            }`}
           >
-            ×
+            {phase === "idle" ? "Talk (V)" : phase === "reading" ? "Reading…" : "Cancel"}
           </button>
+        </div>
+        <p role="status" className="text-[11px] text-muted">
+          {PHASE_LABELS[phase]}
+        </p>
+        <p className="text-[11px] leading-relaxed text-muted">
+          {isChoosingTalkButton ? (
+            <>Press the pedal, pad or button you want to use.</>
+          ) : (
+            <>Talk button: {talkBindingLabel(talkBinding)}.</>
+          )}{" "}
+          <button
+            type="button"
+            onClick={onChooseTalkButton}
+            className="cursor-pointer text-text-2 underline underline-offset-2 hover:text-accent"
+          >
+            {isChoosingTalkButton ? "Cancel" : "Change"}
+          </button>
+          {talkBinding.kind !== "default" && !isChoosingTalkButton ? (
+            <>
+              {" "}
+              <button
+                type="button"
+                onClick={onResetTalkButton}
+                className="cursor-pointer text-text-2 underline underline-offset-2 hover:text-accent"
+              >
+                Reset
+              </button>
+            </>
+          ) : null}
+        </p>
+      </div>
+
+      {/* What was heard and what happened */}
+      {exchange !== null ? (
+        <div className="rounded-card border border-line-2 bg-inset p-3 text-xs">
+          {exchange.heard.length > 0 ? (
+            <p className="mb-1 truncate text-muted">&ldquo;{exchange.heard}&rdquo;</p>
+          ) : null}
+          <p className="font-semibold text-text">{exchange.reply}</p>
         </div>
       ) : null}
 
-      {/* Assistant Feed */}
-      <div className="flex flex-1 flex-col gap-2 rounded-card border border-line bg-inset/60 p-3 min-h-[120px] max-h-[200px] overflow-y-auto">
-        <span className="text-[10px] font-semibold uppercase tracking-wider text-muted">
-          Assistant Feed
-        </span>
-        <div className="flex flex-col gap-2">
-          {messages.map((m) => (
-            <div
-              key={m.id}
-              className={`flex flex-col rounded-card p-2 text-xs leading-relaxed ${
-                m.sender === "user"
-                  ? "self-end border border-line-2 bg-surface text-text max-w-[85%]"
-                  : "self-start border border-accent/20 bg-accent/5 text-text max-w-[90%]"
-              }`}
-            >
-              <div className="flex items-center justify-between gap-2 text-[10px] text-muted mb-0.5">
-                <span className="font-medium text-text-2">
-                  {m.sender === "user" ? "You" : "Mixray Coach"}
-                </span>
-                <span className="mono-num">{m.time}</span>
-              </div>
-              <p>{m.text}</p>
-            </div>
-          ))}
-
-          {coachMessage !== null ? (
-            <div className="self-start rounded-card border border-accent/25 bg-accent/10 p-2.5 text-xs leading-relaxed text-text max-w-[95%]">
-                            <p>{coachMessage}</p>
-            </div>
-          ) : null}
-
-          {isCoachThinking ? (
-            <div className="self-start rounded-card border border-accent/20 bg-accent/5 p-2 text-xs text-muted animate-pulse">
-              Muse Spark is evaluating your take...
-            </div>
-          ) : null}
+      {coachMessage !== null || isCoachThinking ? (
+        <div className="rounded-card border border-accent/25 bg-accent/10 p-3 text-xs leading-relaxed text-text">
+          <p className={isCoachThinking ? "animate-pulse text-muted" : ""}>
+            {isCoachThinking ? "Muse Spark is reading your take…" : coachMessage}
+          </p>
         </div>
-      </div>
+      ) : null}
 
       {/* Performance Score & Coach Assessment */}
       <div className="rounded-card border border-line bg-inset p-3 space-y-2.5">
@@ -448,6 +438,23 @@ export function CoachPanel({
         </button>
       </div>
 
+      {/* What can be said */}
+      <details
+        open={isHelpOpen}
+        onToggle={(event) => setIsHelpOpen(event.currentTarget.open)}
+        className="rounded-card border border-line bg-inset p-3 text-xs"
+      >
+        <summary className="cursor-pointer font-semibold text-text">What you can say</summary>
+        <dl className="mt-2 space-y-1.5">
+          {VOICE_COMMAND_HELP.map((item) => (
+            <div key={item.topic}>
+              <dt className="text-[11px] font-medium text-text-2">{item.topic}</dt>
+              <dd className="text-[11px] leading-relaxed text-muted">{item.examples}</dd>
+            </div>
+          ))}
+        </dl>
+      </details>
+
       {/* Text command, for when speaking is not an option */}
       <div className="pt-1 space-y-2 border-t border-line">
         <button
@@ -464,7 +471,7 @@ export function CoachPanel({
               type="text"
               value={textCommand}
               onChange={(e) => setTextCommand(e.target.value)}
-              placeholder='e.g. "loop 4 to 8" or "slow 70%"'
+              placeholder='"loop 4 to 8" or "slower"'
               className="flex-1 rounded-icon border border-line-2 bg-inset px-2.5 py-1 text-xs text-text placeholder:text-muted focus:border-accent focus:outline-none"
             />
             <button

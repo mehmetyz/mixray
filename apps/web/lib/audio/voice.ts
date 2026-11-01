@@ -3,16 +3,14 @@ import { encodeWav } from "./wav";
 
 const TARGET_SAMPLE_RATE = 16_000;
 const PROCESSOR_BUFFER_SIZE = 4_096;
-const PRE_ROLL_CHUNKS = 4;
+const ROOM_SECONDS = 0.3;
+const EARCON_SECONDS = 0.2;
+const LISTEN_SECONDS = 5;
+const DEAD_MICROPHONE_LEVEL = 0.0005;
 
 export class VoiceRecordingError extends Error {
   override name = "VoiceRecordingError";
 }
-
-export type VoiceRecording = {
-  stop: () => Promise<Blob>;
-  cancel: () => Promise<void>;
-};
 
 function mixToMono(input: AudioBuffer): Float32Array {
   const frameCount = input.length;
@@ -80,18 +78,28 @@ function levelOf(samples: Float32Array): number {
   return Math.sqrt(sum / Math.max(1, samples.length));
 }
 
-export type HandsFreeOptions = {
-  /** Receives each spoken phrase as the mono 16-bit PCM WAV accepted by Muse Voice Transcribe. */
-  onPhrase: (wav: Blob) => void;
+export type ListenOptions = {
+  onOpen: () => void;
+  onReady: () => void;
   onSpeaking: (speaking: boolean) => void;
-  /** True while the phrase would be our own voice feedback, or one is still being transcribed. */
-  shouldIgnore: () => boolean;
+  signal: AbortSignal;
 };
 
-/** Listens continuously, so commands need no free hand. Echo cancellation keeps the track out. */
-export async function startHandsFreeListening(options: HandsFreeOptions): Promise<() => Promise<void>> {
+/**
+ * Opens the microphone for one spoken phrase and closes it again. Resolves with what was heard as the
+ * mono 16-bit PCM WAV Muse Voice Transcribe accepts, or null if it was cancelled.
+ *
+ * The gate only ends the wait early. If it never finds the phrase, because the voice is quiet or the
+ * room is loud, the recording still goes to the model: a slow answer beats losing a command.
+ */
+export async function listenForPhrase({
+  onOpen,
+  onReady,
+  onSpeaking,
+  signal,
+}: ListenOptions): Promise<Blob | null> {
   if (!navigator.mediaDevices?.getUserMedia) {
-    throw new VoiceRecordingError("Microphone is unavailable. Use a text command instead.");
+    throw new VoiceRecordingError("Microphone is unavailable. Type the command instead.");
   }
 
   let stream: MediaStream;
@@ -100,68 +108,101 @@ export async function startHandsFreeListening(options: HandsFreeOptions): Promis
       audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
     });
   } catch {
-    throw new VoiceRecordingError("Microphone access was not granted. Use a text command instead.");
+    throw new VoiceRecordingError("Microphone access was not granted. Type the command instead.");
   }
-
-  let context: AudioContext;
-  try {
-    context = new AudioContext();
-  } catch {
+  if (signal.aborted) {
     stopTracks(stream);
-    throw new VoiceRecordingError("Microphone is unavailable. Use a text command instead.");
+    return null;
   }
 
+  const context = new AudioContext();
   const source = context.createMediaStreamSource(stream);
   const processor = context.createScriptProcessor(PROCESSOR_BUFFER_SIZE, 1, 1);
   const silentGain = context.createGain();
   const gate = new SpeechGate();
   const seconds = PROCESSOR_BUFFER_SIZE / context.sampleRate;
-  let preRoll: Float32Array[] = [];
-  let phrase: Float32Array[] | null = null;
-
   silentGain.gain.value = 0;
-  processor.onaudioprocess = (event: AudioProcessingEvent) => {
-    const chunk = mixToMono(event.inputBuffer);
-    if (options.shouldIgnore()) {
-      gate.reset();
-      preRoll = [];
-      if (phrase !== null) options.onSpeaking(false);
-      phrase = null;
-      return;
-    }
-    const gateEvent = gate.push(levelOf(chunk), seconds);
-    if (gateEvent === "started") {
-      phrase = [...preRoll];
-      options.onSpeaking(true);
-    }
-    if (phrase !== null) {
-      phrase.push(chunk);
-    } else {
-      preRoll = [...preRoll, chunk].slice(-PRE_ROLL_CHUNKS);
-    }
-    if (gateEvent === "ended" || gateEvent === "discarded") {
-      const finished = phrase;
-      phrase = null;
-      preRoll = [];
-      options.onSpeaking(false);
-      if (gateEvent === "ended" && finished !== null) {
-        options.onPhrase(toWavBlob(finished, context.sampleRate));
+
+  return new Promise<Blob | null>((resolve, reject) => {
+    const recording: Float32Array[] = [];
+    let openFor = 0;
+    let loudest = 0;
+    let isReady = false;
+    let isSpeaking = false;
+    let timedOut = false;
+    let closed = false;
+
+    const close = (): boolean => {
+      if (closed) return false;
+      closed = true;
+      window.clearTimeout(giveUp);
+      processor.onaudioprocess = null;
+      processor.disconnect();
+      source.disconnect();
+      silentGain.disconnect();
+      stopTracks(stream);
+      void context.close();
+      return true;
+    };
+
+    const sendRecording = () => {
+      if (!close()) return;
+      if (loudest < DEAD_MICROPHONE_LEVEL) {
+        reject(new VoiceRecordingError("The microphone is silent. Check the input device."));
+        return;
       }
-    }
-  };
+      resolve(toWavBlob(recording, context.sampleRate));
+    };
 
-  source.connect(processor);
-  processor.connect(silentGain);
-  silentGain.connect(context.destination);
-  // Not awaited: a context waiting for a click must not hold up turning voice on.
-  void context.resume();
+    const giveUp = window.setTimeout(() => {
+      timedOut = true;
+      if (!isSpeaking) sendRecording();
+    }, LISTEN_SECONDS * 1000);
 
-  return async () => {
-    processor.onaudioprocess = null;
-    processor.disconnect();
-    source.disconnect();
-    silentGain.disconnect();
-    stopTracks(stream);
-    await context.close();
-  };
+    signal.addEventListener(
+      "abort",
+      () => {
+        if (close()) resolve(null);
+      },
+      { once: true },
+    );
+
+    processor.onaudioprocess = (event: AudioProcessingEvent) => {
+      const chunk = mixToMono(event.inputBuffer);
+      const level = levelOf(chunk);
+      recording.push(chunk);
+      openFor += seconds;
+      loudest = Math.max(loudest, level);
+
+      if (openFor < ROOM_SECONDS) {
+        gate.learnRoom(level);
+        return;
+      }
+      if (!isReady) {
+        isReady = true;
+        onReady();
+      }
+      // The "listening" sound has to fade before anything counts as speech.
+      if (openFor < ROOM_SECONDS + EARCON_SECONDS) return;
+
+      const gateEvent = gate.push(level, seconds);
+      if (gateEvent === "started") {
+        isSpeaking = true;
+        onSpeaking(true);
+      } else if (gateEvent === "ended") {
+        sendRecording();
+      } else if (gateEvent === "discarded") {
+        // A knock on the keys, not a word: keep waiting for the player to speak.
+        isSpeaking = false;
+        onSpeaking(false);
+        if (timedOut) sendRecording();
+      }
+    };
+
+    source.connect(processor);
+    processor.connect(silentGain);
+    silentGain.connect(context.destination);
+    void context.resume();
+    onOpen();
+  });
 }

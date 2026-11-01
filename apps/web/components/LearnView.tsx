@@ -1,6 +1,14 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type MouseEvent,
+} from "react";
 import { arrangementOctaveOffset, KeySampler } from "@/lib/audio/key-sampler";
 import { drawLearnPianoRoll, type PlayedNoteDot } from "@/lib/studio/canvas";
 import { addToTake } from "@/lib/studio/take";
@@ -15,6 +23,11 @@ import {
 import {
   connectWebMidi,
   createNoteStream,
+  createTalkControl,
+  DEFAULT_TALK_BINDING,
+  loadTalkBinding,
+  saveTalkBinding,
+  subscribeTalkBinding,
   type MidiDevice,
   type NoteStream,
 } from "@/lib/midi";
@@ -25,12 +38,14 @@ import {
   stopMonitorNote,
 } from "@/lib/studio/synth-key";
 import type { Note } from "@/lib/trackmap/trackmap.generated";
+import type { PracticeLevel } from "@/lib/voice-commands";
 import { useStudio, type HandFilter } from "./StudioContext";
 import { TimelineRuler } from "./StudioShell";
 import { CoachPanel } from "./CoachPanel";
 import { useThemeListener } from "./ThemeToggle";
 
-type DifficultyLevel = "easy" | "intermediate";
+const MIN_OCTAVE_SHIFT = -2;
+const MAX_OCTAVE_SHIFT = 2;
 
 const BLACK_KEY_LEFT_PERCENT: readonly number[] = [
   5.2, 12.3, 26.6, 33.8, 40.9, 55.2, 62.3, 76.6, 83.8, 90.9,
@@ -80,7 +95,7 @@ export function LearnView() {
     resetCoachOverrides,
   } = useStudio();
 
-  const [level, setLevel] = useState<DifficultyLevel>("easy");
+  const [level, setLevel] = useState<PracticeLevel>("easy");
   const [midiDevices, setMidiDevices] = useState<MidiDevice[]>([]);
   const [selectedMidiId, setSelectedMidiId] = useState<string>("all");
   const [playedDots, setPlayedDots] = useState<PlayedNoteDot[]>([]);
@@ -149,6 +164,18 @@ export function LearnView() {
         : "Keys play a simple synth";
 
   const [noteStream, setNoteStream] = useState<NoteStream | null>(null);
+
+  const talkTriggerRef = useRef<() => void>(() => undefined);
+  const talkBinding = useSyncExternalStore(
+    subscribeTalkBinding,
+    loadTalkBinding,
+    () => DEFAULT_TALK_BINDING,
+  );
+  const [isChoosingTalkButton, setIsChoosingTalkButton] = useState<boolean>(false);
+  const choosingTalkButtonRef = useRef<boolean>(false);
+  useEffect(() => {
+    choosingTalkButtonRef.current = isChoosingTalkButton;
+  }, [isChoosingTalkButton]);
 
   // Dynamic responsive canvas sizing
   useEffect(() => {
@@ -250,8 +277,27 @@ export function LearnView() {
       noteStream,
       (devices) => setMidiDevices(devices),
       selectedMidiId,
+      createTalkControl({
+        getBinding: loadTalkBinding,
+        isLearning: () => choosingTalkButtonRef.current,
+        onPress: () => talkTriggerRef.current(),
+        onLearned: (binding) => {
+          choosingTalkButtonRef.current = false;
+          saveTalkBinding(binding);
+          setIsChoosingTalkButton(false);
+        },
+      }),
     );
   }, [noteStream, selectedMidiId]);
+
+  const shiftOctave = useCallback((delta: number) => {
+    setOctaveShift((prev) => Math.max(MIN_OCTAVE_SHIFT, Math.min(MAX_OCTAVE_SHIFT, prev + delta)));
+  }, []);
+
+  const changeLevel = useCallback((next: PracticeLevel) => {
+    setPlayedDots([]);
+    setLevel(next);
+  }, []);
 
   useEffect(() => {
     if (noteStream === null) return;
@@ -270,11 +316,15 @@ export function LearnView() {
         return;
       }
       if (event.key === "z" || event.key === "Z") {
-        setOctaveShift((prev) => Math.max(-2, prev - 1));
+        shiftOctave(-1);
         return;
       }
       if (event.key === "x" || event.key === "X") {
-        setOctaveShift((prev) => Math.min(2, prev + 1));
+        shiftOctave(1);
+        return;
+      }
+      if (event.key === "v" || event.key === "V") {
+        talkTriggerRef.current();
         return;
       }
       const mapped = lookupShortcutKey(event.key, octaveShiftRef.current);
@@ -294,7 +344,7 @@ export function LearnView() {
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
     };
-  }, [noteStream]);
+  }, [noteStream, shiftOctave]);
 
   // Frame draw loop - synchronized with canvasSize, playback and theme changes
   useEffect(() => {
@@ -386,10 +436,7 @@ export function LearnView() {
               <button
                 type="button"
                 aria-pressed={level === "easy"}
-                onClick={() => {
-                  setPlayedDots([]);
-                  setLevel("easy");
-                }}
+                onClick={() => changeLevel("easy")}
                 className={`cursor-pointer rounded-md px-3 py-1 font-medium transition ${
                   level === "easy" ? "bg-text text-bg shadow-xs" : "text-text-2 hover:text-text"
                 }`}
@@ -399,10 +446,7 @@ export function LearnView() {
               <button
                 type="button"
                 aria-pressed={level === "intermediate"}
-                onClick={() => {
-                  setPlayedDots([]);
-                  setLevel("intermediate");
-                }}
+                onClick={() => changeLevel("intermediate")}
                 className={`cursor-pointer rounded-md px-3 py-1 font-medium transition ${
                   level === "intermediate" ? "bg-text text-bg shadow-xs" : "text-text-2 hover:text-text"
                 }`}
@@ -512,7 +556,7 @@ export function LearnView() {
                 <div className="flex items-center rounded-xs border border-line-2 bg-surface p-0.5">
                   <button
                     type="button"
-                    onClick={() => setOctaveShift((prev) => Math.max(-2, prev - 1))}
+                    onClick={() => shiftOctave(-1)}
                     title="Lower octave (Press Z)"
                     className="cursor-pointer rounded-xs px-1.5 py-0.5 text-[10px] font-semibold text-text-2 hover:bg-surface-2 hover:text-accent active:text-accent"
                   >
@@ -523,7 +567,7 @@ export function LearnView() {
                   </span>
                   <button
                     type="button"
-                    onClick={() => setOctaveShift((prev) => Math.min(2, prev + 1))}
+                    onClick={() => shiftOctave(1)}
                     title="Higher octave (Press X)"
                     className="cursor-pointer rounded-xs px-1.5 py-0.5 text-[10px] font-semibold text-text-2 hover:bg-surface-2 hover:text-accent active:text-accent"
                   >
@@ -605,6 +649,13 @@ export function LearnView() {
         onAnalyzeTake={analyzeLastTake}
         coachMessage={coachMessage}
         isCoachThinking={isCoachThinking}
+        talkTriggerRef={talkTriggerRef}
+        talkBinding={talkBinding}
+        isChoosingTalkButton={isChoosingTalkButton}
+        onChooseTalkButton={() => setIsChoosingTalkButton((choosing) => !choosing)}
+        onResetTalkButton={() => saveTalkBinding(DEFAULT_TALK_BINDING)}
+        onSetLevel={changeLevel}
+        onShiftOctave={shiftOctave}
       />
     </>
   );

@@ -9,7 +9,7 @@ type SamplerModule = {
   arrangementOctaveOffset: (arrangement: readonly SamplerNote[], raw: readonly SamplerNote[]) => number;
 };
 type TakeModule = { addToTake: <Dot extends TakeNote>(take: readonly Dot[], dot: Dot) => Dot[] };
-type Gate = { push: (level: number, seconds: number) => SpeechGateEvent | null };
+type Gate = { push: (level: number, seconds: number) => SpeechGateEvent | null; learnRoom: (level: number) => void };
 type VadModule = { SpeechGate: new () => Gate; MAX_SPEECH_SECONDS: number };
 
 const SAMPLER_PATH: string = "./audio/key-sampler.ts";
@@ -72,13 +72,24 @@ assert.deepEqual(run(quiet, 0.2, 1), ["started"]);
 assert.deepEqual(run(quiet, 0.002, 1), ["ended"]);
 
 const click = new SpeechGate();
-assert.deepEqual(run(click, 0.2, 0.2), ["started"]);
+assert.deepEqual(run(click, 0.2, 0.14), ["started"]);
 assert.deepEqual(run(click, 0.001, 1), ["discarded"]);
 
 const tooLong = new SpeechGate();
 assert.deepEqual(run(tooLong, 0.2, MAX_SPEECH_SECONDS + 0.5).slice(0, 2), ["started", "ended"]);
 
 const noisyRoom = new SpeechGate();
-assert.deepEqual(run(noisyRoom, 0.03, 8).filter((e) => e === "started").length <= 1, true);
+noisyRoom.learnRoom(0.03);
+assert.deepEqual(run(noisyRoom, 0.03, 8), []);
+
+// Music from the speakers: the voice rises above it and the phrase still ends while the music plays.
+const overMusic = new SpeechGate();
+overMusic.learnRoom(0.03);
+assert.deepEqual(run(overMusic, 0.15, 1), ["started"]);
+assert.deepEqual(run(overMusic, 0.03, 1), ["ended"]);
+
+const quietVoice = new SpeechGate();
+assert.deepEqual(run(quietVoice, 0.015, 1), ["started"]);
+assert.deepEqual(run(quietVoice, 0.001, 1), ["ended"]);
 
 console.log("learn fixtures passed");
