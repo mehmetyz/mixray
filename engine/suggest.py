@@ -80,7 +80,6 @@ LISTEN_INSTRUCTION = (
 # Image Only". These are the words those failures use; seeing any of them means the model never
 # heard the clip, and the only fix is to ask again.
 DEAF_MARKERS = (
-    "waveform image only",
     "waveform only",
     "only a waveform",
     "just a waveform",
@@ -96,6 +95,20 @@ DEAF_MARKERS = (
     "black screen",
     "text-based",
     "silent display",
+    "ability to hear",
+    "ability to listen",
+    "ability to play",
+    "ability to process",
+    "waveform image",
+    "waveform visualization",
+    "image of a waveform",
+    "only see",
+    "can't identify",
+    "cannot identify",
+    "not able to hear",
+    "unable to listen",
+    "can't listen",
+    "cannot listen",
 )
 STRUCTURE_INSTRUCTION = (
     "Turn the following description of a music clip into JSON. Produce between "
