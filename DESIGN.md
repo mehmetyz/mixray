@@ -114,7 +114,7 @@ Desktop-first DAW frame (`100dvh` on `lg+`, scrollable stacked panels on mobile)
 - **Right inspector (`ISOLATE INSPECTOR`):**
   - `MUSE SPARK SUGGESTIONS`: clickable chips from `trackMap.suggestions`. Selecting a precomputed isolation switches immediately; selecting an uncomputed chip triggers `startIsolation` + `waitForJob`.
   - `DESCRIBE A SOUND`: text prompt input + `Isolate` button; shows exact mono prompt sent.
-  - `IsolateProgress`: `listening → isolating → analyzing` mono stepper (`--accent` on current stage, `"Typically ~15–20 seconds"`).
+  - `IsolateProgress`: `listening → isolating → analyzing` mono stepper (`--accent` on current stage, seconds elapsed, with no promised duration).
   - `Cleaner version (Demucs)` checkbox toggle whenever a matching stem exists in `fallback_stems`.
   - Primary monochrome CTA `Continue to X-Ray →`.
 
@@ -142,7 +142,7 @@ Desktop-first DAW frame (`100dvh` on `lg+`, scrollable stacked panels on mobile)
 - **Right inspector (`VOICE COACH`):**
   - Feedback paragraph naming specific bars and timing/pitch offsets.
   - `APPLIED TOOL CALLS` mono log (`mark_problem_bar`, `set_loop`, `set_tempo`) that directly updates loop, tempo, and problem-bar state via `applyCoachAction()`.
-  - `Analyze take` + `Hold to talk` controls.
+  - `Analyze take` control, and a `Voice: On/Off` switch. Voice listens continuously, because both hands are on the keys: phrases go to Muse Voice Transcribe, talk that is not a command is ignored, and a typed command is the fallback.
   - `PER-BAR ACCURACY` 8-bar vertical chart (`--you` / `--accent` on problem bar) + browser-measurement footnote.
 
 ### 3.5 Take home (`/c/[id]/take`)

@@ -104,10 +104,15 @@ Decisions and current state. The plan is in `SPEC.md`, the UI in `DESIGN.md`, th
 - Done (Nov 1): the evaluation scripts, the datasets and every test video of unverified licence were
   deleted from the working copy. Measuring again means rebuilding that harness; the figures above are
   what remains. Run the engine checks with `uv run --all-groups`, because `numpy` comes from those.
+- Done (Nov 1): keys play the selected sound itself, at the pitch heard in the track, with a synth only as
+  fallback; the take score keeps the latest pass over each moment and ignores keys pressed while paused; voice
+  listens continuously through Muse Voice Transcribe, with the browser's speech service removed. Verified by
+  fixtures, pitch measured on a test tone in a browser, and a spoken phrase through the gate, transcription and
+  parser. Not yet run with a real microphone in the app or with the Launchkey.
 - Open: whether vocals, bass and guitar should default to Demucs. SAM Audio does not beat it on notes
   and returned only empty draws on a real guitar video; `AGENTS.md` and `SPEC.md` still call Demucs a
-  fallback. Tempo and key accuracy; a full isolation takes up to about 5 minutes; `top_voice` moves
-  onsets in the easy part; drum hits to pads are measured for kick only and not built.
+  fallback. Tempo and key accuracy; a full isolation takes up to about 5 minutes; drum hits to pads are
+  measured for kick only and not built.
 - Open: demo content (an owned 30 s clip with a clear lead, and a 30 s video of a keyboard with a
   second sound source visible). SAM 3.1 takes MP4/H.264, so anything in another container is
   transcoded first.
