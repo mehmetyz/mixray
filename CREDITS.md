@@ -14,6 +14,9 @@ still of it, and clicking a demo uploads that video through the same Add flow as
 sound already chosen. Each demo is labelled on screen as **Real recording** or **AI-generated**, and
 the studio shows this credit beside it.
 
+The landing page plays the audio of `cafe-piano` and the piano Mixray separated from it, both in
+`apps/web/public/landing/`.
+
 | Demo (`id`) | Origin | Author | Source | Licence | Changes |
 |---|---|---|---|---|---|
 | Piano and espresso steam (`cafe-piano`) | AI-generated | Mehmet Yildiz, generated with Google Flow on a Google AI Pro plan | — | CC BY 4.0, to the extent any rights exist | Watermark "AI-generated video (Google Flow)" burned in; 720p |

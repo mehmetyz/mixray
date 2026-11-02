@@ -161,5 +161,6 @@ Decisions and current state. The plan is in `SPEC.md`, the UI in `DESIGN.md`, th
   Run again: piano and guitar decoding, and eight SAM Audio draws on an A100 with the same seeds. All gave the Nov 1
   figures, except CLAP (0.440 to 0.450), which scores a random crop. Stored outputs for the gate and solo guitar were
   re-scored with the same figures. Also added: MIT licence.
+- Done (Nov 2): `/` is a public landing page and the clip list moved to `/studio`, with Add at `/studio/new`. `proxy.ts` asks for `MIXRAY_ACCESS_KEY` on the studio and on the routes that spend model credit; everything stays closed without it, in development too. The web reads it from `apps/web/.env.local`, not the root `.env`. A link `/?key=...` enters too, for judges who open the submission link without reading the key. `MIXRAY_DEMO_VIDEO_URL` adds the demo video.
 - Open: note accuracy on a real recording with known notes; the author is still learning keyboard, so it needs a labelled
   recording with clean rights.

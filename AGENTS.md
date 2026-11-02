@@ -127,6 +127,6 @@ uv run --all-groups pytest && uv run --all-groups python transcribe.fixture.py  
 
 - Do not use or commit copyrighted audio or video (no film scenes, no commercial songs). Demo
   content must be owned or CC-licensed with attribution.
-- Do not add auth, a database, payments, Electron or a mobile app.
+- Do not add user accounts, a database, payments, Electron or a mobile app. The single access key in `apps/web/proxy.ts` is the only gate.
 - Do not change `schema/trackmap.schema.json` or the Coach tool names in `SPEC.md` without updating
   both engine and web in the same change.

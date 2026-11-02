@@ -83,11 +83,15 @@ Desktop-first DAW frame (`100dvh` on `lg+`, scrollable stacked panels on mobile)
 
 ## 3. Screens
 
-### 3.1 Add (`/`)
+### 3.0 Landing (`/`)
+
+Public. Left: the tagline, one line on what Mixray does, and the access key, in plain text; a link `/?key=...` enters without typing it and stays on this page, with `Open the studio` in its place. Right: the café demo as Mixray really produced it. One sequence on load, and no other motion: each line of the tagline lights as the clip does that thing (the area drawn, the piano apart from the mix, its notes). `Full mix | Piano alone` plays the real audio. Below: the demo video once `MIXRAY_DEMO_VIDEO_URL` is set, the five steps, and what each model does. With reduced motion the final state shows at once.
+
+### 3.1 Add (`/studio`, `/studio/new`)
 
 One column, one job.
 
-- `/` opens on the tagline and `New clip`, then `Demos`: six cards, each a still from the video, a `Real recording` or `AI-generated` label and one line on what it shows. A card is a shortcut to Add: it uploads that video through the normal flow with its sound already typed, and `/?demo=<id>` does the same from a link. In the studio a demo carries the same label and its credit under the clip title.
+- `/studio` opens on the tagline and `New clip`, which goes to `/studio/new`, then `Demos`: six cards, each a still from the video, a `Real recording` or `AI-generated` label and one line on what it shows. A card is a shortcut to Add: it uploads that video through the normal flow with its sound already typed, and `/studio/new?demo=<id>` does the same from a link. In the studio a demo carries the same label and its credit under the clip title.
 - Below the demos, `Your clips` lists the clips added in this browser, demos included, with a thumbnail: title, length, tempo, key, the sound, and the engine's live state (Checking, Working with its steps and time, Ready, Failed, Expired); `New clip` opens Add. A separation keeps running after the studio opens and resumes its progress on Isolate after a reload.
 
 - Title and a line saying what to do. Drop zone with the real limits: `MP3, WAV, FLAC, MP4 or MOV. Up to 50 MB and 6 minutes.`

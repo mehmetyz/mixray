@@ -200,13 +200,15 @@ Create `apps/web/.env.local`:
 MIXRAY_ENGINE_URL=https://...modal.run
 MIXRAY_API_KEY=...          # the same value as on the engine
 META_API_KEY=...            # for the Coach and voice routes
+MIXRAY_ACCESS_KEY=...       # entered on the landing page, or in a link: /?key=...; without it, the studio stays closed
+MIXRAY_DEMO_VIDEO_URL=...   # optional: a YouTube or https video link shown on the landing page
 ```
 
 ```bash
 pnpm dev                      # http://localhost:3000
 ```
 
-To host it on Vercel, set the root directory to `apps/web` and add the same three variables.
+To host it on Vercel, set the root directory to `apps/web` and add the same variables.
 
 **Limits** are in `engine/ingest.py`: 50 MB and 6 minutes per upload, 30 s per clip, and 25 clips and
 50 separations per IP per day (`MIXRAY_DAILY_CLIP_QUOTA`, `MIXRAY_DAILY_ISOLATION_QUOTA`). Clips are
