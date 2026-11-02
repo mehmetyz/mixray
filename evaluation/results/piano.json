@@ -1,0 +1,226 @@
+{
+  "chosen_on_develop": {
+    "onset_threshold": 0.6,
+    "frame_threshold": 0.3,
+    "minimum_note_milliseconds": 30.0,
+    "melodia_trick": false
+  },
+  "matches_engine": true,
+  "develop_top": [
+    {
+      "score": {
+        "f1": 0.7638,
+        "precision": 0.8007,
+        "recall": 0.7507
+      },
+      "settings": {
+        "onset_threshold": 0.6,
+        "frame_threshold": 0.3,
+        "minimum_note_milliseconds": 30.0,
+        "melodia_trick": false
+      }
+    },
+    {
+      "score": {
+        "f1": 0.7632,
+        "precision": 0.8164,
+        "recall": 0.7374
+      },
+      "settings": {
+        "onset_threshold": 0.6,
+        "frame_threshold": 0.3,
+        "minimum_note_milliseconds": 58.0,
+        "melodia_trick": false
+      }
+    },
+    {
+      "score": {
+        "f1": 0.7556,
+        "precision": 0.849,
+        "recall": 0.6996
+      },
+      "settings": {
+        "onset_threshold": 0.6,
+        "frame_threshold": 0.4,
+        "minimum_note_milliseconds": 30.0,
+        "melodia_trick": false
+      }
+    },
+    {
+      "score": {
+        "f1": 0.7514,
+        "precision": 0.8568,
+        "recall": 0.6908
+      },
+      "settings": {
+        "onset_threshold": 0.7,
+        "frame_threshold": 0.3,
+        "minimum_note_milliseconds": 30.0,
+        "melodia_trick": false
+      }
+    },
+    {
+      "score": {
+        "f1": 0.7509,
+        "precision": 0.8704,
+        "recall": 0.682
+      },
+      "settings": {
+        "onset_threshold": 0.7,
+        "frame_threshold": 0.3,
+        "minimum_note_milliseconds": 58.0,
+        "melodia_trick": false
+      }
+    },
+    {
+      "score": {
+        "f1": 0.7469,
+        "precision": 0.8599,
+        "recall": 0.6792
+      },
+      "settings": {
+        "onset_threshold": 0.6,
+        "frame_threshold": 0.4,
+        "minimum_note_milliseconds": 58.0,
+        "melodia_trick": false
+      }
+    },
+    {
+      "score": {
+        "f1": 0.7439,
+        "precision": 0.7441,
+        "recall": 0.7642
+      },
+      "settings": {
+        "onset_threshold": 0.5,
+        "frame_threshold": 0.3,
+        "minimum_note_milliseconds": 58.0,
+        "melodia_trick": false
+      }
+    },
+    {
+      "score": {
+        "f1": 0.7438,
+        "precision": 0.7329,
+        "recall": 0.7767
+      },
+      "settings": {
+        "onset_threshold": 0.6,
+        "frame_threshold": 0.2,
+        "minimum_note_milliseconds": 58.0,
+        "melodia_trick": false
+      }
+    }
+  ],
+  "test_pieces": 10,
+  "licences": {
+    "10-02-i": "Public Domain",
+    "chp-10-05": "Public Domain",
+    "EliteSyncopations": "Public Domain",
+    "SomethingDoing": "Public Domain",
+    "LVB_Sonate_02no1_1": "Public Domain",
+    "LVB_Sonate_10no1_1": "Public Domain",
+    "KV309_1": "Public Domain",
+    "debussy_Arabesque_1": "Public Domain",
+    "SchumannOp15No01": "Public Domain",
+    "02-lamortdase": "Public Domain",
+    "chopin-op-10-09-wfi": "Public Domain",
+    "TroisNouvellesEtudes_Chopin_n1": "Public Domain",
+    "PineappleRag": "Public Domain",
+    "WallStreetRag": "Public Domain",
+    "LVB_Sonate_02no1_3": "Public Domain",
+    "LVB_Sonate_10no1_3": "Public Domain",
+    "debussy_Ste_Bergamesq_Clair": "Public Domain",
+    "SchumannOp15No07": "Public Domain",
+    "Troldtog": "Public Domain",
+    "troldhaugen": "Public Domain"
+  },
+  "notes_in_set": 5221,
+  "band": {
+    "old_default": {
+      "f1": 0.6837,
+      "precision": 0.5814,
+      "recall": 0.8675
+    },
+    "chosen": {
+      "f1": 0.7573,
+      "precision": 0.7126,
+      "recall": 0.8336
+    },
+    "engine_piano": {
+      "f1": 0.7573,
+      "precision": 0.7126,
+      "recall": 0.8336
+    },
+    "gain_per_piece": [
+      0.002,
+      0.007,
+      0.031,
+      0.042,
+      0.058,
+      0.075,
+      0.093,
+      0.099,
+      0.115,
+      0.215
+    ]
+  },
+  "steam": {
+    "old_default": {
+      "f1": 0.7515,
+      "precision": 0.6798,
+      "recall": 0.8654
+    },
+    "chosen": {
+      "f1": 0.8234,
+      "precision": 0.8169,
+      "recall": 0.8427
+    },
+    "engine_piano": {
+      "f1": 0.8234,
+      "precision": 0.8169,
+      "recall": 0.8427
+    },
+    "gain_per_piece": [
+      -0.009,
+      0.016,
+      0.041,
+      0.053,
+      0.056,
+      0.061,
+      0.064,
+      0.094,
+      0.111,
+      0.232
+    ]
+  },
+  "solo": {
+    "old_default": {
+      "f1": 0.7908,
+      "precision": 0.6738,
+      "recall": 0.9715
+    },
+    "chosen": {
+      "f1": 0.8849,
+      "precision": 0.8205,
+      "recall": 0.9625
+    },
+    "engine_piano": {
+      "f1": 0.8849,
+      "precision": 0.8205,
+      "recall": 0.9625
+    },
+    "gain_per_piece": [
+      0.022,
+      0.063,
+      0.063,
+      0.067,
+      0.071,
+      0.079,
+      0.095,
+      0.107,
+      0.127,
+      0.247
+    ]
+  }
+}

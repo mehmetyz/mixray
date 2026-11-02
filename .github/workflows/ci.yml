@@ -38,8 +38,10 @@ jobs:
       - name: Install ffmpeg, which the upload tests run for real
         run: sudo apt-get update && sudo apt-get install --yes ffmpeg
       - run: uv sync --locked --all-groups
-      - run: uv run ruff format --check .
-      - run: uv run ruff check .
-      - run: uv run mypy .
+      - run: uv run ruff format --check . ../evaluation --config pyproject.toml
+      - run: uv run ruff check . ../evaluation --config pyproject.toml
+      - run: uv run mypy . ../evaluation
+        env:
+          MYPYPATH: ../evaluation
       - run: uv run pytest
       - run: uv run python transcribe.fixture.py

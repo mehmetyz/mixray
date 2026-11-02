@@ -1,0 +1,44 @@
+{
+  "30 ms, the default": {
+    "develop": {
+      "f1": 0.7186,
+      "precision": 0.625,
+      "recall": 0.871,
+      "n": 180
+    },
+    "holdout": {
+      "f1": 0.732,
+      "precision": 0.6316,
+      "recall": 0.89,
+      "n": 180
+    }
+  },
+  "100 ms, for reference": {
+    "develop": {
+      "f1": 0.7722,
+      "precision": 0.7395,
+      "recall": 0.8273,
+      "n": 180
+    },
+    "holdout": {
+      "f1": 0.7865,
+      "precision": 0.7545,
+      "recall": 0.8398,
+      "n": 180
+    }
+  },
+  "127.7 ms, what the engine uses for guitar": {
+    "develop": {
+      "f1": 0.7657,
+      "precision": 0.7623,
+      "recall": 0.7908,
+      "n": 180
+    },
+    "holdout": {
+      "f1": 0.7773,
+      "precision": 0.7759,
+      "recall": 0.7987,
+      "n": 180
+    }
+  }
+}
