@@ -8,6 +8,13 @@ export type VideoArea = {
   bottom: number;
 };
 
+export type StageBox = {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+};
+
 export type StagePoint = {
   x: number;
   y: number;
@@ -38,6 +45,33 @@ export function videoAreaFromDrag(
     top: Math.min(toVideoY(start.y), toVideoY(end.y)),
     right: Math.max(toVideoX(start.x), toVideoX(end.x)),
     bottom: Math.max(toVideoY(start.y), toVideoY(end.y)),
+  };
+}
+
+/** The smallest box around a tracked object's outlines, SVG paths made of absolute x y pairs. */
+export function areaAroundPaths(paths: readonly string[]): VideoArea | null {
+  const numbers = paths.flatMap((path) => (path.match(/-?\d+(?:\.\d+)?/g) ?? []).map(Number));
+  const xs = numbers.filter((_, index) => index % 2 === 0);
+  const ys = numbers.filter((_, index) => index % 2 === 1);
+  if (ys.length === 0) return null;
+  return {
+    left: Math.min(...xs),
+    top: Math.min(...ys),
+    right: Math.max(...xs),
+    bottom: Math.max(...ys),
+  };
+}
+
+/** Where an area of the video sits on a stage that letterboxes it, in percent of the stage. */
+export function areaOnStage(area: VideoArea, video: PixelSize, stage: PixelSize): StageBox {
+  const scale = Math.min(stage.width / video.width, stage.height / video.height);
+  const offsetX = (stage.width - video.width * scale) / 2;
+  const offsetY = (stage.height - video.height * scale) / 2;
+  return {
+    left: ((offsetX + area.left * scale) / stage.width) * 100,
+    top: ((offsetY + area.top * scale) / stage.height) * 100,
+    width: (((area.right - area.left) * scale) / stage.width) * 100,
+    height: (((area.bottom - area.top) * scale) / stage.height) * 100,
   };
 }
 

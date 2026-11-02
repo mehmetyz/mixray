@@ -2,8 +2,11 @@
 
 import { useEffect, useRef, useState, type PointerEvent } from "react";
 import {
+  areaAroundPaths,
+  areaOnStage,
   MIN_DRAG_PIXELS,
   videoAreaFromDrag,
+  type PixelSize,
   type StagePoint,
   type VideoArea,
 } from "@/lib/studio/area";
@@ -15,11 +18,14 @@ export type VideoMaskStageProps = {
   /** Present where a sound is chosen: dragging over the video draws an area. */
   onSelectArea?: (area: VideoArea, frame: number) => void;
   areaBusy?: boolean;
-  /** The one track whose masks are drawn; following is opt-in on the Analyze screen. */
+  /** The one track whose box is drawn; following is opt-in on the Analyze screen. */
   followedTrackId?: string;
   /** Limits the video's width so the lanes under it stay on screen. */
   sizeClass: string;
 };
+
+// The stage below is `aspect-video`.
+const STAGE_SIZE: PixelSize = { width: 16, height: 9 };
 
 type AreaDrag = {
   start: StagePoint;
@@ -147,13 +153,19 @@ export function VideoMaskStage({
     followed !== undefined &&
     maskFrames?.id === followed.id &&
     isTimeInRanges(currentTime, followed.visible);
-  const paths = showMask ? nearestFramePaths(maskFrames.frames, Math.round(currentTime * fps)) : [];
+  const trackedArea = showMask
+    ? areaAroundPaths(nearestFramePaths(maskFrames.frames, Math.round(currentTime * fps)))
+    : null;
+  const trackedBox =
+    trackedArea === null
+      ? null
+      : areaOnStage(trackedArea, { width: video.width, height: video.height }, STAGE_SIZE);
   const hint =
     onSelectArea !== undefined
       ? areaBusy
         ? "Finding that sound"
         : "Drag over a sound"
-      : followed !== undefined
+      : followed !== undefined && trackedBox === null
         ? `Tracking ${followed.label}`
         : null;
   const onScreenPercent = (time: number) => (duration > 0 ? (time / duration) * 100 : 0);
@@ -192,17 +204,21 @@ export function VideoMaskStage({
             className="h-full w-full object-contain"
           />
 
-          {paths.length > 0 ? (
-            <svg
-              viewBox={`0 0 ${video.width} ${video.height}`}
-              className="pointer-events-none absolute inset-0 h-full w-full"
-              preserveAspectRatio="xMidYMid meet"
+          {trackedBox !== null && followed !== undefined ? (
+            <div
               aria-hidden="true"
+              style={{
+                left: `${trackedBox.left}%`,
+                top: `${trackedBox.top}%`,
+                width: `${trackedBox.width}%`,
+                height: `${trackedBox.height}%`,
+              }}
+              className="pointer-events-none absolute border-2 border-accent transition-[left,top,width,height] duration-200 ease-linear motion-reduce:transition-none"
             >
-              {paths.map((path, index) => (
-                <path key={index} d={path} className="fill-accent/25 stroke-accent" strokeWidth={2} />
-              ))}
-            </svg>
+              <span className="absolute top-0 left-0 bg-accent px-1.5 py-0.5 text-xs font-medium text-accent-ink">
+                {followed.label}
+              </span>
+            </div>
           ) : null}
 
           {areaDrag !== null && (dragActive || areaBusy) ? (

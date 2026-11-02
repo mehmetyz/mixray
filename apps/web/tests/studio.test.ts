@@ -3,7 +3,7 @@ import { describe, it } from "node:test";
 import { SpeechGate, MAX_SPEECH_SECONDS, type SpeechGateEvent } from "../lib/audio/vad";
 import { separationSteps, type ProjectRecord } from "../lib/projects/types";
 import { buildStepLinks, stepNumber } from "../lib/steps";
-import { scaleVideoArea, videoAreaFromDrag } from "../lib/studio/area";
+import { areaAroundPaths, areaOnStage, scaleVideoArea, videoAreaFromDrag } from "../lib/studio/area";
 import { addToTake, type TakeNote } from "../lib/studio/take";
 
 describe("drawing an area on a letterboxed video", () => {
@@ -69,6 +69,39 @@ describe("the take keeps only the latest pass", () => {
     );
     assert.equal(take.length, 4000);
     assert.equal(take[take.length - 1]?.time, 499.9);
+  });
+});
+
+describe("the tracked box", () => {
+  it("wraps every outline of a frame", () => {
+    const area = areaAroundPaths(["M399.0 360.0L400.0 359.0L420.5 700.0Z", "M10 20L30 40Z"]);
+    assert.deepEqual(area, { left: 10, top: 20, right: 420.5, bottom: 700 });
+  });
+
+  it("has nothing to wrap on a frame without an outline", () => {
+    assert.equal(areaAroundPaths([]), null);
+    assert.equal(areaAroundPaths(["Z"]), null);
+  });
+
+  it("lands on the picture of a video that fills the stage", () => {
+    const box = areaOnStage(
+      { left: 320, top: 180, right: 960, bottom: 540 },
+      { width: 1280, height: 720 },
+      { width: 16, height: 9 },
+    );
+    assert.deepEqual(box, { left: 25, top: 25, width: 50, height: 50 });
+  });
+
+  it("lands on the picture of a vertical video letterboxed on the stage", () => {
+    const box = areaOnStage(
+      { left: 0, top: 0, right: 720, bottom: 1280 },
+      { width: 720, height: 1280 },
+      { width: 16, height: 9 },
+    );
+    assert.equal(box.top, 0);
+    assert.equal(box.height, 100);
+    assert.ok(Math.abs(box.left - 34.1796875) < 1e-9);
+    assert.ok(Math.abs(box.width - 31.640625) < 1e-9);
   });
 });
 
