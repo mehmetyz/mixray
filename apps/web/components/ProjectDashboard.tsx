@@ -149,12 +149,16 @@ function ProjectRow({ project, isConfirmingRemove, onAskRemove, onCancelRemove }
         <ClipThumbnail clipId={project.id} kind={project.kind} />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <Link
-              href={href}
-              className="truncate text-sm font-semibold text-text hover:text-accent"
-            >
-              {project.title}
-            </Link>
+            {state.kind === "missing" ? (
+              <span className="truncate text-sm font-semibold text-text-2">{project.title}</span>
+            ) : (
+              <Link
+                href={href}
+                className="truncate text-sm font-semibold text-text hover:text-accent"
+              >
+                {project.title}
+              </Link>
+            )}
             <StatusLabel state={state} />
             {demo !== undefined ? <DemoBadge origin={demo.origin} /> : null}
           </div>
@@ -184,12 +188,14 @@ function ProjectRow({ project, isConfirmingRemove, onAskRemove, onCancelRemove }
           </div>
         ) : (
           <div className="flex shrink-0 items-center gap-1">
-            <Link
-              href={href}
-              className="flex h-8 items-center rounded-icon border border-line-2 px-3 text-xs font-semibold text-text transition hover:border-control"
-            >
-              Open
-            </Link>
+            {state.kind !== "missing" ? (
+              <Link
+                href={href}
+                className="flex h-8 items-center rounded-icon border border-line-2 px-3 text-xs font-semibold text-text transition hover:border-control"
+              >
+                Open
+              </Link>
+            ) : null}
             <button
               type="button"
               onClick={onAskRemove}
