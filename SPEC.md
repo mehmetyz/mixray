@@ -222,6 +222,14 @@ Sources: dev.meta.ai docs (`/docs`, `/docs/api-reference/responses/schemas`, `/d
   and the command parser, which matched digits, returned nothing - the phrase was heard perfectly
   and the command vanished, with nothing on screen to say why. `parseVoiceCoachCommand` now rewrites
   spoken numbers to digits first.
+  **It takes `languageBias` and `keywords`, measured Nov 2.** `languageBias` is a list of full
+  language names (`["English"]`) and `keywords` a list of words to favour; both go in the JSON
+  `request` part. Without them the model guesses the language and wrote accented English as German
+  ("Was ist The Tempo") or with Korean in it. On 60 synthesised commands in six accents, exact
+  transcripts went from 22 (neither) to 47 through `/api/voice` (English bias, the command words as
+  keywords, 0.4 s of silence around the voice). **A one-word command with no silence before it came
+  back empty** ("play", "pause"); the browser now pads the recording. One run per setting, and the
+  same audio can transcribe differently from run to run.
   This removes the reason `voice` was cut: push-to-talk is one recording and one POST, so it needs
   no WebSocket proxy on Modal, and the browser already has a 16-bit PCM WAV encoder in
   `apps/web/lib/audio/wav.ts`.

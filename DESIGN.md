@@ -101,8 +101,8 @@ One column, one job.
 
 ### 3.2 Isolate (`/c/[id]/pick`)
 
-- **Center:** the video when there is one, where dragging draws an area and Muse Spark names it; under it a `Track` switch when the selected sound was chosen by area, which the first time asks SAM 3.1 to follow that area and then keeps a labelled `--accent` box around the instrument, as on the landing page. Then one lane each for the sound, the rest and the full mix, with a solo button. Nothing is drawn before a sound exists.
-- **Right:** text field, Muse Spark's suggestions, the current stage with seconds elapsed, the Demucs comparison when a matching stem exists, and `Continue to Analyze`.
+- **Center:** the video when there is one, where dragging draws an area and Muse Spark names it; under it a `Track` switch when the selected sound was chosen by area, which the first time asks SAM 3.1 to follow that area and then marks the instrument with four `--accent` corners and dims the rest of the picture slightly, as on the landing page. Its name shows for two seconds, then goes. Then one lane each for the sound, the rest and the full mix, with a solo button. Nothing is drawn before a sound exists.
+- **Right:** text field, Muse Spark's suggestions, the current stage with seconds elapsed, and `Continue to Analyze`.
 
 ### 3.3 Analyze (`/c/[id]/xray`)
 
