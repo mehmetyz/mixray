@@ -6,6 +6,8 @@ Built with Muse Spark Open
 
 **Live:** https://mixray.vercel.app
 
+**Judges:** the access key is in the submission notes.
+
 Drop in a track or a video you own, then pick one sound out of the mix: type what you want, take a
 suggestion, or draw over the instrument in the video. Mixray isolates it, shows what it plays and
 teaches you to play it on a keyboard, with a coach that reads your take.
@@ -220,7 +222,7 @@ A MIDI keyboard needs a browser with Web MIDI, such as Chrome, Edge or Brave. QW
 
 ## Demos
 
-The home page offers six demos as shortcuts: clicking one opens Add with its video and sound already
+The studio offers six demos as shortcuts: clicking one opens Add with its video and sound already
 chosen, and it then goes through the same pipeline as any upload. There are five AI-generated scenes
 (a café piano under espresso steam, a song in a park, a busker with a dog and a taxi, a rooftop
 singer, a piano on a rainy night) and one real recording, a public-domain U.S. Navy Band performance.

@@ -79,7 +79,7 @@ export function AccessForm({ hasAccess, next, linkFailed }: AccessFormProps) {
         </p>
       ) : (
         <p id="access-note" className="mt-2 text-sm text-text-2">
-          Open to hackathon judges for now. Your key is in the submission.
+          Judges: the access key is in the submission notes.
         </p>
       )}
     </form>

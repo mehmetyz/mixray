@@ -9,7 +9,7 @@ or the data listed here, each of which has its own terms below.
 
 ## Demo media
 
-The demos on the home page are shortcuts: `apps/web/public/demos/<id>/` holds only the video and a
+The demos in the studio are shortcuts: `apps/web/public/demos/<id>/` holds only the video and a
 still of it, and clicking a demo uploads that video through the same Add flow as any clip, with its
 sound already chosen. Each demo is labelled on screen as **Real recording** or **AI-generated**, and
 the studio shows this credit beside it.
