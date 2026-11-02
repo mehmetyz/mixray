@@ -8,6 +8,8 @@
     "start": "next start",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
+    "test": "pnpm -s test:unit && pnpm -s test:score && pnpm -s test:midi && pnpm -s test:coach && pnpm -s test:learn",
+    "test:unit": "node --import ./tests/setup.ts --test --test-reporter=dot \"tests/**/*.test.ts\"",
     "test:score": "node lib/score.fixture.ts",
     "test:midi": "node lib/midi.fixture.ts",
     "test:coach": "node lib/coach.fixture.ts",

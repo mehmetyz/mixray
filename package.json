@@ -10,6 +10,7 @@
     "build": "pnpm --filter @mixray/web build",
     "lint": "pnpm --filter @mixray/web lint",
     "typecheck": "pnpm --filter @mixray/web typecheck",
+    "test": "pnpm --filter @mixray/web test",
     "gen:types": "pnpm --filter @mixray/web gen:types"
   }
 }

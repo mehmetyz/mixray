@@ -22,7 +22,12 @@ analyze = [
   "soundfile==0.14.0",
 ]
 dev = [
+  # Validates what the engine serves against schema/trackmap.schema.json, the contract with the web.
+  "jsonschema==4.26.0",
+  # The note metric in evaluation/scoring.py, unit-tested with the engine's tests.
+  "mir_eval==0.8.2",
   "mypy==2.4.0",
+  "pytest==9.2.0",
   "ruff==0.17.2",
 ]
 
@@ -32,6 +37,8 @@ package = false
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+# Notebook cells kept exactly as they ran; they lean on state from earlier cells.
+extend-exclude = ["notebooks"]
 
 [tool.ruff.lint]
 select = ["E", "W", "F", "I", "B", "UP", "ANN", "N", "SIM", "RET", "PL", "RUF"]
@@ -39,11 +46,21 @@ select = ["E", "W", "F", "I", "B", "UP", "ANN", "N", "SIM", "RET", "PL", "RUF"]
 # only pays for them when the function runs), so a function-local import is the convention here.
 ignore = ["PLC0415"]
 
+[tool.ruff.lint.per-file-ignores]
+# A test reads best with the literal value it expects.
+"tests/*" = ["PLR2004"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = [".", "../evaluation"]
+addopts = "-ra"
+
 [tool.mypy]
 python_version = "3.11"
 strict = true
 warn_unreachable = true
+exclude = ["/notebooks/"]
 
 [[tool.mypy.overrides]]
-module = ["torch.*", "torchaudio.*", "sam_audio.*", "librosa.*"]
+module = ["torch.*", "torchaudio.*", "sam_audio.*", "librosa.*", "jsonschema.*", "mir_eval.*", "pretty_midi.*", "soundfile.*"]
 ignore_missing_imports = true
