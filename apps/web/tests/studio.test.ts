@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { SpeechGate, MAX_SPEECH_SECONDS, type SpeechGateEvent } from "../lib/audio/vad";
 import { separationSteps, type ProjectRecord } from "../lib/projects/types";
+import { strongestPartials } from "../lib/audio/freeze";
+import { sustainTail } from "../lib/audio/key-sampler";
 import { buildStepLinks, stepNumber } from "../lib/steps";
 import { areaAroundPaths, areaOnStage, scaleVideoArea, videoAreaFromDrag } from "../lib/studio/area";
 import { addToTake, forgetPassed, startsNewPass, type PassedNote, type TakeNote } from "../lib/studio/take";
@@ -106,6 +108,75 @@ describe("silence on a new pass", () => {
     assert.equal(startsNewPass(4, 1), true);
     assert.equal(startsNewPass(4, 3.99), false);
     assert.equal(startsNewPass(1, 2), false);
+  });
+});
+
+describe("a held key keeps sounding", () => {
+  const SAMPLE_RATE = 48000;
+  const A = 440;
+  const C_SHARP = 554.37;
+  const E = 659.25;
+
+  function tones(frequencies: readonly number[], seconds = 1): Float32Array {
+    return Float32Array.from({ length: seconds * SAMPLE_RATE }, (_, index) =>
+      frequencies.reduce((sum, hertz) => sum + Math.sin((2 * Math.PI * hertz * index) / SAMPLE_RATE), 0) * 0.2,
+    );
+  }
+
+  function rms(data: Float32Array): number {
+    return Math.sqrt(data.reduce((sum, value) => sum + value * value, 0) / data.length);
+  }
+
+  /** Sample-to-sample jumps against the level: hiss and clicks raise it. */
+  function roughness(data: Float32Array): number {
+    return rms(data.subarray(1).map((value, index) => value - (data[index] ?? 0))) / rms(data);
+  }
+
+  it("finds the notes of a chord", () => {
+    const found = strongestPartials(tones([A, C_SHARP, E]).subarray(0, 16384), SAMPLE_RATE);
+    for (const hertz of [A, C_SHARP, E]) {
+      assert.ok(found.some((partial) => Math.abs(partial.hertz - hertz) < 1), `${hertz} missing`);
+    }
+  });
+
+  it("leaves out what sits far under the sound", () => {
+    const noisy = tones([A]);
+    noisy.forEach((value, index) => {
+      noisy[index] = value + 0.0001 * Math.sin(index * index);
+    });
+    assert.ok(strongestPartials(noisy.subarray(0, 16384), SAMPLE_RATE).length <= 3);
+  });
+
+  it("carries a chord on without the hiss around it", () => {
+    const hissy = tones([A, C_SHARP]);
+    hissy.forEach((value, index) => {
+      hissy[index] = value + 0.02 * Math.sin(index * index);
+    });
+    const tail = sustainTail(hissy, SAMPLE_RATE, { pitch: 69, start: 0.1, end: 0.8 }, () => 0.25);
+    assert.ok(tail !== null);
+    assert.ok(roughness(tail) < roughness(hissy) * 0.7);
+  });
+
+  it("joins its end to its start with no click", () => {
+    const tail = sustainTail(tones([A, C_SHARP, E]), SAMPLE_RATE, { pitch: 69, start: 0.1, end: 0.8 });
+    assert.ok(tail !== null);
+    const first = tail[0] ?? 0;
+    const last = tail[tail.length - 1] ?? 0;
+    const steepest = Math.max(...tail.subarray(0, 4800).map((value, index) => Math.abs(value - (tail[index + 1] ?? value))));
+    assert.ok(Math.abs(first - last) <= steepest * 1.01);
+  });
+
+  it("carries on at the level of the note", () => {
+    const chord = tones([A, C_SHARP, E]);
+    const tail = sustainTail(chord, SAMPLE_RATE, { pitch: 69, start: 0.1, end: 0.8 });
+    assert.ok(tail !== null);
+    assert.ok(Math.abs(rms(tail) - rms(chord)) < 0.02);
+  });
+
+  it("has nothing to carry on for a note too short or silent", () => {
+    assert.equal(sustainTail(tones([A]), SAMPLE_RATE, { pitch: 69, start: 0.1, end: 0.15 }), null);
+    const silent = new Float32Array(SAMPLE_RATE);
+    assert.equal(sustainTail(silent, SAMPLE_RATE, { pitch: 69, start: 0.1, end: 0.8 }), null);
   });
 });
 

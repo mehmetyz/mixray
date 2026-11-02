@@ -1,3 +1,5 @@
+import { renderPartials, strongestPartials } from "./freeze";
+
 export type SamplerNote = {
   start: number;
   end: number;
@@ -12,7 +14,7 @@ export type KeySample = {
 };
 
 type ActiveKey = {
-  source: AudioBufferSourceNode;
+  sources: AudioBufferSourceNode[];
   gain: GainNode;
 };
 
@@ -27,6 +29,18 @@ const TARGET_RMS = 0.18;
 const MAX_NORMALIZE_GAIN = 4;
 const OCTAVE = 12;
 const ARRANGEMENT_MATCH_SECONDS = 0.2;
+// A held key outlasts the note it was sampled from: the frequencies at the end of that note go on as
+// steady tones and fade the way a struck string does. Repeating a slice of the audio instead made
+// chords waver and hiss, because their notes do not line up on any short loop.
+const TAIL_SKIP_ATTACK_SECONDS = 0.03;
+const MIN_TAIL_WINDOW = 2048;
+const MAX_TAIL_WINDOW = 16384;
+const TAIL_SAMPLES = 2 ** 17;
+const TAIL_CROSSFADE_SECONDS = 0.08;
+const HOLD_DECAY_SECONDS = 5;
+// 60 dB under the note, which is where a decay stops being heard.
+const DECAY_FLOOR = 0.001;
+const END_FADE_SECONDS = 0.03;
 
 /** Picks, for each pitch, the note heard most on its own. A note inside a chord only counts half. */
 export function pickKeySamples(notes: readonly SamplerNote[]): KeySample[] {
@@ -89,12 +103,32 @@ export function arrangementOctaveOffset(
   return winner * OCTAVE;
 }
 
+/** The steady tones that carry a sample on while its key is held, or null if the note is too short. */
+export function sustainTail(
+  data: Float32Array,
+  sampleRate: number,
+  sample: KeySample,
+  random?: () => number,
+): Float32Array | null {
+  const to = Math.min(data.length, Math.floor((sample.end - SAMPLE_TAIL_SECONDS) * sampleRate));
+  const from = Math.ceil((sample.start + TAIL_SKIP_ATTACK_SECONDS) * sampleRate);
+  if (to - from < MIN_TAIL_WINDOW) return null;
+  let window = MAX_TAIL_WINDOW;
+  while (window > to - from) window /= 2;
+  const segment = data.slice(to - window, to);
+  const partials = strongestPartials(segment, sampleRate);
+  if (partials.length === 0) return null;
+  const rms = Math.sqrt(segment.reduce((sum, value) => sum + value * value, 0) / window);
+  return renderPartials(partials, sampleRate, TAIL_SAMPLES, rms, random);
+}
+
 /** Plays keys from the selected sound itself, so what you press sounds like what you hear. */
 export class KeySampler {
   private readonly context = new AudioContext({ latencyHint: "interactive" });
   private readonly active = new Map<number, ActiveKey>();
   private buffer: AudioBuffer | null = null;
   private samples: KeySample[] = [];
+  private readonly tails = new Map<number, AudioBuffer>();
   private offset = 0;
 
   async load(url: string, notes: readonly SamplerNote[], octaveOffset: number): Promise<boolean> {
@@ -105,7 +139,22 @@ export class KeySampler {
     this.buffer = await this.context.decodeAudioData(await response.arrayBuffer());
     this.samples = samples;
     this.offset = octaveOffset;
+    void this.prepareTails(this.buffer, samples);
     return true;
+  }
+
+  /** A little at a time, so working these out never holds up a key being played. */
+  private async prepareTails(buffer: AudioBuffer, samples: readonly KeySample[]): Promise<void> {
+    const data = buffer.getChannelData(0);
+    for (const sample of samples) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      if (this.buffer !== buffer) return;
+      const tail = sustainTail(data, buffer.sampleRate, sample);
+      if (tail === null) continue;
+      const rendered = this.context.createBuffer(1, tail.length, buffer.sampleRate);
+      rendered.copyToChannel(new Float32Array(tail), 0);
+      this.tails.set(sample.pitch, rendered);
+    }
   }
 
   noteOn(key: number, velocity: number): boolean {
@@ -124,14 +173,42 @@ export class KeySampler {
     source.playbackRate.value = rate;
     const level = this.levelOf(buffer, sample) * (velocity / 127);
     const gain = this.context.createGain();
-    gain.gain.setValueAtTime(0, now);
-    gain.gain.linearRampToValueAtTime(level, now + ATTACK_SECONDS);
-    source.connect(gain).connect(this.context.destination);
+    gain.connect(this.context.destination);
+    const sources = [source];
+    const body = this.context.createGain();
+    source.connect(body).connect(gain);
     source.start(now, start, sample.end - start);
+    const bodyEnd = now + (sample.end - start) / rate;
+
+    body.gain.setValueAtTime(0, now);
+    body.gain.linearRampToValueAtTime(level, now + ATTACK_SECONDS);
+    const tailBuffer = this.tails.get(sample.pitch);
+    const fade = tailBuffer === undefined ? END_FADE_SECONDS : TAIL_CROSSFADE_SECONDS;
+    const fadeFrom = Math.max(now + ATTACK_SECONDS, bodyEnd - fade);
+    body.gain.setValueAtTime(level, fadeFrom);
+    body.gain.linearRampToValueAtTime(0, bodyEnd);
     source.onended = () => {
-      if (this.active.get(key)?.source === source) this.active.delete(key);
+      if (tailBuffer === undefined && this.active.get(key)?.gain === gain) this.active.delete(key);
     };
-    this.active.set(key, { source, gain });
+
+    if (tailBuffer !== undefined) {
+      const tail = this.context.createBufferSource();
+      tail.buffer = tailBuffer;
+      tail.loop = true;
+      tail.playbackRate.value = rate;
+      const tailGain = this.context.createGain();
+      tail.connect(tailGain).connect(gain);
+      tailGain.gain.setValueAtTime(0, fadeFrom);
+      tailGain.gain.linearRampToValueAtTime(level, bodyEnd);
+      tailGain.gain.exponentialRampToValueAtTime(level * DECAY_FLOOR, bodyEnd + HOLD_DECAY_SECONDS);
+      tail.start(fadeFrom);
+      tail.stop(bodyEnd + HOLD_DECAY_SECONDS);
+      tail.onended = () => {
+        if (this.active.get(key)?.gain === gain) this.active.delete(key);
+      };
+      sources.push(tail);
+    }
+    this.active.set(key, { sources, gain });
     return true;
   }
 
@@ -143,12 +220,13 @@ export class KeySampler {
     voice.gain.gain.cancelScheduledValues(now);
     voice.gain.gain.setValueAtTime(voice.gain.gain.value, now);
     voice.gain.gain.linearRampToValueAtTime(0, now + RELEASE_SECONDS);
-    voice.source.stop(now + RELEASE_SECONDS);
+    for (const source of voice.sources) source.stop(now + RELEASE_SECONDS);
     return true;
   }
 
   async dispose(): Promise<void> {
     this.active.clear();
+    this.tails.clear();
     this.buffer = null;
     await this.context.close();
   }
