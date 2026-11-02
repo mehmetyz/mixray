@@ -8,7 +8,12 @@ from pathlib import Path
 
 import pytest
 
-from ingest import DAILY_CLIP_QUOTA, DAILY_ISOLATION_QUOTA, QuotaExceededError
+from ingest import (
+    DAILY_CLIP_QUOTA,
+    DAILY_ISOLATION_QUOTA,
+    QuotaExceededError,
+    cleanup_expired_clips,
+)
 from ingest import check_and_increment_quota as charge
 
 
@@ -24,7 +29,23 @@ def test_each_use_is_counted(cache_root: Path) -> None:
     charge("1.1.1.1", "clips", cache_root)
     charge("1.1.1.1", "clips", cache_root)
     charge("1.1.1.1", "isolations", cache_root)
-    assert _usage(cache_root)["1.1.1.1"] == {"clips": 2, "isolations": 1}
+    assert list(_usage(cache_root).values()) == [{"clips": 2, "isolations": 1}]
+
+
+def test_the_file_never_holds_an_address(cache_root: Path) -> None:
+    charge("1.1.1.1", "clips", cache_root)
+    day = time.strftime("%Y-%m-%d", time.gmtime())
+    assert "1.1.1.1" not in (cache_root / "quotas" / f"{day}.json").read_text(encoding="utf-8")
+
+
+def test_a_day_old_counter_does_not_outlive_the_daily_cleanup(cache_root: Path) -> None:
+    charge("1.1.1.1", "clips", cache_root)
+    day = time.strftime("%Y-%m-%d", time.gmtime())
+    past = cache_root / "quotas" / "2000-01-01.json"
+    past.write_text("{}", encoding="utf-8")
+    cleanup_expired_clips(cache_root)
+    assert not past.exists()
+    assert (cache_root / "quotas" / f"{day}.json").exists()
 
 
 def test_the_default_limits_are_the_documented_cost_guards() -> None:
@@ -40,7 +61,7 @@ def test_the_limit_refuses_the_next_use_and_keeps_the_count(
     charge("1.1.1.1", "clips", cache_root)
     with pytest.raises(QuotaExceededError, match=r"clips limit \(2\)"):
         charge("1.1.1.1", "clips", cache_root)
-    assert _usage(cache_root)["1.1.1.1"]["clips"] == 2
+    assert next(iter(_usage(cache_root).values()))["clips"] == 2
 
 
 def test_clips_and_isolations_have_separate_limits(

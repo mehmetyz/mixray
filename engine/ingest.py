@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import logging
 import math
@@ -34,6 +35,7 @@ RETENTION_SECONDS = 7 * 24 * 60 * 60
 DAILY_CLIP_QUOTA = 25
 DAILY_ISOLATION_QUOTA = 50
 DISABLE_QUOTA_ENV = "MIXRAY_DISABLE_QUOTA"
+QUOTA_KEY_SECRET_ENV = "MIXRAY_API_KEY"
 CLIP_QUOTA_ENV = "MIXRAY_DAILY_CLIP_QUOTA"
 ISOLATION_QUOTA_ENV = "MIXRAY_DAILY_ISOLATION_QUOTA"
 
@@ -282,11 +284,32 @@ def write_job(record: JobRecord, cache_root: Path | None = None) -> JobRecord:
     return record
 
 
+def _quota_day() -> str:
+    return time.strftime("%Y-%m-%d", time.gmtime())
+
+
+def _quota_key(client_ip: str) -> str:
+    """Count by a keyed hash: the file holds no address and days cannot be linked."""
+    secret = os.environ.get(QUOTA_KEY_SECRET_ENV, "").encode("utf-8")
+    message = f"{_quota_day()}:{client_ip}".encode()
+    return hmac.new(secret, message, hashlib.sha256).hexdigest()
+
+
 def _quota_file(cache_root: Path) -> Path:
-    day = time.strftime("%Y-%m-%d", time.gmtime())
     quotas_dir = cache_root / "quotas"
     quotas_dir.mkdir(parents=True, exist_ok=True)
-    return quotas_dir / f"{day}.json"
+    return quotas_dir / f"{_quota_day()}.json"
+
+
+def _remove_past_quotas(cache_root: Path) -> None:
+    """A day's counters are only needed that day."""
+    quotas_dir = cache_root / "quotas"
+    if not quotas_dir.exists():
+        return
+    today = f"{_quota_day()}.json"
+    for path in quotas_dir.iterdir():
+        if path.name != today:
+            path.unlink(missing_ok=True)
 
 
 def _load_quotas(cache_root: Path) -> dict[str, IpQuotaCounter]:
@@ -319,12 +342,13 @@ def check_and_increment_quota(
     clip_limit = int(os.environ.get(CLIP_QUOTA_ENV, str(DAILY_CLIP_QUOTA)))
     isolation_limit = int(os.environ.get(ISOLATION_QUOTA_ENV, str(DAILY_ISOLATION_QUOTA)))
     quotas = _load_quotas(cache_root)
-    counter = quotas.get(client_ip, {"clips": 0, "isolations": 0})
+    key = _quota_key(client_ip)
+    counter = quotas.get(key, {"clips": 0, "isolations": 0})
     limit = clip_limit if kind == "clips" else isolation_limit
     if counter[kind] >= limit:
         raise QuotaExceededError(f"Daily {kind} limit ({limit}) reached for this IP.")
     counter[kind] += 1
-    quotas[client_ip] = counter
+    quotas[key] = counter
     _save_quotas(cache_root, quotas)
 
 
@@ -566,6 +590,16 @@ def _validate_clip_window(
     return round(clip_start, 3), round(resolved_end, 3), duration
 
 
+def _restart_retention(target: Path) -> None:
+    """A clip added again is still in use, so its seven days start over."""
+    meta_path = target / "meta.json"
+    if not meta_path.exists():
+        return
+    meta: dict[str, object] = json.loads(meta_path.read_text(encoding="utf-8"))
+    meta["created_at"] = time.time()
+    meta_path.write_text(json.dumps(meta), encoding="utf-8")
+
+
 def ingest_upload(params: IngestParams, cache_root: Path | None = None) -> JobRecord:
     """Validate, decode, hash, and persist an uploaded audio or video clip."""
     root = cache_root if cache_root is not None else get_cache_root()
@@ -597,6 +631,7 @@ def ingest_upload(params: IngestParams, cache_root: Path | None = None) -> JobRe
         if (target / "trackmap.json").exists():
             existing = read_job(clip_id, root)
             if existing is not None:
+                _restart_retention(target)
                 existing["cached"] = True
                 return existing
 
@@ -800,6 +835,7 @@ def cleanup_expired_clips(
 ) -> int:
     """Delete cached clips and job files older than `max_age_seconds` (default 7 days)."""
     root = cache_root if cache_root is not None else get_cache_root()
+    _remove_past_quotas(root)
     clips_root = root / "clips"
     if not clips_root.exists():
         return 0

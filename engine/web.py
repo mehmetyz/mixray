@@ -263,6 +263,10 @@ def _file_route(reload_volume: Callable[[], None]) -> FileRoute:
         candidate = (root / clean_path).resolve()
         if not candidate.is_relative_to(root):
             raise HTTPException(status_code=400, detail="Invalid file path.")
+        # Only clips are public by their unguessable id. The rest of the cache, such as the daily
+        # quota counters and the job records, is never served.
+        if not candidate.is_relative_to(root / CLIPS_DIRECTORY):
+            raise HTTPException(status_code=404, detail="File not found.")
         trackmap_clip_id = _trackmap_clip_id(clean_path)
         if trackmap_clip_id is not None:
             reload_volume()

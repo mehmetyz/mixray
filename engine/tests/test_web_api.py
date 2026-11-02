@@ -322,6 +322,21 @@ def test_files_cannot_leave_the_cache(client: TestClient, cache_root: Path) -> N
     assert "secret" not in response.text
 
 
+@pytest.mark.parametrize(
+    "path",
+    ["quotas/2026-11-02.json", "jobs/clip.json", "clips/%2e%2e/quotas/2026-11-02.json"],
+)
+def test_only_clips_are_served(client: TestClient, cache_root: Path, path: str) -> None:
+    for directory, name in (("quotas", "2026-11-02.json"), ("jobs", "clip.json")):
+        (cache_root / directory).mkdir(parents=True, exist_ok=True)
+        (cache_root / directory / name).write_text('{"private": true}', encoding="utf-8")
+
+    response = client.get(f"/files/{path}")
+
+    assert response.status_code == 404
+    assert "private" not in response.text
+
+
 def test_a_missing_file_is_404(client: TestClient) -> None:
     assert client.get("/files/clips/absent/mix.mp3").status_code == 404
     assert client.get("/files/clips/absent/trackmap.json").status_code == 404

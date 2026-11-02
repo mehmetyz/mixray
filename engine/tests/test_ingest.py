@@ -283,6 +283,20 @@ def test_a_served_track_keeps_only_the_fields_the_schema_allows(
     assert "frames" not in video["tracks"][0]
 
 
+def test_adding_a_clip_again_restarts_its_seven_days(cache_root: Path) -> None:
+    clip_id = _stored_clip(cache_root)
+    meta_path = clip_dir(clip_id, cache_root) / "meta.json"
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    meta["created_at"] = time.time() - 8 * 24 * 60 * 60
+    meta_path.write_text(json.dumps(meta), encoding="utf-8")
+
+    again = ingest_upload(_upload(tone_wav()), cache_root)
+
+    assert again["cached"] is True
+    cleanup_expired_clips(cache_root)
+    assert clip_dir(clip_id, cache_root).exists()
+
+
 def test_cleanup_deletes_clips_older_than_seven_days_and_keeps_the_rest(cache_root: Path) -> None:
     old_id = ingest_upload(_upload(tone_wav(frequency=220.0)), cache_root)["id"]
     new_id = ingest_upload(_upload(tone_wav(frequency=330.0)), cache_root)["id"]
