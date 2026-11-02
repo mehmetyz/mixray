@@ -218,8 +218,7 @@ same file.
 
 - [ ] **T6.1: `scripts/precompute_demos.py`** → static outputs for both demos (several prompts each) in `apps/web/public/demos/`.
 - [x] **T6.2: Domain** dropped: https://mixray.vercel.app is the address, and no other domain is owned or allowed.
-  Deferred to the end, not dropped (Oct 30). `https://mixray.vercel.app` is enough and nothing is
-  blocked on it, so the domain is a last-day nicety rather than a dependency. The Modal endpoint is
+  The Modal endpoint is
   already final. If a domain is bought, the submission URL has to be updated everywhere it was
   already given.
 - [ ] **T6.3: README final.** Meta models, what was built, how to run, and the isolation latency.
