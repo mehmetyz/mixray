@@ -122,6 +122,7 @@ function StepRow({ step, variant }: StepRowProps) {
   }
 
   if (variant === "mobile") {
+    if (step.id === "add") return null;
     const base =
       "px-3 py-1.5 rounded-full text-xs font-semibold shrink-0 transition inline-flex items-center gap-1.5 select-none";
     if (step.isCurrent) {
@@ -199,7 +200,7 @@ export function StepNav({ nav, variant = "sidebar" }: StepNavProps) {
 
   if (variant === "mobile") {
     return (
-      <nav aria-label="Workspaces" className="flex items-center gap-1.5 overflow-x-auto sm:hidden">
+      <nav aria-label="Workspaces" className="flex items-center justify-between gap-1 overflow-x-auto sm:hidden">
         {steps.map((step) => (
           <StepRow key={step.id} step={step} variant="mobile" />
         ))}

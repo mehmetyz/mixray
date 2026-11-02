@@ -5,11 +5,12 @@ import { usePathname } from "next/navigation";
 import type { MouseEvent, ReactNode } from "react";
 import type { StemName } from "@/lib/audio/player";
 import type { ClipStepId, NavState } from "@/lib/steps";
+import type { Isolation } from "@/lib/trackmap/trackmap.generated";
 import { barAtTime, formatBarBeat, formatClockSeconds, methodShortLabel } from "@/lib/studio/format";
 import { findDemoClip } from "@/lib/demos";
 import { useProject } from "@/lib/projects/storage";
 import { AppHeader } from "./AppHeader";
-import { DemoCredit } from "./DemoBadge";
+import { DemoBadge, DemoCredit } from "./DemoBadge";
 import { useStudio, type BarLoop } from "./StudioContext";
 
 type TimelineRulerProps = {
@@ -155,6 +156,39 @@ export function AddShell({ children, className = "max-w-6xl" }: AddShellProps) {
 }
 
 /** Persistent Quiet DAW shell for `/c/[id]/*` with fixed bottom transport and Project Tracks panel. */
+type SoundButtonProps = {
+  isolation: Isolation;
+  isSelected: boolean;
+  onSelect: () => void;
+  variant: "row" | "chip";
+};
+
+function SoundButton({ isolation, isSelected, onSelect, variant }: SoundButtonProps) {
+  const look =
+    variant === "row"
+      ? `flex w-full items-center justify-between rounded-card border px-2.5 py-2 text-left text-sm ${
+          isSelected
+            ? "border-control bg-surface-2 font-medium text-text"
+            : "border-transparent text-text-2 hover:bg-surface-2/60 hover:text-text"
+        }`
+      : `flex shrink-0 items-center gap-2 rounded-full border px-3 py-1.5 text-xs ${
+          isSelected
+            ? "border-control bg-surface-2 font-medium text-text"
+            : "border-line-2 text-text-2 hover:text-text"
+        }`;
+  return (
+    <button type="button" aria-pressed={isSelected} onClick={onSelect} className={`cursor-pointer transition ${look}`}>
+      <span className="flex min-w-0 items-center gap-2">
+        <span className={`h-2 w-2 shrink-0 rounded-full ${isSelected ? "bg-accent" : "bg-inactive"}`} />
+        <span className="truncate">{isolation.label}</span>
+      </span>
+      <span className={`shrink-0 text-muted ${variant === "row" ? "ml-2 text-xs" : "text-[11px]"}`}>
+        {methodShortLabel(isolation.method)}
+      </span>
+    </button>
+  );
+}
+
 export function StudioShell({ children }: StudioShellProps) {
   const pathname = usePathname();
   const {
@@ -194,9 +228,38 @@ export function StudioShell({ children }: StudioShellProps) {
     <div className="flex min-h-dvh flex-col bg-bg text-text lg:h-dvh lg:overflow-hidden">
       <AppHeader nav={nav} />
 
+      {/* Narrower screens: the clip and its sounds on one scrolling strip instead of a sidebar. */}
+      <div className="flex shrink-0 items-center gap-3 overflow-x-auto border-b border-line bg-surface/70 px-4 py-2.5 xl:hidden">
+        <div className="min-w-0 shrink-0">
+          <p className="max-w-48 truncate text-sm font-semibold text-text">{trackMap.source.title}</p>
+          <p className="mono-num text-[11px] text-muted">
+            {Math.round(trackMap.tempo.bpm)} BPM, {trackMap.key.tonic} {trackMap.key.mode}
+          </p>
+        </div>
+        {demo !== undefined ? <DemoBadge origin={demo.origin} /> : null}
+        <div className="flex items-center gap-1.5 border-l border-line pl-3">
+          {trackMap.isolations.length > 0 ? (
+            trackMap.isolations.map((iso) => (
+              <SoundButton
+                key={iso.id}
+                isolation={iso}
+                isSelected={iso.id === selectedIsolationId}
+                onSelect={() => {
+                  selectIsolation(iso.id);
+                  setMonitor("sound");
+                }}
+                variant="chip"
+              />
+            ))
+          ) : (
+            <span className="whitespace-nowrap text-xs text-muted">No sound picked yet.</span>
+          )}
+        </div>
+      </div>
+
       <div className="flex min-h-0 flex-1 flex-col lg:flex-row lg:overflow-hidden">
         {/* Project & Audio Tracks (Stems) Sidebar */}
-        <aside className="hidden w-60 shrink-0 flex-col justify-between border-r border-line bg-surface/70 backdrop-blur-xs lg:flex">
+        <aside className="hidden w-60 shrink-0 flex-col justify-between border-r border-line bg-surface/70 backdrop-blur-xs xl:flex">
           <div className="space-y-5 overflow-y-auto p-3">
             <div className="px-1 pt-1">
               <p className="truncate text-sm font-semibold text-text" title={trackMap.source.title}>
@@ -211,35 +274,18 @@ export function StudioShell({ children }: StudioShellProps) {
             <div className="space-y-1">
               <p className="px-1 pb-1 text-xs font-medium text-muted">Sounds</p>
               {trackMap.isolations.length > 0 ? (
-                trackMap.isolations.map((iso) => {
-                  const isSelected = iso.id === selectedIsolationId;
-                  return (
-                    <button
-                      key={iso.id}
-                      type="button"
-                      aria-pressed={isSelected}
-                      onClick={() => {
-                        selectIsolation(iso.id);
-                        setMonitor("sound");
-                      }}
-                      className={`flex w-full cursor-pointer items-center justify-between rounded-card border px-2.5 py-2 text-left text-sm transition ${
-                        isSelected
-                          ? "border-control bg-surface-2 font-medium text-text"
-                          : "border-transparent text-text-2 hover:bg-surface-2/60 hover:text-text"
-                      }`}
-                    >
-                      <span className="flex min-w-0 items-center gap-2">
-                        <span
-                          className={`h-2 w-2 shrink-0 rounded-full ${isSelected ? "bg-accent" : "bg-inactive"}`}
-                        />
-                        <span className="truncate">{iso.label}</span>
-                      </span>
-                      <span className="ml-2 shrink-0 text-xs text-muted">
-                        {methodShortLabel(iso.method)}
-                      </span>
-                    </button>
-                  );
-                })
+                trackMap.isolations.map((iso) => (
+                  <SoundButton
+                    key={iso.id}
+                    isolation={iso}
+                    isSelected={iso.id === selectedIsolationId}
+                    onSelect={() => {
+                      selectIsolation(iso.id);
+                      setMonitor("sound");
+                    }}
+                    variant="row"
+                  />
+                ))
               ) : (
                 <p className="px-1 text-sm text-muted">No sound picked yet.</p>
               )}
@@ -299,8 +345,9 @@ export function StudioShell({ children }: StudioShellProps) {
                 key={opt.id}
                 type="button"
                 aria-pressed={active}
+                disabled={trackMap.isolations.length === 0 && opt.id !== "mix"}
                 onClick={() => setMonitor(opt.id)}
-                className={`cursor-pointer rounded-full px-4 py-1 text-xs sm:text-sm font-medium transition ${
+                className={`cursor-pointer rounded-full px-4 py-1 text-xs sm:text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-40 ${
                   active
                     ? "bg-text font-semibold text-bg shadow-xs"
                     : "text-text-2 hover:text-text"
@@ -312,7 +359,7 @@ export function StudioShell({ children }: StudioShellProps) {
           })}
         </div>
 
-        <div className="hidden items-center gap-3.5 md:flex">
+        <div className="flex items-center gap-3.5">
           <label className="flex items-center gap-2 text-xs text-text-2">
             <span>Rate</span>
             <input

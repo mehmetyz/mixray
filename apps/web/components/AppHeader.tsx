@@ -12,35 +12,41 @@ export function AppHeader({ nav }: AppHeaderProps) {
   const isClipView = nav.current !== "add";
 
   return (
-    <header className="flex h-16 shrink-0 items-center justify-between gap-6 border-b border-line bg-surface/90 px-6 backdrop-blur-md sm:px-8">
-      <div className="flex min-w-0 items-center gap-4">
-        <Link
-          href="/"
-          className="flex shrink-0 items-center transition hover:opacity-85"
-          aria-label="Mixray Home"
-        >
-          <MixrayLogo size="md" />
-        </Link>
-        {isClipView ? (
+    <div className="shrink-0 border-b border-line bg-surface/90 backdrop-blur-md">
+      <header className="flex h-16 items-center justify-between gap-6 px-4 sm:px-8">
+        <div className="flex min-w-0 items-center gap-4">
           <Link
             href="/"
-            className="hidden sm:inline-flex items-center gap-1.5 text-xs font-medium text-muted hover:text-text transition border-l border-line pl-4"
+            className="flex shrink-0 items-center transition hover:opacity-85"
+            aria-label="Mixray Home"
           >
-            All clips
+            <MixrayLogo size="md" />
           </Link>
-        ) : null}
-      </div>
+          {isClipView ? (
+            <Link
+              href="/"
+              className="hidden sm:inline-flex items-center gap-1.5 text-xs font-medium text-muted hover:text-text transition border-l border-line pl-4"
+            >
+              All clips
+            </Link>
+          ) : null}
+        </div>
 
+        {isClipView ? (
+          <div className="hidden sm:flex items-center justify-center">
+            <StepNav nav={nav} variant="header" />
+          </div>
+        ) : null}
+
+        <ThemeToggle />
+      </header>
+
+      {/* On a phone the steps get their own row, so the logo never sits on top of them. */}
       {isClipView ? (
-        <div className="hidden sm:flex items-center justify-center">
-          <StepNav nav={nav} variant="header" />
+        <div className="px-4 pb-2.5 sm:hidden">
+          <StepNav nav={nav} variant="mobile" />
         </div>
       ) : null}
-
-      <div className="flex items-center gap-3">
-        {isClipView ? <StepNav nav={nav} variant="mobile" /> : null}
-        <ThemeToggle />
-      </div>
-    </header>
+    </div>
   );
 }

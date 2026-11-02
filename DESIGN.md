@@ -74,7 +74,7 @@ Load clean geometric sans + `JetBrains_Mono` via `next/font/google` (with system
 Desktop-first DAW frame (`100dvh` on `lg+`, scrollable stacked panels on mobile):
 
 1. **Header:** logo, the four steps, theme toggle.
-2. **Left sidebar (`240px`):** clip title with tempo and key, the clip's sounds with the method that produced each, and `New clip`.
+2. **Left sidebar (`240px`, from 1280 px wide):** clip title with tempo and key, the clip's sounds with the method that produced each, and `New clip`. Narrower screens get the same title and sounds as one scrolling strip under the header, so tablets keep the room for the center; on a phone the steps also move to their own row under the logo, and the transport wraps instead of dropping rate and loop.
 3. **Center stage:** bar and time ruler, then the lanes of the current step.
 4. **Right inspector (`320px`):** only the current step's controls and results. Export has none.
 5. **Transport (bottom, kept across steps so audio never stops):** return to start, play, position, `Sound | Rest | Full mix`, rate, and `Loop`, which loops four bars from the playhead.
@@ -97,12 +97,12 @@ One column, one job.
 
 ### 3.2 Isolate (`/c/[id]/pick`)
 
-- **Center:** the video when there is one, where dragging draws an area and Muse Spark names it. Then one lane each for the sound, the rest and the full mix, with a solo button. Nothing is drawn before a sound exists.
+- **Center:** the video when there is one, where dragging draws an area and Muse Spark names it; under it a `Track` switch when the selected sound was chosen by area, which the first time asks SAM 3.1 to follow that area. Then one lane each for the sound, the rest and the full mix, with a solo button. Nothing is drawn before a sound exists.
 - **Right:** text field, Muse Spark's suggestions, the current stage with seconds elapsed, the Demucs comparison when a matching stem exists, and `Continue to Analyze`.
 
 ### 3.3 Analyze (`/c/[id]/xray`)
 
-- **Center:** a `Track` switch when the sound was chosen by area. Switching it on shows the video, small enough to keep the notes on screen, and the first time asks SAM 3.1 to follow the area. Then tempo, key, range and first note; a chord lane where a click seeks; the note roll.
+- **Center:** the video, small enough to keep the notes on screen, with the same `Track` switch as Isolate. Then tempo, key, range and first note; a chord lane where a click seeks; the note roll.
 - **Right:** Muse Spark's summary, a line saying readings are automatic and may be wrong, the sound recipe, `Practice on keys`.
 
 ### 3.4 Practice (`/c/[id]/learn`)
