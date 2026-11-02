@@ -11,7 +11,6 @@ The mask payload is base85 in a variant the docs do not name, so decoding uses M
 import asyncio
 import json
 import logging
-import re
 import subprocess
 from collections.abc import AsyncIterator, Iterable, Iterator
 from pathlib import Path
@@ -23,12 +22,10 @@ from meta_sam_parser import (
     FramePrompt,
     PromptBox,
     PromptObject,
-    SegmentationMask,
     SegmentationMaskBounds,
     SegmentationMaskRecord,
     VideoSegmentationResult,
     build_object_prompt,
-    decode_mask_to_svg_path,
     parse_responses_stream,
     video_segmentation_format,
 )
@@ -49,13 +46,13 @@ PROPAGATION = "forward"
 # A gap longer than this between answered frames ends a visible range rather than being bridged.
 VISIBLE_GAP_SECONDS = 0.5
 # Measured on a 30 s clip: 640 px at 5 fps tracks in 45 s where 1280 px at 10 fps took over 400 s,
-# nearly all of it decoding masks into polygons, with the object's bounds unchanged.
+# nearly all of it decoding masks into polygons. The UI draws a box, so masks are not decoded.
 MASK_FPS = 5
 MASK_WIDTH = 640
 
 
 class FramePolygons(TypedDict):
-    """The outlines of one tracked object on one frame, as SVG path data."""
+    """The box of one tracked object on one frame, as SVG path data."""
 
     frame: int
     time: float
@@ -180,51 +177,25 @@ def visible_ranges(times: list[float], gap: float = VISIBLE_GAP_SECONDS) -> list
     return [[round(start, 3), round(end, 3)] for start, end in spans]
 
 
-PATH_COMMAND = re.compile(r"([ML])(-?[\d.]+)\s+(-?[\d.]+)")
-
-
-def to_frame_space(
-    path: str,
-    mask: SegmentationMask,
-    bounds: SegmentationMaskBounds,
-    video_scale: tuple[float, float],
-) -> str:
-    """Rewrite a mask-local SVG path in source-frame pixels.
-
-    The raster is box-local: its width and height are its own, not the frame's, and `bounds` says
-    which part of the frame it covers. Without this the UI would draw every outline bunched into
-    the top-left corner, at the size of the raster rather than of the object. `video_scale` then
-    undoes the downscale of the video that was sent.
-    """
-    scale_x = (bounds.right - bounds.left) / mask.width if mask.width else 0.0
-    scale_y = (bounds.bottom - bounds.top) / mask.height if mask.height else 0.0
-
-    def move(match: re.Match[str]) -> str:
-        command, raw_x, raw_y = match.group(1), float(match.group(2)), float(match.group(3))
-        x = (bounds.left + raw_x * scale_x) * video_scale[0]
-        y = (bounds.top + raw_y * scale_y) * video_scale[1]
-        return f"{command}{x:.1f} {y:.1f}"
-
-    rewritten, count = PATH_COMMAND.subn(move, path)
-    if count == 0:
-        raise RuntimeError("mask path had no move or line commands to place")
-    return rewritten
+def box_path(bounds: SegmentationMaskBounds, video_scale: tuple[float, float]) -> str:
+    """The object's box in source-frame pixels; `video_scale` undoes the downscale of the video."""
+    left, right = bounds.left * video_scale[0], bounds.right * video_scale[0]
+    top, bottom = bounds.top * video_scale[1], bounds.bottom * video_scale[1]
+    corners = [(left, top), (right, top), (right, bottom), (left, bottom)]
+    return "M" + "L".join(f"{x:.1f} {y:.1f}" for x, y in corners) + "Z"
 
 
 def build_track(
     result: VideoSegmentationResult, track: TrackResult, video_scale: tuple[float, float]
 ) -> TrackResult:
-    """Add the polygons per frame and the spans the object is on screen to a named track."""
+    """Add the box per frame and the spans the object is on screen to a named track."""
     by_frame: dict[int, list[str]] = {}
     for record in _mask_records(result):
         # `frame` is a FrameReference, and an image result carries none at all.
         if record.frame is None:
             continue
         index = record.frame.frame_index * (VIDEO_FPS // MASK_FPS)
-        placed = to_frame_space(
-            decode_mask_to_svg_path(record.mask), record.mask, record.bounds, video_scale
-        )
-        by_frame.setdefault(index, []).append(placed)
+        by_frame.setdefault(index, []).append(box_path(record.bounds, video_scale))
 
     frames: list[FramePolygons] = []
     for frame in sorted(by_frame):
