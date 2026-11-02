@@ -121,6 +121,16 @@ Decisions and current state. The plan is in `SPEC.md`, the UI in `DESIGN.md`, th
   now drive playback, bars, loops, tempo, what is heard, part, sound, screen and octave. Run in a browser with a
   fake microphone and fake MIDI input, spoken phrases going through Muse Voice Transcribe. Not yet run with a
   real microphone or the Launchkey, whose pads must be in Drum mode for the default to match.
+- Done (Nov 1): `/` lists the clips this browser added (localStorage only, no database), and Add opens the studio
+  before the separation ends; Isolate resumes its progress after a reload. Verified in a browser.
+- Done (Nov 2): the "Synth lead, Piano, Bass, Drums" chips were an ingest placeholder left whenever Muse
+  Spark refused to hear the clip, which happened on three of four uploads. Chips now come only from Muse:
+  video clips are described from the real video, empty replies are retried, one chip is enough (requiring
+  three produced "fallback dummy"), and one instrument under several names becomes one chip. Deployed and
+  checked on five demo clips.
+- Done (Nov 2): steam over a café piano passed the solo test and was served as piano. The test now also
+  weighs high frequencies; that clip goes to the Demucs piano stem. The web retries dropped status polls
+  instead of failing a long separation with "Failed to fetch", and reads a clip's state from the engine.
 - Open: whether vocals, bass and guitar should default to Demucs. SAM Audio does not beat it on notes
   and returned only empty draws on a real guitar video; `AGENTS.md` and `SPEC.md` still call Demucs a
   fallback. Tempo and key accuracy; a full isolation takes up to about 5 minutes; drum hits to pads are
