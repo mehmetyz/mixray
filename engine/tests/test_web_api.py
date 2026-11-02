@@ -219,6 +219,55 @@ def test_a_sound_already_separated_is_served_without_a_worker_or_a_charge(
     assert workers.isolations == []
 
 
+def _stored_sound(clip_id: str, prompt: str, cache_root: Path) -> str:
+    iso_id = isolation_id_for(clip_id, prompt)
+    iso_dir = clip_dir(clip_id, cache_root) / "isolations" / iso_id
+    iso_dir.mkdir(parents=True)
+    record = {"id": iso_id, "prompt": prompt}
+    (iso_dir / "isolation.json").write_text(json.dumps(record), encoding="utf-8")
+    return iso_id
+
+
+def test_another_name_for_an_instrument_answers_with_the_sound_it_has(
+    client: TestClient, workers: Workers, cache_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    clip_id = _upload_clip(client)
+    guitar = _stored_sound(clip_id, "guitar", cache_root)
+    monkeypatch.setenv("MIXRAY_DAILY_ISOLATION_QUOTA", "0")
+
+    response = client.post(
+        f"/jobs/{clip_id}/isolate", headers=AUTH, json={"prompt": "electric guitar"}
+    )
+
+    assert response.status_code == 200
+    assert response.json()["isolation_id"] == guitar
+    assert response.json()["cached"] is True
+    assert workers.isolations == []
+
+
+def test_a_different_instrument_is_still_separated(
+    client: TestClient, workers: Workers, cache_root: Path
+) -> None:
+    clip_id = _upload_clip(client)
+    _stored_sound(clip_id, "guitar", cache_root)
+
+    client.post(f"/jobs/{clip_id}/isolate", headers=AUTH, json={"prompt": "piano"})
+
+    assert [isolation[2] for isolation in workers.isolations] == ["piano"]
+
+
+def test_a_clip_lists_one_sound_per_instrument(client: TestClient, cache_root: Path) -> None:
+    clip_id = _upload_clip(client)
+    for prompt in ("guitar", "electric guitar", "piano"):
+        _stored_sound(clip_id, prompt, cache_root)
+
+    served = client.get(f"/files/clips/{clip_id}/trackmap.json", headers=AUTH).json()
+
+    prompts = sorted(isolation["prompt"] for isolation in served["isolations"])
+    assert len(prompts) == 2
+    assert "piano" in prompts
+
+
 def test_the_isolation_quota_stops_the_worker(
     client: TestClient, workers: Workers, monkeypatch: pytest.MonkeyPatch
 ) -> None:

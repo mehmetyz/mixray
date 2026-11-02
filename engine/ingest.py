@@ -763,6 +763,22 @@ def build_served_trackmap(clip_id: str, cache_root: Path | None = None) -> dict[
     return trackmap
 
 
+def stored_isolation_prompts(clip_id: str, cache_root: Path) -> list[tuple[str, str]]:
+    """The id and prompt of each current isolation, in the order they are served."""
+    isolations_dir = clip_dir(clip_id, cache_root) / "isolations"
+    if not isolations_dir.exists():
+        return []
+    found: list[tuple[str, str]] = []
+    for isolation_dir in sorted(isolations_dir.iterdir(), key=lambda item: item.name):
+        record = _read_optional_json_object(isolation_dir / "isolation.json")
+        if record is None:
+            continue
+        prompt = str(record.get("prompt", ""))
+        if isolation_id_for(clip_id, prompt) == isolation_dir.name:
+            found.append((isolation_dir.name, prompt))
+    return found
+
+
 def _served_isolations(clip_id: str, directory: Path) -> list[dict[str, object]]:
     """Assemble each current isolation from its record and producer-owned sidecars."""
     isolations_dir = directory / "isolations"

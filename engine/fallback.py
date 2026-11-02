@@ -18,6 +18,7 @@ import math
 import re
 import subprocess
 import sys
+import time
 import wave
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, TypedDict
@@ -25,7 +26,14 @@ from typing import TYPE_CHECKING, Literal, TypedDict
 import modal
 
 from images import demucs_image
-from ingest import IsolationEntry, IsolationMethod, clip_dir, encode_mp3, get_cache_root
+from ingest import (
+    IsolationEntry,
+    IsolationMethod,
+    clip_dir,
+    encode_mp3,
+    get_cache_root,
+    stored_isolation_prompts,
+)
 from isolate import SoundNotFoundError, cached_isolation, persist_isolation
 
 if TYPE_CHECKING:
@@ -60,6 +68,9 @@ SAM_CANDIDATE_STEMS: frozenset[StemName] = frozenset({"vocals", "bass", "guitar"
 # Sounds whose SAM Audio output is used as a mask on the mix instead of as audio. Only the piano was
 # compared; the others keep the output their note scores were measured on.
 MIX_MASKED_STEMS: frozenset[StemName] = frozenset({"piano"})
+# A keyboard has no stem of its own, and `other` is whatever the five named stems left behind, so
+# SAM Audio is asked for it by name; if all its draws come back empty, Demucs `other` still answers.
+SAM_CANDIDATE_WORDS = frozenset({"keys", "keyboard", "keyboards"})
 NOTE_STEMS: frozenset[StemName] = frozenset({"vocals", "bass", "guitar", "piano"})
 # Speech reads as vocals, but SAM Audio measured -14 dB on it where the Demucs stem held +1.7 dB.
 SPEECH_WORDS = frozenset({"speech", "speaking", "speak", "talking", "talk", "spoken", "narration"})
@@ -111,6 +122,7 @@ PROMPT_STEM_KEYWORDS: StemKeywordMatches = (
                 "accordion",
                 "keys",
                 "keyboard",
+                "keyboards",
                 "string",
                 "strings",
                 "cello",
@@ -168,7 +180,10 @@ def route_for_prompt(prompt: str) -> IsolationRoute:
     stem = stem_for_prompt(prompt)
     if stem is None:
         return "sam_event"
-    if stem in SAM_CANDIDATE_STEMS and not _is_speech(prompt):
+    named_keyboard = bool(
+        frozenset(PROMPT_TOKEN_PATTERN.findall(prompt.lower())) & SAM_CANDIDATE_WORDS
+    )
+    if (stem in SAM_CANDIDATE_STEMS or named_keyboard) and not _is_speech(prompt):
         return "sam_candidates"
     return "demucs"
 
@@ -181,6 +196,46 @@ def masks_onto_mix(prompt: str) -> bool:
 def notes_from_demucs(prompt: str) -> bool:
     """Whether this sound's notes are read from its Demucs stem rather than the isolation."""
     return stem_for_prompt(prompt) in MIX_MASKED_STEMS
+
+
+def instrument_key(prompt: str) -> str:
+    """Name the instrument a prompt asks for, so "guitar" and "electric guitar" are one sound."""
+    words = frozenset(PROMPT_TOKEN_PATTERN.findall(prompt.lower()))
+    stem = stem_for_prompt(prompt)
+    if stem is not None and stem != "other":
+        return "speech" if _is_speech(prompt) else stem
+    if words & SAM_CANDIDATE_WORDS:
+        return "keyboard"
+    return " ".join(sorted(words))
+
+
+def same_instrument_isolation(clip_id: str, prompt: str, cache_root: Path) -> str | None:
+    """The clip's existing sound for this instrument, which answers at once and costs nothing."""
+    wanted = instrument_key(prompt)
+    for iso_id, stored_prompt in stored_isolation_prompts(clip_id, cache_root):
+        if instrument_key(stored_prompt) == wanted:
+            return iso_id
+    return None
+
+
+def keep_one_per_instrument(isolations: list[object]) -> list[object]:
+    """Serve the first sound of each instrument, the same one `same_instrument_isolation` finds."""
+    seen: set[str] = set()
+    kept: list[object] = []
+    for isolation in isolations:
+        key = (
+            instrument_key(str(isolation.get("prompt", ""))) if isinstance(isolation, dict) else ""
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        kept.append(isolation)
+    return kept
+
+
+def has_stems(clip_id: str, cache_root: Path | None = None) -> bool:
+    root = cache_root if cache_root is not None else get_cache_root()
+    return (clip_dir(clip_id, root) / "fallback_stems.json").exists()
 
 
 def prompt_has_notes(prompt: str) -> bool:
@@ -381,7 +436,9 @@ def run_routed_isolation(  # noqa: PLR0913
     if cached is not None:
         return cached
 
+    started = time.perf_counter()
     run_fallback(clip_id, root)
+    LOGGER.info("stems ready for %s (%s) in %.1fs", clip_id, prompt, time.perf_counter() - started)
     sample_rate, waveforms = _stem_waveforms(clip_id, root)
     mix_rate, mixture = _read_mono(clip_dir(clip_id, root) / "mix.wav")
     method: IsolationMethod = "demucs"

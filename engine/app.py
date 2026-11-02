@@ -10,10 +10,12 @@ import modal
 
 from analyze import apply_analysis
 from fallback import (
+    has_stems,
     masks_onto_mix,
     route_for_prompt,
     run_fallback,
     run_routed_isolation,
+    same_instrument_isolation,
     stem_for_prompt,
 )
 from images import analyze_image, basic_pitch_image, demucs_image, sam_audio_image, web_image
@@ -64,6 +66,8 @@ SUGGEST_TIMEOUT_SECONDS = 300
 SUMMARY_TIMEOUT_SECONDS = 120
 CLEANUP_TIMEOUT_SECONDS = 300
 MAX_ISOLATE_CONTAINERS = 2
+# Long enough to outlast the Demucs check it starts beside; at most about $0.07 of idle A100.
+ISOLATE_SCALEDOWN_SECONDS = 120
 
 CACHE_VOLUME = modal.Volume.from_name("mixray-cache", create_if_missing=True)
 API_SECRET = modal.Secret.from_name("mixray-secrets")
@@ -95,9 +99,7 @@ def _sound_not_found_job(clip_id: str, iso_id: str, prompt: str) -> JobRecord:
     timeout=ISOLATE_TIMEOUT_SECONDS,
     max_containers=MAX_ISOLATE_CONTAINERS,
     enable_memory_snapshot=True,
-    # Alpha at Modal. Against the CPU snapshot on one clip: about 3x faster once the first starts
-    # after a deploy are past (13 s against 36 s), with the same draw time and Judge scores.
-    experimental_options={"enable_gpu_snapshot": True},
+    scaledown_window=ISOLATE_SCALEDOWN_SECONDS,
 )
 class IsolationWorker:
     """Keep SAM Audio and its Judge ranker resident: loading costs far more than separating."""
@@ -107,21 +109,26 @@ class IsolationWorker:
     ranker: Ranker
 
     @modal.enter(snap=True)
-    def load_model_on_gpu(self) -> None:
-        """Load the weights onto the GPU so Modal captures them in the snapshot."""
+    def load_model_on_cpu(self) -> None:
+        """Load CPU weights so Modal can capture the expensive initialization."""
         os.environ["HF_HOME"] = f"{WEIGHTS_PATH}/huggingface"
 
         from sam_audio import SAMAudio, SAMAudioProcessor
         from sam_audio.model.config import JudgeRankerConfig
         from sam_audio.ranking import create_ranker
 
-        model = SAMAudio.from_pretrained(DEFAULT_MODEL_ID, **BUILT_IN_RANKERS_OFF)
-        self.model = model.eval().cuda()
+        self.model = SAMAudio.from_pretrained(DEFAULT_MODEL_ID, **BUILT_IN_RANKERS_OFF)
         self.processor = SAMAudioProcessor.from_pretrained(DEFAULT_MODEL_ID)
         ranker = create_ranker(JudgeRankerConfig())
         if ranker is None:
             raise RuntimeError("SAM Audio Judge ranker could not be created")
-        self.ranker = ranker.eval().cuda()
+        self.ranker = ranker
+
+    @modal.enter(snap=False)
+    def move_model_to_gpu(self) -> None:
+        """Transfer weights after restore because GPU state is not part of the memory snapshot."""
+        self.model = self.model.eval().cuda()
+        self.ranker = self.ranker.eval().cuda()
 
     def _queue_follow_up(self, clip_id: str, iso_id: str, prompt: str) -> None:
         """Queue optional post-isolation work after a successful isolation."""
@@ -141,6 +148,10 @@ class IsolationWorker:
                 fallback_worker.spawn(clip_id)
             except Exception:
                 LOGGER.exception("could not queue fallback for clip=%s", clip_id)
+
+    @modal.method()
+    def warm(self) -> None:
+        """Start a container and do nothing, so the model is loaded when the sound arrives."""
 
     @modal.method()
     def isolate(self, clip_id: str, iso_id: str, prompt: str, label: str) -> None:
@@ -211,6 +222,11 @@ def analyze_worker(clip_id: str) -> None:
         except Exception:
             # The clip remains usable without chips if Muse is unavailable; the prompt still works.
             LOGGER.exception("could not queue suggestions for clip=%s", clip_id)
+        try:
+            # Done before anyone picks a sound, so choosing one does not wait for Demucs.
+            fallback_worker.spawn(clip_id)
+        except Exception:
+            LOGGER.exception("could not queue stems for clip=%s", clip_id)
         apply_analysis(clip_id)
     except Exception:
         # Failure only degrades harmony view; the playable, isolatable clip never blocks.
@@ -404,9 +420,24 @@ def selection_worker(clip_id: str, bounds: RegionBounds, frame: int) -> None:
     CACHE_VOLUME.reload()
     try:
         track = name_selection(clip_id, bounds, frame, root)
-        iso_id = isolation_id_for(clip_id, track["prompt"])
+        existing = same_instrument_isolation(clip_id, track["prompt"], root)
+        iso_id = existing or isolation_id_for(clip_id, track["prompt"])
         track["isolation_id"] = iso_id
         save_track(clip_dir(clip_id, root), track)
+        if existing is not None:
+            write_job(
+                {
+                    "id": clip_id,
+                    "status": "done",
+                    "stage": "done",
+                    "trackmap_url": f"/files/clips/{clip_id}/trackmap.json",
+                    "isolation_id": iso_id,
+                    "cached": True,
+                    "error": None,
+                },
+                root,
+            )
+            return
         write_job(
             {
                 "id": clip_id,
@@ -466,6 +497,10 @@ def spawn_isolation(clip_id: str, iso_id: str, prompt: str, label: str) -> None:
     if route_for_prompt(prompt) == "sam_event":
         IsolationWorker().isolate.spawn(clip_id, iso_id, prompt, label)
         return
+    # The Demucs check still decides whether SAM Audio runs: an absent sound and a solo recording
+    # are answered from the stems. The GPU only starts loading beside it, instead of after it.
+    if route_for_prompt(prompt) == "sam_candidates" and not has_stems(clip_id):
+        IsolationWorker().warm.spawn()
     demucs_isolation_worker.spawn(clip_id, iso_id, prompt, label)
 
 

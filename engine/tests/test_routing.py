@@ -9,6 +9,8 @@ from fallback import (
     SOLO_MIN_TOP_SHARE,
     StemName,
     _passes_solo_shares,
+    instrument_key,
+    keep_one_per_instrument,
     prompt_has_notes,
     route_for_prompt,
     stem_for_prompt,
@@ -55,6 +57,13 @@ def test_a_musical_horn_is_not_a_car_horn(prompt: str) -> None:
 @pytest.mark.parametrize("prompt", ["vocals", "electric bass", "guitar"])
 def test_vocals_bass_and_guitar_go_to_sam_audio_with_ranked_draws(prompt: str) -> None:
     assert route_for_prompt(prompt) == "sam_candidates"
+
+
+@pytest.mark.parametrize("prompt", ["electronic keyboard", "keyboards", "keys"])
+def test_a_keyboard_goes_to_sam_audio_but_claims_no_notes(prompt: str) -> None:
+    assert route_for_prompt(prompt) == "sam_candidates"
+    assert stem_for_prompt(prompt) == "other"
+    assert not prompt_has_notes(prompt)
 
 
 @pytest.mark.parametrize("prompt", ["drums", "organ", "strings", "synth pad"])
@@ -123,3 +132,43 @@ def test_share_bars_are_the_measured_ones() -> None:
 
 def test_silence_is_not_a_solo() -> None:
     assert not _passes_solo_shares(_energies())
+
+
+@pytest.mark.parametrize(
+    ("first", "second"),
+    [
+        ("guitar", "electric guitar"),
+        ("acoustic guitar", "lead guitar"),
+        ("piano", "upright piano"),
+        ("digital piano", "grand piano"),
+        ("vocals", "female lead voice"),
+        ("keys", "electronic keyboard"),
+        ("synth lead", "lead synth"),
+    ],
+)
+def test_two_names_for_one_instrument_are_one_sound(first: str, second: str) -> None:
+    assert instrument_key(first) == instrument_key(second)
+
+
+@pytest.mark.parametrize(
+    ("first", "second"),
+    [
+        ("guitar", "piano"),
+        ("bass", "guitar"),
+        ("vocals", "speech"),
+        ("piano", "electronic keyboard"),
+        ("organ", "strings"),
+        ("dog", "siren"),
+    ],
+)
+def test_different_instruments_stay_apart(first: str, second: str) -> None:
+    assert instrument_key(first) != instrument_key(second)
+
+
+def test_only_the_first_sound_of_an_instrument_is_served() -> None:
+    sounds: list[object] = [
+        {"id": "a", "prompt": "upright piano"},
+        {"id": "b", "prompt": "vocals"},
+        {"id": "c", "prompt": "piano"},
+    ]
+    assert keep_one_per_instrument(sounds) == [sounds[0], sounds[1]]

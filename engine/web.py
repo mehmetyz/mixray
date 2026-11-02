@@ -20,6 +20,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel, Field, StrictInt, ValidationError
 
+from fallback import keep_one_per_instrument, same_instrument_isolation
 from ingest import (
     MAX_UPLOAD_BYTES,
     IngestError,
@@ -273,6 +274,9 @@ def _file_route(reload_volume: Callable[[], None]) -> FileRoute:
                 trackmap = build_served_trackmap(trackmap_clip_id, root)
             except FileNotFoundError as error:
                 raise HTTPException(status_code=404, detail="File not found.") from error
+            isolations = trackmap.get("isolations")
+            if isinstance(isolations, list):
+                trackmap["isolations"] = keep_one_per_instrument(isolations)
             return JSONResponse(
                 content=trackmap,
                 media_type=MEDIA_TYPES[".json"],
@@ -318,7 +322,8 @@ def _start_or_reuse_isolation(
     if not prompt:
         raise HTTPException(status_code=400, detail="Prompt must not be empty.")
     label = (body.label or prompt.capitalize()).strip()
-    iso_id = isolation_id_for(job_id, prompt)
+    # A clip has one sound per instrument: "electric guitar" after "guitar" answers with that sound.
+    iso_id = same_instrument_isolation(job_id, prompt, root) or isolation_id_for(job_id, prompt)
     cached_json = target_dir / "isolations" / iso_id / "isolation.json"
     trackmap_url = f"/files/clips/{job_id}/trackmap.json"
 
