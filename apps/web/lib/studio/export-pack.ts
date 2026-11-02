@@ -103,8 +103,29 @@ function crc32(bytes: Uint8Array): number {
   return (crc ^ 0xffffffff) >>> 0;
 }
 
+type DosDateTime = {
+  dosTime: number;
+  dosDate: number;
+};
+
+function toDosDateTime(date: Date = new Date()): DosDateTime {
+  const year = date.getFullYear();
+  const dosYear = Math.max(0, year - 1980);
+  const month = date.getMonth() + 1;
+  const day = date.getDate();
+  const hours = date.getHours();
+  const minutes = date.getMinutes();
+  const seconds = Math.floor(date.getSeconds() / 2);
+
+  const dosTime = ((hours & 0x1f) << 11) | ((minutes & 0x3f) << 5) | (seconds & 0x1f);
+  const dosDate = ((dosYear & 0x7f) << 9) | ((month & 0x0f) << 5) | (day & 0x1f);
+
+  return { dosTime, dosDate };
+}
+
 /** Builds an uncompressed PKZIP archive in memory for multi-file Take Home downloads. */
 export function encodeStoreZip(entries: ZipFileEntry[]): ArrayBuffer {
+  const { dosTime, dosDate } = toDosDateTime();
   const encoder = new TextEncoder();
   const nameBytesList = entries.map((entry) => encoder.encode(entry.filename));
 
@@ -139,8 +160,8 @@ export function encodeStoreZip(entries: ZipFileEntry[]): ArrayBuffer {
     view.setUint16(cursor + 4, 20, true);
     view.setUint16(cursor + 6, 0, true);
     view.setUint16(cursor + 8, 0, true);
-    view.setUint16(cursor + 10, 0, true);
-    view.setUint16(cursor + 12, 0, true);
+    view.setUint16(cursor + 10, dosTime, true);
+    view.setUint16(cursor + 12, dosDate, true);
     view.setUint32(cursor + 14, checksum, true);
     view.setUint32(cursor + 18, entry.data.length, true);
     view.setUint32(cursor + 22, entry.data.length, true);
@@ -165,8 +186,8 @@ export function encodeStoreZip(entries: ZipFileEntry[]): ArrayBuffer {
     view.setUint16(cursor + 6, 20, true);
     view.setUint16(cursor + 8, 0, true);
     view.setUint16(cursor + 10, 0, true);
-    view.setUint16(cursor + 12, 0, true);
-    view.setUint16(cursor + 14, 0, true);
+    view.setUint16(cursor + 12, dosTime, true);
+    view.setUint16(cursor + 14, dosDate, true);
     view.setUint32(cursor + 16, checksum, true);
     view.setUint32(cursor + 20, entry.data.length, true);
     view.setUint32(cursor + 24, entry.data.length, true);
