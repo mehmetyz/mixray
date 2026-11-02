@@ -294,7 +294,7 @@ export function StudioShell({ children }: StudioShellProps) {
 
           <div className="border-t border-line p-3">
             <Link
-              href="/"
+              href="/studio/new"
               className="flex h-9 w-full items-center justify-center rounded-card border border-line-2 text-sm text-text-2 transition hover:border-control hover:text-text"
             >
               New clip

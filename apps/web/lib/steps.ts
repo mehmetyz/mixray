@@ -38,7 +38,7 @@ export function stepNumber(id: StepId): number {
 }
 
 function stepHref(id: StepId, nav: NavState): string | null {
-  if (id === "add") return "/";
+  if (id === "add") return "/studio/new";
   if (nav.current === "add") return null;
   if (id !== "pick" && !nav.soundPicked) return null;
   const base = `/c/${encodeURIComponent(nav.clipId)}/${id}`;

@@ -23,6 +23,7 @@ registerHooks({
       };
     }
     if (specifier === "ajv/dist/2020") return nextResolve("ajv/dist/2020.js", context);
+    if (specifier === "next/server") return nextResolve("next/server.js", context);
 
     const fromApp = specifier.startsWith("@/") ? path.join(WEB_ROOT, specifier.slice(2)) : null;
     const fromFile =

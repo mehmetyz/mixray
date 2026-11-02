@@ -13,8 +13,6 @@ import { ScreenHeading } from "./ScreenHeading";
 
 type ProjectDashboardProps = {
   projects: readonly ProjectRecord[];
-  onAddNew: () => void;
-  onOpenDemo: (demo: DemoClip) => void;
 };
 
 type ProjectRowProps = {
@@ -26,7 +24,6 @@ type ProjectRowProps = {
 
 type DemoCardProps = {
   demo: DemoClip;
-  onOpen: () => void;
 };
 
 type ProgressProps = {
@@ -232,12 +229,11 @@ function ProjectRow({ project, isConfirmingRemove, onAskRemove, onCancelRemove }
   );
 }
 
-function DemoCard({ demo, onOpen }: DemoCardProps) {
+function DemoCard({ demo }: DemoCardProps) {
   return (
     <li>
-      <button
-        type="button"
-        onClick={onOpen}
+      <Link
+        href={`/studio/new?demo=${encodeURIComponent(demo.id)}`}
         className="group block w-full cursor-pointer overflow-hidden rounded-card border border-line bg-surface text-left transition hover:border-control"
       >
         <div className="relative aspect-video bg-inset">
@@ -256,13 +252,13 @@ function DemoCard({ demo, onOpen }: DemoCardProps) {
           <p className="truncate text-sm font-semibold text-text group-hover:text-accent">{demo.title}</p>
           <p className="mt-1 line-clamp-2 text-xs leading-snug text-text-2">{demo.shows}</p>
         </div>
-      </button>
+      </Link>
     </li>
   );
 }
 
 /** The demos that open without an upload, then the clips this browser added, newest first. */
-export function ProjectDashboard({ projects, onAddNew, onOpenDemo }: ProjectDashboardProps) {
+export function ProjectDashboard({ projects }: ProjectDashboardProps) {
   const [confirmRemoveId, setConfirmRemoveId] = useState<string | null>(null);
 
   return (
@@ -271,13 +267,12 @@ export function ProjectDashboard({ projects, onAddNew, onOpenDemo }: ProjectDash
         <ScreenHeading title="Point at a sound. Hear it alone. Learn to play it.">
           <p className="text-sm text-text-2">Open a demo, or add a song or a video of your own.</p>
         </ScreenHeading>
-        <button
-          type="button"
-          onClick={onAddNew}
-          className="h-9 shrink-0 cursor-pointer rounded-icon bg-text px-4 text-sm font-semibold text-bg transition hover:opacity-90"
+        <Link
+          href="/studio/new"
+          className="flex h-9 shrink-0 cursor-pointer items-center rounded-icon bg-text px-4 text-sm font-semibold text-bg transition hover:opacity-90"
         >
           New clip
-        </button>
+        </Link>
       </div>
 
       <details open className="group/demos rounded-card border border-line bg-surface p-4">
@@ -308,7 +303,7 @@ export function ProjectDashboard({ projects, onAddNew, onOpenDemo }: ProjectDash
         </summary>
         <ul className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {DEMO_CLIPS.map((demo) => (
-            <DemoCard key={demo.id} demo={demo} onOpen={() => onOpenDemo(demo)} />
+            <DemoCard key={demo.id} demo={demo} />
           ))}
         </ul>
       </details>

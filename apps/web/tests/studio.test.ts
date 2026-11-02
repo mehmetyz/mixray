@@ -75,10 +75,10 @@ describe("the take keeps only the latest pass", () => {
 describe("step links", () => {
   const clip = { current: "pick", clipId: "a b", soundPicked: false } as const;
 
-  it("always leads home from Add", () => {
+  it("always leads to a new clip from Add", () => {
     const first = buildStepLinks(clip)[0];
     assert.equal(first?.id, "add");
-    assert.equal(first?.href, "/");
+    assert.equal(first?.href, "/studio/new");
   });
 
   it("locks the steps after Isolate until a sound exists", () => {

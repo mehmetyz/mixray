@@ -18,7 +18,7 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 
-# audio and model artifacts: only small, owned demo files under apps/web/public/demos are tracked
+# audio and model artifacts: only small, owned demo files under apps/web/public/demos and public/landing are tracked
 *.wav
 *.flac
 *.aiff
@@ -29,6 +29,7 @@ __pycache__/
 *.th
 *.safetensors
 !apps/web/public/demos/**
+!apps/web/public/landing/**
 
 # local scratch: media we do not own, never committed
 .local/

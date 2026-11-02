@@ -24,7 +24,7 @@ export function AppHeader({ nav }: AppHeaderProps) {
           </Link>
           {isClipView ? (
             <Link
-              href="/"
+              href="/studio"
               className="hidden sm:inline-flex items-center gap-1.5 text-xs font-medium text-muted hover:text-text transition border-l border-line pl-4"
             >
               All clips
