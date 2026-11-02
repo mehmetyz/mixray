@@ -95,6 +95,9 @@ def _sound_not_found_job(clip_id: str, iso_id: str, prompt: str) -> JobRecord:
     timeout=ISOLATE_TIMEOUT_SECONDS,
     max_containers=MAX_ISOLATE_CONTAINERS,
     enable_memory_snapshot=True,
+    # Alpha at Modal. Against the CPU snapshot on one clip: about 3x faster once the first starts
+    # after a deploy are past (13 s against 36 s), with the same draw time and Judge scores.
+    experimental_options={"enable_gpu_snapshot": True},
 )
 class IsolationWorker:
     """Keep SAM Audio and its Judge ranker resident: loading costs far more than separating."""
@@ -104,26 +107,21 @@ class IsolationWorker:
     ranker: Ranker
 
     @modal.enter(snap=True)
-    def load_model_on_cpu(self) -> None:
-        """Load CPU weights so Modal can capture the expensive initialization."""
+    def load_model_on_gpu(self) -> None:
+        """Load the weights onto the GPU so Modal captures them in the snapshot."""
         os.environ["HF_HOME"] = f"{WEIGHTS_PATH}/huggingface"
 
         from sam_audio import SAMAudio, SAMAudioProcessor
         from sam_audio.model.config import JudgeRankerConfig
         from sam_audio.ranking import create_ranker
 
-        self.model = SAMAudio.from_pretrained(DEFAULT_MODEL_ID, **BUILT_IN_RANKERS_OFF)
+        model = SAMAudio.from_pretrained(DEFAULT_MODEL_ID, **BUILT_IN_RANKERS_OFF)
+        self.model = model.eval().cuda()
         self.processor = SAMAudioProcessor.from_pretrained(DEFAULT_MODEL_ID)
         ranker = create_ranker(JudgeRankerConfig())
         if ranker is None:
             raise RuntimeError("SAM Audio Judge ranker could not be created")
-        self.ranker = ranker
-
-    @modal.enter(snap=False)
-    def move_model_to_gpu(self) -> None:
-        """Transfer weights after restore because GPU state is not part of the memory snapshot."""
-        self.model = self.model.eval().cuda()
-        self.ranker = self.ranker.eval().cuda()
+        self.ranker = ranker.eval().cuda()
 
     def _queue_follow_up(self, clip_id: str, iso_id: str, prompt: str) -> None:
         """Queue optional post-isolation work after a successful isolation."""
