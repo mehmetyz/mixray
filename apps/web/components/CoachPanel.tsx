@@ -19,6 +19,7 @@ import { barAtTime, keyLabel, tempoLabel } from "@/lib/studio/format";
 import {
   VOICE_COMMAND_HELP,
   matchSoundByName,
+  isExactCommand,
   isLatinScript,
   parseVoiceAssistantMessage,
   type PracticeLevel,
@@ -237,10 +238,13 @@ export function CoachPanel({
         setExchange({ heard: transcript, reply: "Commands work in English only. Try again." });
         return;
       }
-      // The parser answers at once and costs nothing, so the model only hears what it could not read.
-      const understood = parseVoiceAssistantMessage(transcript).intent.kind !== "unknown";
-      const meant = understood ? null : await requestVoiceIntent(transcript);
-      runCommandRef.current(meant ?? transcript, transcript);
+      const meant = isExactCommand(transcript) ? transcript : await requestVoiceIntent(transcript);
+      if (meant === null) {
+        playEarcon("unknown");
+        setExchange({ heard: transcript, reply: "Not a command. Try: back 2 bars, slower, play." });
+        return;
+      }
+      runCommandRef.current(meant, transcript);
     } catch {
       playEarcon("unknown");
       setExchange({ heard: "", reply: "Voice is unavailable. Type the command instead." });

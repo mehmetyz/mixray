@@ -8,7 +8,8 @@ const END_RATIO = 0.2;
 const MAX_ROOM_LEVEL = 0.05;
 const NOISE_SMOOTHING = 0.05;
 const ONSET_SECONDS = 0.12;
-const HANG_SECONDS = 0.5;
+// Long enough for a breath between words, so "loop bars ... five to eight" arrives in one piece.
+const HANG_SECONDS = 0.8;
 const MIN_SPEECH_SECONDS = 0.2;
 export const MAX_SPEECH_SECONDS = 4.5;
 

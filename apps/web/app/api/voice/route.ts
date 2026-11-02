@@ -1,8 +1,11 @@
+import { VOICE_KEYWORDS } from "@/lib/voice-intent";
+
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const META_TRANSCRIBE_URL = "https://api.meta.ai/v1/asr/transcribe";
 const MUSE_VOICE_MODEL = "muse-voice-transcribe-1.0";
+const COMMAND_LANGUAGES: readonly string[] = ["English"];
 const MAX_AUDIO_SECONDS = 10;
 const WAV_MIME_TYPE = "audio/wav";
 const WAV_HEADER_BYTES = 12;
@@ -124,13 +127,23 @@ export async function POST(request: Request): Promise<Response> {
 
   // The endpoint wants exactly two parts, a JSON `request` and the `audio` file. Flat form fields
   // are rejected with "Both a 'request' and an 'audio' part are required", measured on the first
-  // live call.
+  // live call. Without `languageBias` the model guesses the language and wrote accented English as
+  // German or Korean; `keywords` steers it to the command words ("bass", not "bus").
   const upstreamForm = new FormData();
   upstreamForm.append(
     "request",
-    new Blob([JSON.stringify({ model: MUSE_VOICE_MODEL, mode: "PUSH_TO_TALK", audioEncoding: "WAV" })], {
-      type: "application/json",
-    }),
+    new Blob(
+      [
+        JSON.stringify({
+          model: MUSE_VOICE_MODEL,
+          mode: "PUSH_TO_TALK",
+          audioEncoding: "WAV",
+          languageBias: COMMAND_LANGUAGES,
+          keywords: VOICE_KEYWORDS,
+        }),
+      ],
+      { type: "application/json" },
+    ),
   );
   upstreamForm.append("audio", upload, "voice-command.wav");
 

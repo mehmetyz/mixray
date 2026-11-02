@@ -54,10 +54,14 @@ function repairMisheard(text: string): string {
     .replace(/\b(?:a )?couple(?: of)? bars\b/g, "2 bars");
 }
 
-/** Reads a move in any word order: "back 2 bars", "2 bars back", "rewind 2", "a bar back". */
+/** Reads a move in any word order: "back 2 bars", "2 bars back", "rewind 2", "a bar back", "2 bars left". */
 function relativeBars(text: string): number | null {
   if (NOT_A_DISTANCE.test(text)) return null;
-  const direction = BACK_WORD.test(text) ? -1 : FORWARD_WORD.test(text) ? 1 : 0;
+  // On a timeline left is earlier, but only with bars: "left hand" picks a hand, not a direction.
+  const sideways = /\bbars?\b/.test(text) && !/\bhands?\b/.test(text);
+  const isBack = BACK_WORD.test(text) || (sideways && /\bleft\b/.test(text));
+  const isForward = FORWARD_WORD.test(text) || (sideways && /\bright\b/.test(text));
+  const direction = isBack ? -1 : isForward ? 1 : 0;
   if (direction === 0) return null;
   const count = text.match(/\b(\d+)(?: bars?)?\b/);
   if (count?.[1] !== undefined) return direction * Number(count[1]);
@@ -126,7 +130,18 @@ export function parseStudioCommand(spoken: string): StudioCommand | null {
   return null;
 }
 
-/** Muse Voice Transcribe takes no language setting and turns accented English into Arabic or Chinese. */
+const EXACT_COMMAND =
+  /^(?:play|pause|stop|next bar|previous bar|loop off|slower|faster|full mix|solo|easy|intermediate|left hand|right hand|both hands|octave up|octave down|help|bar \d+|back \d+ bars?|\d+ bars? back|forward \d+ bars?|\d+ bars? forward|loop \d+ to \d+|loop \d+ bars?)$/;
+
+/**
+ * A command said word for word needs no model and answers at once. Anything else goes to the model:
+ * picking words out of a sentence is what ran the wrong command.
+ */
+export function isExactCommand(transcript: string): boolean {
+  return EXACT_COMMAND.test(digitsFromWords(transcript.toLowerCase().replace(/[.,!?;:]/g, "").trim()));
+}
+
+/** `languageBias` is only a hint: Muse Voice Transcribe can still write accented English in another script. */
 export function isLatinScript(text: string): boolean {
   return (text.match(/\p{L}/gu) ?? []).every((letter) => /\p{Script=Latin}/u.test(letter));
 }
@@ -254,11 +269,12 @@ export function parseVoiceCoachCommand(phrase: string): CoachAction | null {
     return { name: "set_tempo", args: { percent: pct } };
   }
 
-  if (lower.includes("left hand") || lower.includes("left")) {
+  // A bare "left" or "right" is a direction too: "2 bar left" set the left hand instead of moving back.
+  if (/\bleft hand\b|^left$/.test(lower)) {
     return { name: "switch_hand", args: { hand: "left" } };
   }
 
-  if (lower.includes("right hand") || lower.includes("right") || lower.includes("lead")) {
+  if (/\bright hand\b|^right$/.test(lower) || lower.includes("lead")) {
     return { name: "switch_hand", args: { hand: "right" } };
   }
 

@@ -75,6 +75,13 @@ const click = new SpeechGate();
 assert.deepEqual(run(click, 0.2, 0.14), ["started"]);
 assert.deepEqual(run(click, 0.001, 1), ["discarded"]);
 
+// A breath between words ("loop bars ... five to eight") must not cut the phrase in half.
+const pausing = new SpeechGate();
+assert.deepEqual(run(pausing, 0.2, 0.5), ["started"]);
+assert.deepEqual(run(pausing, 0.002, 0.6), []);
+assert.deepEqual(run(pausing, 0.2, 0.5), []);
+assert.deepEqual(run(pausing, 0.002, 1), ["ended"]);
+
 const tooLong = new SpeechGate();
 assert.deepEqual(run(tooLong, 0.2, MAX_SPEECH_SECONDS + 0.5).slice(0, 2), ["started", "ended"]);
 

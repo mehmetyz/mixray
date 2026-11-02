@@ -5,6 +5,7 @@ import {
   parseStudioCommand,
   parseVoiceAssistantMessage,
   parseVoiceCoachCommand,
+  isExactCommand,
   isLatinScript,
   VOICE_COMMAND_HELP,
   type StudioCommand,
@@ -33,6 +34,9 @@ const STUDIO_PHRASES: readonly StudioCase[] = [
   ["previous bar", { name: "seek_relative", bars: -1 }],
   ["forward 4 bars", { name: "seek_relative", bars: 4 }],
   ["next bar", { name: "seek_relative", bars: 1 }],
+  ["2 bar left", { name: "seek_relative", bars: -2 }],
+  ["4 bars to the right", { name: "seek_relative", bars: 4 }],
+  ["a bar left", { name: "seek_relative", bars: -1 }],
   ["loop", { name: "loop_here", bars: 4 }],
   ["loop this bar", { name: "loop_here", bars: 1 }],
   ["loop 2 bars", { name: "loop_here", bars: 2 }],
@@ -91,6 +95,7 @@ describe("studio commands", () => {
 
   it("does not mistake hands or speed for a sound", () => {
     assert.equal(parseStudioCommand("use both hands"), null);
+    assert.equal(parseStudioCommand("left hand"), null);
     assert.equal(parseStudioCommand("switch to normal speed"), null);
   });
 
@@ -104,6 +109,12 @@ describe("coach commands", () => {
   for (const [phrase, action] of COACH_PHRASES) {
     it(`reads "${phrase}"`, () => assert.deepEqual(parseVoiceCoachCommand(phrase), action));
   }
+
+  it("does not pick a hand from a direction", () => {
+    // Heard in the app: "two bar left" came back as "full bar left" and set the left hand.
+    assert.equal(parseVoiceCoachCommand("full bar left"), null);
+    assert.equal(parseVoiceCoachCommand("that's right"), null);
+  });
 
   it("keeps a loop at least one bar long and inside the piece", () => {
     assert.deepEqual(parseVoiceCoachCommand("loop 8 to 2"), {
@@ -184,6 +195,20 @@ describe("whole spoken messages", () => {
   it("documents at least one example per topic", () => {
     assert.ok(VOICE_COMMAND_HELP.length > 0);
     for (const entry of VOICE_COMMAND_HELP) assert.ok(entry.examples.length > 0, entry.topic);
+  });
+});
+
+describe("what runs without asking the model", () => {
+  it("is a command said word for word, however it was punctuated", () => {
+    for (const phrase of ["Play.", "next bar", "Two bars back.", "back two bars", "loop four to eight", "Octave up!"]) {
+      assert.equal(isExactCommand(phrase), true, phrase);
+    }
+  });
+
+  it("is never a sentence that merely contains a command word", () => {
+    for (const phrase of ["I played that wrong", "my left hand hurts", "go back to the part I like", "again and again", "play the bass"]) {
+      assert.equal(isExactCommand(phrase), false, phrase);
+    }
   });
 });
 

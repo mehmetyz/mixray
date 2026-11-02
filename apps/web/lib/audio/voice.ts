@@ -2,11 +2,14 @@ import { SpeechGate } from "./vad";
 import { encodeWav } from "./wav";
 
 const TARGET_SAMPLE_RATE = 16_000;
+const FILTER_TAPS = 95;
+const FILTER_CUTOFF_HERTZ = 7_200;
 const PROCESSOR_BUFFER_SIZE = 4_096;
 const ROOM_SECONDS = 0.3;
 const EARCON_SECONDS = 0.2;
 const LISTEN_SECONDS = 5;
 const DEAD_MICROPHONE_LEVEL = 0.0005;
+const PADDING_SECONDS = 0.4;
 
 export class VoiceRecordingError extends Error {
   override name = "VoiceRecordingError";
@@ -43,9 +46,28 @@ function combineSamples(chunks: Float32Array[]): Float32Array {
   return samples;
 }
 
-function resampleToTarget(samples: Float32Array, sourceRate: number): Float32Array {
-  if (sourceRate === TARGET_SAMPLE_RATE) return samples;
+/** A windowed sinc low-pass. Without it, everything above 8 kHz folds down over the speech. */
+function lowPass(samples: Float32Array, cutoffRatio: number): Float32Array {
+  const middle = (FILTER_TAPS - 1) / 2;
+  const taps = Float64Array.from({ length: FILTER_TAPS }, (_, index) => {
+    const offset = index - middle;
+    const sinc = offset === 0 ? 2 * cutoffRatio : Math.sin(2 * Math.PI * cutoffRatio * offset) / (Math.PI * offset);
+    return sinc * (0.54 - 0.46 * Math.cos((2 * Math.PI * index) / (FILTER_TAPS - 1)));
+  });
+  const sum = taps.reduce((total, tap) => total + tap, 0);
+  const output = new Float32Array(samples.length);
+  for (let index = 0; index < samples.length; index += 1) {
+    let value = 0;
+    for (let tap = 0; tap < FILTER_TAPS; tap += 1) value += (taps[tap] ?? 0) * (samples[index + tap - middle] ?? 0);
+    output[index] = value / sum;
+  }
+  return output;
+}
 
+export function resampleToTarget(input: Float32Array, sourceRate: number): Float32Array {
+  if (sourceRate === TARGET_SAMPLE_RATE) return input;
+
+  const samples = sourceRate > TARGET_SAMPLE_RATE ? lowPass(input, (FILTER_CUTOFF_HERTZ / sourceRate)) : input;
   const outputLength = Math.round((samples.length * TARGET_SAMPLE_RATE) / sourceRate);
   const output = new Float32Array(outputLength);
   const sourcePerOutput = sourceRate / TARGET_SAMPLE_RATE;
@@ -67,8 +89,19 @@ function stopTracks(stream: MediaStream): void {
   for (const track of stream.getTracks()) track.stop();
 }
 
+/**
+ * Muse Voice Transcribe returned nothing for a one-word command that starts on the first sample
+ * ("play", "pause"), and read it once it had silence around it, measured on synthesised speech.
+ */
+export function padWithSilence(samples: Float32Array, sampleRate: number): Float32Array {
+  const padding = Math.round(PADDING_SECONDS * sampleRate);
+  const output = new Float32Array(samples.length + 2 * padding);
+  output.set(samples, padding);
+  return output;
+}
+
 function toWavBlob(chunks: Float32Array[], sampleRate: number): Blob {
-  const samples = resampleToTarget(combineSamples(chunks), sampleRate);
+  const samples = padWithSilence(resampleToTarget(combineSamples(chunks), sampleRate), TARGET_SAMPLE_RATE);
   return new Blob([encodeWav({ channels: [samples], sampleRate: TARGET_SAMPLE_RATE })], { type: "audio/wav" });
 }
 
@@ -170,7 +203,6 @@ export async function listenForPhrase({
     processor.onaudioprocess = (event: AudioProcessingEvent) => {
       const chunk = mixToMono(event.inputBuffer);
       const level = levelOf(chunk);
-      recording.push(chunk);
       openFor += seconds;
       loudest = Math.max(loudest, level);
 
@@ -185,6 +217,8 @@ export async function listenForPhrase({
       // The "listening" sound has to fade before anything counts as speech.
       if (openFor < ROOM_SECONDS + EARCON_SECONDS) return;
 
+      // Only now: the model would otherwise read the room and our own sound as words.
+      recording.push(chunk);
       const gateEvent = gate.push(level, seconds);
       if (gateEvent === "started") {
         isSpeaking = true;
