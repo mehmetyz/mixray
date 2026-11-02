@@ -1,8 +1,9 @@
 """Decide which separator serves a prompt, and serve the prompts that belong to Demucs.
 
 Measured on one album's real stems. Vocals, bass and guitar go to SAM Audio with eight ranked
-candidates (note agreement 0.68 against Demucs' 0.71 on seven unseen targets). Piano and other
-pitched instruments go to Demucs (on Karma's piano 0.46 against 0.13 for SAM Audio's best draw).
+candidates (note agreement 0.68 against Demucs' 0.71 on seven unseen targets). So does piano, whose
+output becomes a mask on the mix and whose notes come from Demucs (on Karma's piano 0.46 against
+0.13 for SAM Audio's best draw). Other pitched instruments go to Demucs.
 Sound events go to SAM Audio with span prediction, which reached +18 to +20 dB where Demucs has no
 matching stem. A solo recording skips separation, because Demucs cost solo piano 0.136 of real-label
 note F1.
@@ -52,7 +53,13 @@ PIANO_STEM_LEVEL_DB = -18.0
 SOLO_MAX_BAND_SHARE = 0.30
 SOLO_MIN_TOP_SHARE = 0.92
 BAND_STEMS: StemNames = ("vocals", "drums", "bass")
-SAM_CANDIDATE_STEMS: frozenset[StemName] = frozenset({"vocals", "bass", "guitar"})
+# Piano joined on Nov 2: by ear on a café clip SAM Audio left 10 dB less steam than Demucs, and its
+# mask laid onto the real mix kept that while taking phase and note starts from the recording. Its
+# notes still come from the Demucs stem, which measured 0.46 against SAM Audio's 0.13.
+SAM_CANDIDATE_STEMS: frozenset[StemName] = frozenset({"vocals", "bass", "guitar", "piano"})
+# Sounds whose SAM Audio output is used as a mask on the mix instead of as audio. Only the piano was
+# compared; the others keep the output their note scores were measured on.
+MIX_MASKED_STEMS: frozenset[StemName] = frozenset({"piano"})
 NOTE_STEMS: frozenset[StemName] = frozenset({"vocals", "bass", "guitar", "piano"})
 # Speech reads as vocals, but SAM Audio measured -14 dB on it where the Demucs stem held +1.7 dB.
 SPEECH_WORDS = frozenset({"speech", "speaking", "speak", "talking", "talk", "spoken", "narration"})
@@ -164,6 +171,16 @@ def route_for_prompt(prompt: str) -> IsolationRoute:
     if stem in SAM_CANDIDATE_STEMS and not _is_speech(prompt):
         return "sam_candidates"
     return "demucs"
+
+
+def masks_onto_mix(prompt: str) -> bool:
+    """Whether SAM Audio's output for this sound becomes a mask on the real mix."""
+    return stem_for_prompt(prompt) in MIX_MASKED_STEMS
+
+
+def notes_from_demucs(prompt: str) -> bool:
+    """Whether this sound's notes are read from its Demucs stem rather than the isolation."""
+    return stem_for_prompt(prompt) in MIX_MASKED_STEMS
 
 
 def prompt_has_notes(prompt: str) -> bool:

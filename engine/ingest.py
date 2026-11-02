@@ -207,7 +207,7 @@ def job_file(clip_id: str, cache_root: Path | None = None) -> Path:
 # Part of the isolation cache key, bumped whenever separation or candidate ranking changes. The
 # clip id is a hash of the audio, so without this a cache hit serves the previous algorithm's
 # result for the same clip and prompt, and a re-run reads as a no-op improvement.
-ISOLATION_ALGORITHM_VERSION = 8
+ISOLATION_ALGORITHM_VERSION = 9
 
 
 def isolation_id_for(clip_id: str, prompt: str) -> str:
@@ -733,29 +733,39 @@ def build_served_trackmap(clip_id: str, cache_root: Path | None = None) -> dict[
     if fallback_stems is not None:
         trackmap["fallback_stems"] = fallback_stems
 
+    trackmap["isolations"] = _served_isolations(clip_id, directory)
+    return trackmap
+
+
+def _served_isolations(clip_id: str, directory: Path) -> list[dict[str, object]]:
+    """Assemble each current isolation from its record and producer-owned sidecars."""
     isolations_dir = directory / "isolations"
     isolations: list[dict[str, object]] = []
-    if isolations_dir.exists():
-        for isolation_dir in sorted(isolations_dir.iterdir(), key=lambda item: item.name):
-            if not isolation_dir.is_dir():
-                continue
-            isolation = _read_optional_json_object(isolation_dir / "isolation.json")
-            if isolation is None:
-                continue
-            transcription = _read_optional_json_object(isolation_dir / "transcription.json")
-            if transcription is not None:
-                for field in TRANSCRIPTION_FIELDS:
-                    if field in transcription:
-                        isolation[field] = transcription[field]
-            # Each of these is written by its own producer, arrives after the sound and its notes,
-            # and is allowed to be missing: a clip without a recipe or a summary still serves.
-            for filename, field in ISOLATION_SIDECARS:
-                extra = _read_optional_json_object(isolation_dir / filename)
-                if extra is not None:
-                    isolation[field] = extra.get(field, extra)
-            isolations.append(isolation)
-    trackmap["isolations"] = isolations
-    return trackmap
+    if not isolations_dir.exists():
+        return isolations
+    for isolation_dir in sorted(isolations_dir.iterdir(), key=lambda item: item.name):
+        if not isolation_dir.is_dir():
+            continue
+        isolation = _read_optional_json_object(isolation_dir / "isolation.json")
+        if isolation is None:
+            continue
+        # The id carries the algorithm version, so a result from an older one no longer matches.
+        # Listed beside its replacement it reads as a second copy of the same sound.
+        if isolation_id_for(clip_id, str(isolation.get("prompt", ""))) != isolation_dir.name:
+            continue
+        transcription = _read_optional_json_object(isolation_dir / "transcription.json")
+        if transcription is not None:
+            for field in TRANSCRIPTION_FIELDS:
+                if field in transcription:
+                    isolation[field] = transcription[field]
+        # Each of these is written by its own producer, arrives after the sound and its notes,
+        # and is allowed to be missing: a clip without a recipe or a summary still serves.
+        for filename, field in ISOLATION_SIDECARS:
+            extra = _read_optional_json_object(isolation_dir / filename)
+            if extra is not None:
+                isolation[field] = extra.get(field, extra)
+        isolations.append(isolation)
+    return isolations
 
 
 def _served_video_tracks(clip_id: str, directory: Path) -> list[dict[str, object]]:

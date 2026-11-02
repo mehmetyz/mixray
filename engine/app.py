@@ -9,7 +9,13 @@ from typing import TYPE_CHECKING
 import modal
 
 from analyze import apply_analysis
-from fallback import route_for_prompt, run_fallback, run_routed_isolation, stem_for_prompt
+from fallback import (
+    masks_onto_mix,
+    route_for_prompt,
+    run_fallback,
+    run_routed_isolation,
+    stem_for_prompt,
+)
 from images import analyze_image, basic_pitch_image, demucs_image, sam_audio_image, web_image
 from ingest import (
     DEFAULT_CACHE_PATH,
@@ -157,6 +163,7 @@ class IsolationWorker:
                     if route_for_prompt(prompt) == "sam_candidates"
                     else EVENT_DRAWS
                 ),
+                onto_mix=masks_onto_mix(prompt),
             )
         except SoundNotFoundError:
             LOGGER.info("no audible %s in clip=%s", prompt, clip_id)

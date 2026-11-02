@@ -67,6 +67,7 @@ def _low_register_fixture(directory: Path) -> None:
         minimum_frequency: float | None = None,
         maximum_frequency: float | None = None,
         minimum_note_length: float = EXPECTED_MINIMUM_NOTE_LENGTH_MILLISECONDS,
+        decoder: transcribe.NoteDecoder = transcribe.DEFAULT_NOTE_DECODER,
     ) -> list[transcribe.RawNoteEvent]:
         del wav_path
         assert minimum_frequency is None
@@ -133,6 +134,7 @@ def _majority_stem_fixture(directory: Path) -> None:
         minimum_frequency: float | None = None,
         maximum_frequency: float | None = None,
         minimum_note_length: float = EXPECTED_MINIMUM_NOTE_LENGTH_MILLISECONDS,
+        decoder: transcribe.NoteDecoder = transcribe.DEFAULT_NOTE_DECODER,
     ) -> list[transcribe.RawNoteEvent]:
         if wav_path.name == "piano.wav":
             assert minimum_frequency is None
@@ -192,6 +194,7 @@ def _bass_second_pass_fixture(directory: Path) -> None:
         minimum_frequency: float | None = None,
         maximum_frequency: float | None = None,
         minimum_note_length: float = EXPECTED_MINIMUM_NOTE_LENGTH_MILLISECONDS,
+        decoder: transcribe.NoteDecoder = transcribe.DEFAULT_NOTE_DECODER,
     ) -> list[transcribe.RawNoteEvent]:
         assert wav_path == sound_path
         assert minimum_frequency is None
@@ -226,11 +229,15 @@ def _routing_fixture() -> None:
     assert stem_for_prompt("supersaw lead") == "other"
     assert stem_for_prompt("a sound with no instrument in it") is None
 
+    assert transcribe._note_decoder("grand piano") == transcribe.PIANO_NOTE_DECODER
+    for other in ("lead vocals", "bass guitar", "acoustic guitar", "drums", None):
+        assert transcribe._note_decoder(other) == transcribe.DEFAULT_NOTE_DECODER
+
     for sound, route, has_notes in (
         ("lead vocals", "sam_candidates", True),
         ("bass guitar", "sam_candidates", True),
         ("acoustic guitar", "sam_candidates", True),
-        ("piano", "demucs", True),
+        ("piano", "sam_candidates", True),
         ("drums", "demucs", False),
         ("organ", "demucs", False),
         ("person talking", "demucs", False),

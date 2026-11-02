@@ -17,7 +17,7 @@ import wave
 from bisect import bisect_right
 from itertools import pairwise
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, TypeAlias, TypedDict, TypeGuard
+from typing import TYPE_CHECKING, Literal, NamedTuple, TypeAlias, TypedDict, TypeGuard
 
 import modal
 
@@ -26,6 +26,7 @@ from fallback import (
     FALLBACK_DIRECTORY_NAME,
     STEM_NAMES,
     StemName,
+    notes_from_demucs,
     prompt_has_notes,
     stem_for_prompt,
 )
@@ -85,6 +86,13 @@ GUITAR_BASIC_PITCH_MINIMUM_NOTE_LENGTH_MILLISECONDS = 127.70
 CHORD_ONSET_SECONDS = 0.025
 ACCOMPANIMENT_VELOCITY_RATIO = 0.7
 BASIC_PITCH_MELODIA_TRICK = True
+# Measured Nov 2 on 20 public-domain piano pieces rendered with sampled grand piano, 5,221 labelled
+# notes, tuned on 10 and reported once on the other 10. On Demucs piano stems, 50 ms note F1 went
+# from 0.683 to 0.751 in a band and from 0.753 to 0.824 under steam, and from 0.791 to 0.885
+# unseparated; the old values over-reported notes (precision 0.58). Rendered audio, not a live
+# pianist, and only piano was measured, so every other sound keeps the values above.
+PIANO_BASIC_PITCH_ONSET_THRESHOLD = 0.60
+PIANO_BASIC_PITCH_MELODIA_TRICK = False
 
 REGISTER_LOWER_PERCENTILE = 10.0
 REGISTER_UPPER_PERCENTILE = 90.0
@@ -314,11 +322,30 @@ def mean_band_energy(
     return float(envelope.mean()) if envelope.size else 0.0
 
 
+class NoteDecoder(NamedTuple):
+    """The Basic Pitch decoding settings that differ by instrument."""
+
+    onset_threshold: float
+    melodia_trick: bool
+
+
+DEFAULT_NOTE_DECODER = NoteDecoder(BASIC_PITCH_ONSET_THRESHOLD, BASIC_PITCH_MELODIA_TRICK)
+PIANO_NOTE_DECODER = NoteDecoder(PIANO_BASIC_PITCH_ONSET_THRESHOLD, PIANO_BASIC_PITCH_MELODIA_TRICK)
+
+
+def _note_decoder(prompt: str | None) -> NoteDecoder:
+    """Pick the decoder measured for this instrument."""
+    if prompt is not None and stem_for_prompt(prompt) == "piano":
+        return PIANO_NOTE_DECODER
+    return DEFAULT_NOTE_DECODER
+
+
 def _basic_pitch_events(
     wav_path: Path,
     minimum_frequency: float | None = None,
     maximum_frequency: float | None = None,
     minimum_note_length: float = BASIC_PITCH_MINIMUM_NOTE_LENGTH_MILLISECONDS,
+    decoder: NoteDecoder = DEFAULT_NOTE_DECODER,
 ) -> list[RawNoteEvent]:
     """Run the model only after the Modal image has loaded its heavyweight inference runtime."""
     # Basic Pitch 0.4.0 ships no type information, so this targeted suppression is required for
@@ -327,12 +354,12 @@ def _basic_pitch_events(
 
     _, _, events = predict(
         str(wav_path),
-        onset_threshold=BASIC_PITCH_ONSET_THRESHOLD,
+        onset_threshold=decoder.onset_threshold,
         frame_threshold=BASIC_PITCH_FRAME_THRESHOLD,
         minimum_note_length=minimum_note_length,
         minimum_frequency=minimum_frequency,
         maximum_frequency=maximum_frequency,
-        melodia_trick=BASIC_PITCH_MELODIA_TRICK,
+        melodia_trick=decoder.melodia_trick,
     )
     return [
         (float(start), float(end), int(pitch), float(amplitude), pitch_bends)
@@ -344,15 +371,19 @@ def _isolation_basic_pitch_events(
     wav_path: Path,
     frequency_bounds: FrequencyBounds | None,
     minimum_note_length: float,
+    decoder: NoteDecoder = DEFAULT_NOTE_DECODER,
 ) -> list[RawNoteEvent]:
     """Run Basic Pitch on an isolation while retaining any existing stem-derived register bounds."""
     if frequency_bounds is None:
-        return _basic_pitch_events(wav_path, minimum_note_length=minimum_note_length)
+        return _basic_pitch_events(
+            wav_path, minimum_note_length=minimum_note_length, decoder=decoder
+        )
     return _basic_pitch_events(
         wav_path,
         minimum_frequency=frequency_bounds[0],
         maximum_frequency=frequency_bounds[1],
         minimum_note_length=minimum_note_length,
+        decoder=decoder,
     )
 
 
@@ -764,7 +795,23 @@ def transcribe_isolated_sound(
         _isolation_frequency_bounds(wav_path, stem_paths) if stem_paths is not None else None
     )
     minimum_note_length = _minimum_note_length(prompt)
-    events = _isolation_basic_pitch_events(wav_path, frequency_bounds, minimum_note_length)
+    note_source = wav_path
+    separated_by_sam = metadata is not None and metadata.get("method") == "sam_audio_text"
+    if (
+        stem_paths is not None
+        and prompt is not None
+        and separated_by_sam
+        and notes_from_demucs(prompt)
+    ):
+        stem = stem_for_prompt(prompt)
+        if stem is not None:
+            # The isolation keeps SAM Audio's cleaner sound; the notes come from the stem that
+            # measured better on real piano labels.
+            note_source = stem_paths[stem]
+    decoder = _note_decoder(prompt)
+    events = _isolation_basic_pitch_events(
+        note_source, frequency_bounds, minimum_note_length, decoder
+    )
     notes, amplitudes = _notes_from_events(events)
     if stem_paths is not None:
         stem_vote = _majority_stem_vote(notes, stem_paths)
@@ -775,9 +822,10 @@ def transcribe_isolated_sound(
         ):
             LOGGER.info("rerunning Basic Pitch with bass floor because stem vote selected bass")
             events = _isolation_basic_pitch_events(
-                wav_path,
+                note_source,
                 frequency_bounds,
                 BASS_BASIC_PITCH_MINIMUM_NOTE_LENGTH_MILLISECONDS,
+                decoder,
             )
             notes, amplitudes = _notes_from_events(events)
             stem_vote = _majority_stem_vote(notes, stem_paths)

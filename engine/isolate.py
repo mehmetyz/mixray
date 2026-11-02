@@ -86,6 +86,46 @@ NORMALIZATION_TARGET_PEAK = 0.891
 MINIMUM_NORMALIZATION_PEAK = 0.010
 
 
+MASK_FFT_SIZE = 2048
+MASK_HOP = 512
+MASK_POWER = 2.0
+
+
+def _mask_onto_mix(
+    sound: "torch.Tensor", rest: "torch.Tensor", mix: "torch.Tensor"
+) -> tuple["torch.Tensor", "torch.Tensor"]:
+    """Turn SAM Audio's sound and rest into a time-frequency mask and apply it to the real mix.
+
+    SAM Audio resynthesises through its codec, so its audio has none of the recording's phase and
+    softens note starts. Its two outputs still say, cell by cell, how much belongs to the sound. On
+    a café piano this kept SAM Audio's steam rejection, 10 dB better than Demucs, and suppressed a
+    knock better than either. The outputs are loudness-normalised separately, so their scales are
+    fitted to the mix first.
+    """
+    import torch
+
+    length = min(sound.shape[-1], rest.shape[-1], mix.shape[-1])
+    window = torch.hann_window(MASK_FFT_SIZE)
+
+    def spectrum(signal: "torch.Tensor") -> "torch.Tensor":
+        return torch.stft(
+            signal[:length].float(), MASK_FFT_SIZE, MASK_HOP, window=window, return_complex=True
+        )
+
+    mixture = spectrum(mix)
+    sound_mag = spectrum(sound).abs()
+    rest_mag = spectrum(rest).abs()
+    target = mixture.abs().reshape(-1)
+    basis = torch.stack([sound_mag.reshape(-1), rest_mag.reshape(-1)], dim=1).double()
+    scales = torch.linalg.lstsq(basis, target.double().unsqueeze(1)).solution.squeeze(1)
+    sound_scale, rest_scale = (float(value) for value in scales.clamp(min=1e-6))
+    sound_power = (sound_scale * sound_mag) ** MASK_POWER
+    rest_power = (rest_scale * rest_mag) ** MASK_POWER
+    mask = sound_power / (sound_power + rest_power + 1e-12)
+    masked = torch.istft(mixture * mask, MASK_FFT_SIZE, MASK_HOP, window=window, length=length)
+    return masked, mix[:length].float() - masked
+
+
 def _rms(waveform: "torch.Tensor") -> float:
     return float(waveform.pow(2).mean().sqrt())
 
@@ -250,6 +290,7 @@ def _separate_and_persist(  # noqa: PLR0913
     model: "SAMAudio",
     ranker: "Ranker",
     draws: int,
+    onto_mix: bool,
     cache_root: Path,
     iso_dir: Path,
     cached_json: Path,
@@ -284,7 +325,9 @@ def _separate_and_persist(  # noqa: PLR0913
             )
         if score < MIN_CANDIDATE_SCORE:
             raise CandidatesRejectedError(prompt)
-    sound = sounds[chosen]
+    sound, rest = sounds[chosen], rests[chosen]
+    if onto_mix:
+        sound, rest = _mask_onto_mix(sound, rest, mix.float().cpu())
     level = 20.0 * math.log10(max(_rms(sound), 1e-12) / max(_rms(mix.float().cpu()), 1e-12))
     if level < ABSENT_OUTPUT_LEVEL_DB:
         LOGGER.info("output sits %.1f dB under the mix for %s (%s)", level, clip_id, prompt)
@@ -296,7 +339,7 @@ def _separate_and_persist(  # noqa: PLR0913
         prompt=prompt,
         method=method,
         sound=sound,
-        rest=rests[chosen],
+        rest=rest,
         sample_rate=sample_rate,
         cache_root=cache_root,
         iso_dir=iso_dir,
@@ -317,6 +360,7 @@ def run_isolation(  # noqa: PLR0913
     processor: "SAMAudioProcessor",
     ranker: "Ranker",
     draws: int,
+    onto_mix: bool = False,
     cache_root: Path | None = None,
 ) -> IsolationEntry:
     """Separate `prompt` from `clip_id` with SAM Audio and persist sound, rest, and peaks."""
@@ -337,6 +381,7 @@ def run_isolation(  # noqa: PLR0913
         model=model,
         ranker=ranker,
         draws=draws,
+        onto_mix=onto_mix,
         cache_root=root,
         iso_dir=iso_dir,
         cached_json=cached_json,
