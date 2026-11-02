@@ -17,12 +17,21 @@ below and in [CREDITS.md](CREDITS.md).
 
 ## Why
 
-You hear a part in a song or a video and want to play it. Today that means hoping someone made a
-tutorial for that exact song, or working it out by ear while the rest of the band plays over it.
+I have loved EDM since 2017. Every few weeks a melody from an artist I follow would stay in my head
+and I would want to play it. Getting there meant a stem splitter, a transcription app, a tutorial
+that might not exist for that song, and a DAW that felt like a cockpit. I am learning keyboard now,
+and most of those evenings ended before I played a single bar.
 
-Stem splitters give you a few fixed stems. The thing you noticed is often not one of them, and it
-may be the piano you can see in the corner of the video. Mixray starts from what
-you noticed: you point at it, in words or on the picture. Then it carries on past the separation, to
+I am not unusual. Fender's CEO has said that
+[90% of first-time players abandon the instrument within their first year](https://fortune.com/2022/10/21/guitar-industry-fender-ceo-credits-diversity-players-pandemic-revival),
+and in a 2009 Gallup survey for NAMM,
+[85% of people who don't play an instrument said they wish they had learned](https://www.namm.org/news/press-releases/new-gallup-survey-namm-reflects-majority-americans-agree-many-benefits-playing).
+The wish is there. The path from "I love this sound" to "I can play it" is what breaks.
+
+Tutorials exist for hit songs. Mixray is for everything else: the piano in the corner of a video,
+a street musician's tune, the bass line in a track nobody has covered. Stem splitters give you a
+few fixed stems, and the thing you noticed is often not one of them. Mixray starts from what you
+noticed: you point at it, in words or on the picture. Then it carries on past the separation, to
 the notes, a part sized for your hands, and practice with both hands on the keys and your voice
 driving the transport.
 
@@ -71,9 +80,13 @@ never sees a model key: every model call goes through a server route or Modal. M
 - **SAM Audio** (Meta, open weights, self-hosted on Modal): prompted sound separation
 - **SAM 3.1** (Meta): follows the chosen instrument through the video
 - **Muse Spark** (Meta): suggests sounds, names a drawn area, summarises, coaches through tool calls
-- **Muse Spark Open** (Meta, open weights, via Baseten): the sound recipe
+- **Muse Spark Open** (Meta, open weights under the Muse Model License, via Baseten): the sound recipe. Built with Muse Spark Open
 - **Muse Voice Transcribe** (Meta): hands-free commands while both hands are on the keys
 - **Demucs** and **Basic Pitch** (open source): standard stems, and audio to notes
+
+A finding in SAM Audio itself: `SAMAudio.load_state_dict` loads weights only inside `if strict:`, so passing
+`strict=False` skips the checkpoint with no error and leaves a model that separates nothing useful. Mixray keeps
+`strict=True` and leaves the unused rankers unloaded instead; [SPEC.md](SPEC.md) §7 has the details.
 
 ## Evaluation
 
@@ -208,6 +221,8 @@ chosen, and it then goes through the same pipeline as any upload. There are five
 (a café piano under espresso steam, a song in a park, a busker with a dog and a taxi, a rooftop
 singer, a piano on a rainy night) and one real recording, a public-domain U.S. Navy Band performance.
 Each is labelled Real recording or AI-generated, and the AI-generated videos carry a watermark.
+
+AI-generated scenes made with Google Flow by Mehmet Yildiz; real recording: U.S. Navy Band, public domain.
 
 Most are generated because an open licence on a video of musicians rarely covers the music they
 play; [CREDITS.md](CREDITS.md) explains this and lists each one. They are test material, not evidence

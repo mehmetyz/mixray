@@ -81,6 +81,7 @@ export function RecipeCard({ recipe }: RecipeCardProps) {
           </div>
         </div>
       </div>
+      <p className="mt-3 text-[11px] text-muted">Built with Muse Spark Open</p>
     </div>
   );
 }

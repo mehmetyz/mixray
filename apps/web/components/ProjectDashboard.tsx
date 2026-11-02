@@ -334,6 +334,8 @@ export function ProjectDashboard({ projects, onAddNew, onOpenDemo }: ProjectDash
       </ul>
         </section>
       ) : null}
+
+      <footer className="border-t border-line pt-4 text-xs text-muted">Built with Muse Spark Open</footer>
     </div>
   );
 }

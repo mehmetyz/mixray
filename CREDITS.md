@@ -16,11 +16,11 @@ the studio shows this credit beside it.
 
 | Demo (`id`) | Origin | Author | Source | Licence | Changes |
 |---|---|---|---|---|---|
-| Piano and espresso steam (`cafe-piano`) | AI-generated | Mixray team, generated with Google Flow on a Google AI Pro plan | — | See below | Watermark "AI-generated video (Google Flow)" burned in; 720p |
-| Song in the park (`park-song`) | AI-generated | Mixray team, generated with Google Flow on a Google AI Pro plan | — | See below | Watermark burned in; 720p |
-| Busker, dog and taxi (`busker-dog-taxi`) | AI-generated | Mixray team, generated with Google Flow on a Google AI Pro plan | — | See below | Watermark burned in; 720p |
-| Rooftop singer (`rooftop-singer`) | AI-generated | Mixray team, generated with Google Flow on a Google AI Pro plan | — | See below | Watermark burned in; 720p |
-| Piano on a rainy night (`rainy-piano`) | AI-generated | Mixray team, generated with Google Flow on a Google AI Pro plan | — | See below | Watermark burned in; 720p |
+| Piano and espresso steam (`cafe-piano`) | AI-generated | Mehmet Yildiz, generated with Google Flow on a Google AI Pro plan | — | CC BY 4.0, to the extent any rights exist | Watermark "AI-generated video (Google Flow)" burned in; 720p |
+| Song in the park (`park-song`) | AI-generated | Mehmet Yildiz, generated with Google Flow on a Google AI Pro plan | — | CC BY 4.0, to the extent any rights exist | Watermark burned in; 720p |
+| Busker, dog and taxi (`busker-dog-taxi`) | AI-generated | Mehmet Yildiz, generated with Google Flow on a Google AI Pro plan | — | CC BY 4.0, to the extent any rights exist | Watermark burned in; 720p |
+| Rooftop singer (`rooftop-singer`) | AI-generated | Mehmet Yildiz, generated with Google Flow on a Google AI Pro plan | — | CC BY 4.0, to the extent any rights exist | Watermark burned in; 720p |
+| Piano on a rainy night (`rainy-piano`) | AI-generated | Mehmet Yildiz, generated with Google Flow on a Google AI Pro plan | — | CC BY 4.0, to the extent any rights exist | Watermark burned in; 720p |
 | The Washington Post, funk version (`navy-band-funk`) | Real recording | United States Navy Band Cruisers; arranged by Musician 1st Class Trevor Shifflett; march by John Philip Sousa (1889) | [Wikimedia Commons](https://commons.wikimedia.org/wiki/File:Sousa_gone_Funk_(Washington_Post)_-_U.S._Navy_Band.webm) | Public domain: work of the U.S. federal government made as part of official duties; the march was published in 1889 | 30 s excerpt (1:20–1:50) of the 720p transcode, re-encoded |
 
 The Navy Band video is used without any suggestion that the Navy endorses Mixray. Third-party media
@@ -36,9 +36,14 @@ often nothing from the musicians themselves. We checked candidates from Wikimedi
 the Free Music Archive and academic datasets; most failed on the composition, on a non-commercial or
 no-derivatives licence, or on ShareAlike carrying over to our own demo video.
 
-The generated videos are not under this repository's MIT licence. Google's terms say it won't claim ownership of
-original content generated with its services, and its generative AI policy asks that such content not be passed off as
-made solely by a human, which is why each one is labelled and watermarked.
+The generated videos are not under this repository's MIT licence. They are offered under CC BY 4.0, to the extent any
+rights exist. Google's terms say it won't claim ownership of original content generated with its services, and its
+generative AI policy asks that such content not be passed off as made solely by a human, which is why each one is
+labelled and watermarked.
+
+The organisers ruled on this on Discord on Oct 28: "For the clips, you must have the rights to every asset, so Veo clips
+from your own prompts and Pexels stills used under its license are fine as long as you follow those licenses and credit
+the sources in the README. AI elements are allowed, but the video should still show your working app." Google Flow uses Veo.
 
 So the demos were generated: the scene and the music were written for Mixray in Google Flow, with
 original chord progressions and no known songs, which leaves no third-party composition or
@@ -65,14 +70,15 @@ model was trained on it. The README's evaluation table reports the results.
 |---|---|---|---|
 | SAM Audio `large` ([paper](https://arxiv.org/abs/2512.18099)) | Prompted sound separation, self-hosted; weights are not in this repository | Meta | SAM License |
 | Judge | Picks the best of eight draws | Meta | SAM License |
-| PE-AV and PE-A-Frame | Inside SAM Audio and Judge; span prediction | Meta | Apache-2.0 |
+| PE-AV and PE-A-Frame | Inside SAM Audio and Judge; span prediction | Meta | Apache-2.0. Their package, `perception_models`, also holds PLM code under the FAIR Noncommercial Research License, which Mixray does not use |
 | SAM 3.1 | Follows an instrument through the video, through the Meta Model API | Meta | Meta Model API terms |
 | Muse Spark | Listens to the clip, suggests sounds, names an area, summarises, coaches, through the Meta Model API | Meta | Meta Model API terms |
-| Muse Spark Open | Sound recipe, through Baseten | Meta | Open weights |
+| Muse Spark Open | Sound recipe, through Baseten. Built with Muse Spark Open | Meta | [Muse Model License](https://huggingface.co/meta-models/Muse-Spark-Open-816B-A42B/blob/main/LICENSE.md); its $20M clause concerns companies hosting the model as a service |
 | Muse Voice Transcribe | Hands-free practice commands, through the Meta Model API | Meta | Meta Model API terms |
 | Demucs `htdemucs_6s` | Stem separation for standard instruments | Meta Research | MIT |
 | Basic Pitch | Audio to notes | Spotify | Apache-2.0 |
-| CLAP | Compared with Judge in the evaluation only | LAION; fork `lematt1991/CLAP` | CC0-1.0 |
+| CLAP | Compared with Judge in the evaluation; installed in the SAM Audio image as a dependency, not called at runtime | LAION; fork `lematt1991/CLAP` | CC0-1.0 |
+| ImageBind | Installed in the SAM Audio image as a dependency of `sam-audio`; never built or called, because the rankers are off | Meta | CC BY-NC-SA 4.0 |
 
 ## Libraries and tools
 

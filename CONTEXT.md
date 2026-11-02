@@ -161,5 +161,5 @@ Decisions and current state. The plan is in `SPEC.md`, the UI in `DESIGN.md`, th
   Run again: piano and guitar decoding, and eight SAM Audio draws on an A100 with the same seeds. All gave the Nov 1
   figures, except CLAP (0.440 to 0.450), which scores a random crop. Stored outputs for the gate and solo guitar were
   re-scored with the same figures. Also added: MIT licence.
-- Open: note accuracy on a real recording with known notes; nobody on the team plays, so it needs a labelled
+- Open: note accuracy on a real recording with known notes; the author is still learning keyboard, so it needs a labelled
   recording with clean rights.

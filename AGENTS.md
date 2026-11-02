@@ -27,7 +27,7 @@ keyboard. The full engineering spec is in `SPEC.md`; read it before starting any
 
 ## Git
 
-- One branch: `main`. No PR or branch sprawl.
+- One branch: `master`. No PR or branch sprawl.
 - Commit each meaningful unit of work; use Conventional Commits in English: `feat: add ...`,
   `fix: ...`, `chore: ...`, `docs: ...`, `refactor: ...`.
 - Never stage secrets, `.env*` files (except `.env.example`), audio we do not own, or model weights.
@@ -106,7 +106,7 @@ uv run --all-groups pytest && uv run --all-groups python transcribe.fixture.py  
 
 - **Runtime AI goes only to Meta models**: SAM Audio (self-hosted), SAM 3.1, Muse Spark, Muse Spark
   Open, Muse Voice Transcribe. Never call a non-Meta model API at runtime.
-- Supporting open-source signal models: **Demucs** (fallback only) and **Basic Pitch**
+- Supporting open-source signal models: **Demucs** (the route for drums, organ, synth and speech, and the fallback when SAM Audio returns nothing) and **Basic Pitch**
   (transcription).
 - Each heavy model gets its own Modal image (SAM Audio, Demucs and Basic Pitch have conflicting
   numpy/protobuf needs). Read `SPEC.md` §7 before touching SAM Audio.
