@@ -15,6 +15,7 @@ type TimelineRulerProps = {
 
 type AddShellProps = {
   children: ReactNode;
+  className?: string;
 };
 
 type StudioShellProps = {
@@ -138,14 +139,14 @@ export function TimelineRuler({ rightSlot }: TimelineRulerProps) {
   );
 }
 
-/** Quiet shell for `/`, where one file is chosen and nothing else competes with it. */
-export function AddShell({ children }: AddShellProps) {
+/** Quiet shell for `/` (Dashboard / Add). */
+export function AddShell({ children, className = "max-w-6xl" }: AddShellProps) {
   const nav: NavState = { current: "add" };
 
   return (
     <div className="flex min-h-dvh flex-col bg-bg text-text">
       <AppHeader nav={nav} />
-      <main className="mx-auto w-full max-w-2xl flex-1 p-4 pt-10 md:pt-16">{children}</main>
+      <main className={`mx-auto w-full flex-1 p-4 pt-6 md:pt-10 ${className}`}>{children}</main>
     </div>
   );
 }

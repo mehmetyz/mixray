@@ -13,7 +13,7 @@ export function AppHeader({ nav }: AppHeaderProps) {
 
   return (
     <header className="flex h-16 shrink-0 items-center justify-between gap-6 border-b border-line bg-surface/90 px-6 backdrop-blur-md sm:px-8">
-      <div className="flex min-w-0 items-center">
+      <div className="flex min-w-0 items-center gap-4">
         <Link
           href="/"
           className="flex shrink-0 items-center transition hover:opacity-85"
@@ -21,6 +21,14 @@ export function AppHeader({ nav }: AppHeaderProps) {
         >
           <MixrayLogo size="md" />
         </Link>
+        {isClipView ? (
+          <Link
+            href="/"
+            className="hidden sm:inline-flex items-center gap-1.5 text-xs font-medium text-muted hover:text-text transition border-l border-line pl-4"
+          >
+            All clips
+          </Link>
+        ) : null}
       </div>
 
       {isClipView ? (

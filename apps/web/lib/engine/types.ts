@@ -14,6 +14,16 @@ export const JOB_STAGES = [
 export type JobStatus = (typeof JOB_STATUSES)[number];
 export type JobStage = (typeof JOB_STAGES)[number];
 
+export const JOB_STAGE_LABELS: Record<JobStage, string> = {
+  listening: "Listening to the clip",
+  segmenting: "Finding the area",
+  naming: "Naming the area",
+  isolating: "Separating the sound",
+  analyzing: "Reading the notes",
+  done: "Finishing",
+  error: "Stopped",
+};
+
 /** What every engine endpoint returns. Mirrors `JobResponse` in `engine/web.py`. */
 export type Job = {
   id: string;
@@ -34,6 +44,16 @@ export type EngineSession = {
 
 export class EngineError extends Error {
   override name = "EngineError";
+}
+
+/** The engine has no such clip: never uploaded, or deleted after seven days. */
+export class EngineNotFoundError extends EngineError {
+  override name = "EngineNotFoundError";
+}
+
+/** No answer, or a gateway error with no body: worth asking again before giving up. */
+export class EngineUnreachableError extends EngineError {
+  override name = "EngineUnreachableError";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

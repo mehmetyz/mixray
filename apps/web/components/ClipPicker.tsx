@@ -19,7 +19,8 @@ import {
   uploadClip,
   waitForJob,
 } from "@/lib/engine/client";
-import type { JobStage } from "@/lib/engine/types";
+import { saveProject } from "@/lib/projects/storage";
+import type { ProjectRecord } from "@/lib/projects/types";
 import {
   MIN_DRAG_PIXELS,
   scaleVideoArea,
@@ -60,7 +61,11 @@ function stripExtension(filename: string): string {
   return dot > 0 ? filename.slice(0, dot) : filename;
 }
 
-export function ClipPicker() {
+export type ClipPickerProps = {
+  onCancel?: () => void;
+};
+
+export function ClipPicker({ onCancel }: ClipPickerProps = {}) {
   const router = useRouter();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const previewAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -84,7 +89,6 @@ export function ClipPicker() {
   const [rightsChecked, setRightsChecked] = useState<boolean>(true);
   const [dragActive, setDragActive] = useState<boolean>(false);
   const [uploadState, setUploadState] = useState<UploadState>("idle");
-  const [activeStage, setActiveStage] = useState<JobStage>("listening");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [elapsedSeconds, setElapsedSeconds] = useState<number>(0);
 
@@ -403,16 +407,28 @@ export function ClipPicker() {
       }
 
       setUploadState("polling");
-      const finished = await waitForJob(job.id, {
-        onStage: (j) => setActiveStage(j.stage),
-      });
+      const finished = await waitForJob(job.id);
 
       if (finished.status === "error") {
         throw new Error(finished.error ?? "Processing failed on engine.");
       }
 
+      const now = Date.now();
+      const hasIsolation = pickedArea !== null || initialPrompt.length > 0;
+      const record: ProjectRecord = {
+        id: job.id,
+        title,
+        kind: preview.kind,
+        duration: Math.round(clipSeconds(windowRange)),
+        createdAt: now,
+        updatedAt: now,
+        processingSince: hasIsolation ? now : undefined,
+        usesArea: pickedArea !== null,
+        activePrompt: initialPrompt || undefined,
+      };
+      saveProject(record);
+
       if (pickedArea !== null) {
-        setUploadState("isolating");
         const stored = await getStoredVideo(job.trackmapUrl);
         const lastFrame = Math.floor(clipSeconds(windowRange) * stored.fps) - 1;
         const frame = Math.round((pickedArea.time - windowRange.start) * stored.fps);
@@ -421,15 +437,8 @@ export function ClipPicker() {
           area: scaleVideoArea(pickedArea.area, pickedArea.source, stored),
           frame: Math.min(lastFrame, Math.max(0, frame)),
         });
-        await waitForJob(job.id, {
-          onStage: (j) => setActiveStage(j.stage),
-        });
       } else if (initialPrompt.length > 0) {
-        setUploadState("isolating");
         await startIsolation({ jobId: job.id, prompt: initialPrompt });
-        await waitForJob(job.id, {
-          onStage: (j) => setActiveStage(j.stage),
-        });
       }
 
       setUploadState("routing");
@@ -460,26 +469,22 @@ export function ClipPicker() {
       case "uploading":
         return 1;
       case "polling":
-        return activeStage === "isolating" ? 3 : 2;
-      case "isolating":
-        return 3;
+        return 2;
       case "routing":
-        return 4;
+        return 3;
       default:
         return 0;
     }
-  }, [uploadState, activeStage]);
+  }, [uploadState]);
 
   const pipelineStages = useMemo<readonly string[]>(() => {
-    const hasSound = pickedArea !== null || promptInput.trim().length > 0;
     return [
       "Preparing your clip",
       "Uploading",
       "Reading tempo, key and chords",
-      ...(hasSound ? ["Separating the sound"] : []),
       "Opening the studio",
     ];
-  }, [promptInput, pickedArea]);
+  }, []);
 
   const windowLeftPct =
     preview !== null && preview.duration > 0 ? (windowRange.start / preview.duration) * 100 : 0;
@@ -490,6 +495,15 @@ export function ClipPicker() {
 
   return (
     <div className="w-full max-w-3xl mx-auto space-y-4">
+      {onCancel ? (
+        <button
+          type="button"
+          onClick={onCancel}
+          className="inline-flex items-center gap-1.5 text-xs text-muted hover:text-text transition mb-1"
+        >
+          Back to your clips
+        </button>
+      ) : null}
       <ScreenHeading title="Point at a sound. Hear it alone. Learn to play it.">
         <p className="text-sm text-text-2">
           Add a song or a video, then choose up to 30 seconds of it.
@@ -549,7 +563,7 @@ export function ClipPicker() {
           current={Math.min(currentStepIndex, pipelineStages.length - 1)}
           seconds={elapsedSeconds}
           subject={selectedFile.name}
-          note="Keep this tab open. Separating a sound can take a few minutes."
+          note="The sound keeps separating once the studio opens."
         />
       ) : (
         <div className="space-y-3 rounded-card border border-line bg-surface p-3.5">

@@ -2,25 +2,18 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { startAreaIsolation, startIsolation, waitForJob } from "@/lib/engine/client";
-import type { Job, JobStage } from "@/lib/engine/types";
+import { JOB_STAGE_LABELS, type Job, type JobStage } from "@/lib/engine/types";
+import { useEngineJob } from "@/lib/projects/engine-job";
+import { updateProject, useProject } from "@/lib/projects/storage";
+import { separationSteps } from "@/lib/projects/types";
 import type { VideoArea } from "@/lib/studio/area";
 import { useStudio } from "./StudioContext";
 import { TimelineRuler } from "./StudioShell";
 import { VideoMaskStage } from "./VideoMaskStage";
 import { WorkingPanel } from "./WorkingPanel";
 import { WaveformLanes } from "./WaveformLanes";
-
-const STAGE_LABELS: Record<JobStage, string> = {
-  listening: "Listening to the clip",
-  segmenting: "Finding the area",
-  naming: "Naming the area",
-  isolating: "Separating the sound",
-  analyzing: "Reading the notes",
-  done: "Finishing",
-  error: "Stopped",
-};
 
 export function PickView() {
   const router = useRouter();
@@ -41,7 +34,49 @@ export function PickView() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [workingSeconds, setWorkingSeconds] = useState<number>(0);
   const [workingSteps, setWorkingSteps] = useState<readonly string[]>([]);
+  const project = useProject(clipId);
+  const [now, setNow] = useState<number>(() => Date.now());
+
+  const finishSeparation = useCallback(
+    (job: Job) => {
+      router.refresh();
+      if (job.status === "error") {
+        setErrorMessage(job.error ?? "Could not isolate that sound right now.");
+      } else if (job.isolationId !== null) {
+        selectIsolation(job.isolationId);
+        setMonitor("sound");
+      }
+    },
+    [router, selectIsolation, setMonitor],
+  );
+  // A separation started on Add, or before a reload, may still be running on the engine.
+  const engineJob = useEngineJob(clipId, finishSeparation);
+  const resumedStage = workingStage === null && engineJob.kind === "running" ? engineJob.stage : null;
+  const shownStage = workingStage ?? resumedStage;
+  const shownSteps =
+    resumedStage === null
+      ? workingSteps
+      : (project !== null ? separationSteps(project) : [resumedStage]).map((stage) => JOB_STAGE_LABELS[stage]);
+  const shownSeconds =
+    resumedStage !== null && project?.processingSince !== undefined
+      ? Math.max(0, Math.round((now - project.processingSince) / 1000))
+      : workingSeconds;
   const workingTimer = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (resumedStage === null) return;
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [resumedStage]);
+
+  // The list shows what the clip holds; only facts are kept, never whether work is running.
+  useEffect(() => {
+    updateProject(clipId, {
+      bpm: Math.round(trackMap.tempo.bpm),
+      key: `${trackMap.key.tonic} ${trackMap.key.mode}`,
+      isolatedSoundLabel: (selectedIsolation ?? trackMap.isolations[0])?.label,
+    });
+  }, [clipId, trackMap, selectedIsolation]);
 
   const runJob = async (firstStage: JobStage, start: () => Promise<Job>) => {
     setErrorMessage(null);
@@ -49,9 +84,10 @@ export function PickView() {
     setWorkingSeconds(0);
     setWorkingSteps(
       firstStage === "naming"
-        ? [STAGE_LABELS.naming, STAGE_LABELS.isolating]
-        : [STAGE_LABELS.isolating],
+        ? [JOB_STAGE_LABELS.naming, JOB_STAGE_LABELS.isolating]
+        : [JOB_STAGE_LABELS.isolating],
     );
+    updateProject(clipId, { processingSince: Date.now(), usesArea: firstStage === "naming" });
     workingTimer.current = window.setInterval(() => setWorkingSeconds((seconds) => seconds + 1), 1000);
     try {
       const initialJob = await start();
@@ -121,7 +157,7 @@ export function PickView() {
             onSelectArea={(area: VideoArea, frame: number) => {
               void runJob("naming", () => startAreaIsolation({ jobId: clipId, area, frame }));
             }}
-            areaBusy={workingStage !== null}
+            areaBusy={shownStage !== null}
             sizeClass="max-w-[calc(46dvh*16/9)]"
           />
         ) : null}
@@ -151,12 +187,12 @@ export function PickView() {
             value={promptInput}
             onChange={(event) => setPromptInput(event.target.value)}
             placeholder="Piano, vocals, bass…"
-            disabled={workingStage !== null}
+            disabled={shownStage !== null}
             className="h-10 w-full rounded-card border border-line-2 bg-inset pr-20 pl-3.5 text-sm text-text placeholder:text-muted focus:border-control focus:outline-none disabled:opacity-50"
           />
           <button
             type="submit"
-            disabled={workingStage !== null || promptInput.trim().length === 0}
+            disabled={shownStage !== null || promptInput.trim().length === 0}
             className="absolute right-1.5 h-7.5 cursor-pointer rounded-icon bg-text px-3 text-xs font-semibold text-bg transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
           >
             Isolate
@@ -175,7 +211,7 @@ export function PickView() {
                   key={chip.prompt}
                   type="button"
                   aria-pressed={active}
-                  disabled={workingStage !== null}
+                  disabled={shownStage !== null}
                   onClick={() => {
                     setPromptInput(chip.prompt);
                     void runOrSelectPrompt(chip.prompt, chip.label);
@@ -193,12 +229,12 @@ export function PickView() {
           </div>
         ) : null}
 
-        {workingStage !== null ? (
+        {shownStage !== null ? (
           <WorkingPanel
-            steps={workingSteps}
-            current={Math.max(0, workingSteps.indexOf(STAGE_LABELS[workingStage]))}
-            seconds={workingSeconds}
-            note="Separating a sound can take a few minutes."
+            steps={shownSteps}
+            current={Math.max(0, shownSteps.indexOf(JOB_STAGE_LABELS[shownStage]))}
+            seconds={shownSeconds}
+            note="This can take a few minutes. The mix plays meanwhile."
           />
         ) : null}
 

@@ -1,11 +1,25 @@
 import { MAX_CLIP_SECONDS } from "@/lib/audio/clip";
-import { EngineError, parseEngineSession, parseJob, type EngineSession, type Job } from "./types";
+import {
+  EngineError,
+  EngineNotFoundError,
+  EngineUnreachableError,
+  parseEngineSession,
+  parseJob,
+  type EngineSession,
+  type Job,
+} from "./types";
 import type { PixelSize, VideoArea } from "@/lib/studio/area";
 
 const TOKEN_ROUTE = "/api/engine-token";
 const TOKEN_SAFETY_SECONDS = 30;
 const POLL_INTERVAL_MS = 1500;
-const POLL_TIMEOUT_MS = 180_000;
+// Eight ranked SAM Audio draws, or a Demucs fallback after them, can take about five minutes.
+const POLL_TIMEOUT_MS = 600_000;
+// A dropped connection or a gateway hiccup during a long wait is not the job failing.
+const MAX_MISSED_POLLS = 10;
+const SERVER_ERROR_STATUS = 500;
+const NOT_FOUND_STATUS = 404;
+const UNREACHABLE_MESSAGE = "Could not reach the engine. Check the connection and try again.";
 
 export type UploadRequest = {
   blob: Blob;
@@ -38,13 +52,23 @@ export type WaitOptions = {
 
 let cached: EngineSession | null = null;
 
+/** `fetch` rejects with a bare "Failed to fetch" when no answer arrives; say what that means. */
+async function engineFetch(input: string, init?: RequestInit): Promise<Response> {
+  try {
+    return await fetch(input, init);
+  } catch (error: unknown) {
+    if (init?.signal?.aborted === true) throw error;
+    throw new EngineUnreachableError(UNREACHABLE_MESSAGE);
+  }
+}
+
 /** The token is short-lived, so the session is renewed a little before it expires. The engine's
  *  address comes with it rather than from a public build variable. */
 async function session(): Promise<EngineSession> {
   const now = Math.floor(Date.now() / 1000);
   if (cached !== null && cached.expiresAt - TOKEN_SAFETY_SECONDS > now) return cached;
 
-  const response = await fetch(TOKEN_ROUTE, { method: "POST" });
+  const response = await engineFetch(TOKEN_ROUTE, { method: "POST" });
   if (!response.ok) {
     throw new EngineError("Could not authorise with the engine. Try again in a moment.");
   }
@@ -52,10 +76,25 @@ async function session(): Promise<EngineSession> {
   return cached;
 }
 
+/** FastAPI answers errors as `{"detail": "..."}`; show the sentence, not the JSON around it. */
+async function errorDetail(response: Response): Promise<string> {
+  const body = await response.text().catch(() => "");
+  try {
+    const parsed: unknown = JSON.parse(body);
+    if (typeof parsed === "object" && parsed !== null && "detail" in parsed) {
+      if (typeof parsed.detail === "string") return parsed.detail;
+    }
+  } catch {
+    // Not JSON: the body itself is the message.
+  }
+  return body;
+}
+
 async function readJob(response: Response): Promise<Job> {
+  if (response.status >= SERVER_ERROR_STATUS) throw new EngineUnreachableError(UNREACHABLE_MESSAGE);
   if (!response.ok) {
-    const detail = await response.text().catch(() => "");
-    const trimmed = detail.slice(0, 200);
+    const trimmed = (await errorDetail(response)).slice(0, 200);
+    if (response.status === NOT_FOUND_STATUS) throw new EngineNotFoundError(trimmed);
     throw new EngineError(trimmed.length > 0 ? trimmed : `The engine returned ${response.status}.`);
   }
   return parseJob(await response.json());
@@ -81,7 +120,7 @@ export async function uploadClip({
 
   const { token, engineUrl } = await session();
   return readJob(
-    await fetch(`${engineUrl}/jobs`, {
+    await engineFetch(`${engineUrl}/jobs`, {
       method: "POST",
       headers: { authorization: `Bearer ${token}` },
       body: form,
@@ -92,7 +131,7 @@ export async function uploadClip({
 export async function startIsolation({ jobId, prompt, label }: IsolateRequest): Promise<Job> {
   const { token, engineUrl } = await session();
   return readJob(
-    await fetch(`${engineUrl}/jobs/${encodeURIComponent(jobId)}/isolate`, {
+    await engineFetch(`${engineUrl}/jobs/${encodeURIComponent(jobId)}/isolate`, {
       method: "POST",
       headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
       body: JSON.stringify(label === undefined ? { prompt } : { prompt, label }),
@@ -103,7 +142,7 @@ export async function startIsolation({ jobId, prompt, label }: IsolateRequest): 
 export async function startAreaIsolation({ jobId, area, frame }: AreaRequest): Promise<Job> {
   const { token, engineUrl } = await session();
   return readJob(
-    await fetch(`${engineUrl}/jobs/${encodeURIComponent(jobId)}/track`, {
+    await engineFetch(`${engineUrl}/jobs/${encodeURIComponent(jobId)}/track`, {
       method: "POST",
       headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
       body: JSON.stringify({ ...area, frame }),
@@ -113,7 +152,7 @@ export async function startAreaIsolation({ jobId, area, frame }: AreaRequest): P
 
 /** The size and frame rate of the engine's stored copy, which an area is addressed in. */
 export async function getStoredVideo(trackmapUrl: string): Promise<StoredVideo> {
-  const response = await fetch(await engineFileUrl(trackmapUrl), { cache: "no-store" });
+  const response = await engineFetch(await engineFileUrl(trackmapUrl), { cache: "no-store" });
   if (!response.ok) throw new EngineError("Could not read the uploaded video.");
   const trackMap: unknown = await response.json();
   if (typeof trackMap === "object" && trackMap !== null && "video" in trackMap) {
@@ -137,7 +176,7 @@ export async function getStoredVideo(trackmapUrl: string): Promise<StoredVideo> 
 export async function followTrack(jobId: string, trackId: string): Promise<void> {
   const { token, engineUrl } = await session();
   const path = `${encodeURIComponent(jobId)}/tracks/${encodeURIComponent(trackId)}/follow`;
-  const response = await fetch(`${engineUrl}/jobs/${path}`, {
+  const response = await engineFetch(`${engineUrl}/jobs/${path}`, {
     method: "POST",
     headers: { authorization: `Bearer ${token}` },
   });
@@ -149,7 +188,7 @@ export async function waitForTrackFrames(masksUrl: string): Promise<void> {
   const deadline = Date.now() + POLL_TIMEOUT_MS;
 
   while (Date.now() < deadline) {
-    const response = await fetch(masksUrl, { cache: "no-store" });
+    const response = await engineFetch(masksUrl, { cache: "no-store" });
     if (response.ok) {
       const track: unknown = await response.json();
       if (typeof track === "object" && track !== null) {
@@ -194,7 +233,7 @@ export async function waitForNotes(
   const url = await engineFileUrl(`clips/${encodeURIComponent(clipId)}/trackmap.json`);
   while (Date.now() < deadline && !signal.aborted) {
     try {
-      const response = await fetch(url, { cache: "no-store", signal });
+      const response = await engineFetch(url, { cache: "no-store", signal });
       if (response.ok && hasTranscription(await response.json(), isolationId)) return true;
     } catch {
       // A failed poll is not a failed transcription; the next one decides.
@@ -207,7 +246,7 @@ export async function waitForNotes(
 export async function getJob(jobId: string): Promise<Job> {
   const { token, engineUrl } = await session();
   return readJob(
-    await fetch(`${engineUrl}/jobs/${encodeURIComponent(jobId)}`, {
+    await engineFetch(`${engineUrl}/jobs/${encodeURIComponent(jobId)}`, {
       headers: { authorization: `Bearer ${token}` },
       cache: "no-store",
     }),
@@ -218,10 +257,20 @@ export async function getJob(jobId: string): Promise<Job> {
 export async function waitForJob(jobId: string, options: WaitOptions = {}): Promise<Job> {
   const deadline = Date.now() + POLL_TIMEOUT_MS;
   let lastStage = "";
+  let missedPolls = 0;
 
   while (Date.now() < deadline) {
     if (options.signal?.aborted === true) throw new EngineError("Cancelled.");
-    const job = await getJob(jobId);
+    let job: Job;
+    try {
+      job = await getJob(jobId);
+      missedPolls = 0;
+    } catch (error: unknown) {
+      missedPolls += 1;
+      if (!(error instanceof EngineUnreachableError) || missedPolls >= MAX_MISSED_POLLS) throw error;
+      await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+      continue;
+    }
 
     if (job.stage !== lastStage) {
       lastStage = job.stage;
