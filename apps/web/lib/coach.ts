@@ -151,6 +151,27 @@ function messageFromOutput(output: unknown[]): string | null {
   return message.length > 0 ? message.slice(0, 1000) : null;
 }
 
+/** Say what the Coach did, for a reply that made tool calls but wrote no text of its own. */
+function describeCoachActions(actions: readonly CoachAction[]): string {
+  const parts = actions.map((action) => {
+    switch (action.name) {
+      case "mark_problem_bar":
+        return `Bar ${action.args.bar}: ${action.args.reason}.`;
+      case "set_loop":
+        return action.args.start_bar === action.args.end_bar
+          ? `Looping bar ${action.args.start_bar}.`
+          : `Looping bars ${action.args.start_bar} to ${action.args.end_bar}.`;
+      case "set_tempo":
+        return `Tempo set to ${action.args.percent}%.`;
+      case "switch_hand":
+        return action.args.hand === "both" ? "Showing both hands." : `Showing the ${action.args.hand} hand.`;
+      case "simplify_bar":
+        return `Simplified bar ${action.args.bar}.`;
+    }
+  });
+  return parts.join(" ");
+}
+
 /**
  * Treat a Meta Responses body as untrusted input and preserve only the fixed Coach contract.
  * The Responses API returns function calls in `output` as `{ type, name, arguments }`.
@@ -167,7 +188,24 @@ export function parseCoachModelReply(reply: unknown, barCount: number): CoachRep
     if (action !== null) actions.push(action);
   }
 
-  return { message: messageFromOutput(reply.output) ?? DEFAULT_COACH_MESSAGE, actions };
+  const message =
+    messageFromOutput(reply.output) ??
+    (actions.length > 0 ? describeCoachActions(actions) : DEFAULT_COACH_MESSAGE);
+  return { message, actions };
+}
+
+/** Read what `/api/coach` answers: `{message, actions}`, the same shape for a reply and an error. */
+export function parseCoachRouteReply(reply: unknown, barCount: number): CoachReply {
+  if (!isRecord(reply) || typeof reply.message !== "string" || !Array.isArray(reply.actions)) {
+    return { message: INVALID_COACH_REPLY_MESSAGE, actions: [] };
+  }
+  const actions: CoachAction[] = [];
+  for (const item of reply.actions) {
+    if (!isRecord(item)) continue;
+    const action = toCoachAction(item.name, JSON.stringify(item.args), barCount);
+    if (action !== null) actions.push(action);
+  }
+  return { message: reply.message, actions };
 }
 
 const COACH_ENDPOINT = "/api/coach";
@@ -213,5 +251,5 @@ export async function requestCoach(body: CoachRequestBody): Promise<CoachReply> 
   } catch {
     return { message: INVALID_COACH_REPLY_MESSAGE, actions: [] };
   }
-  return parseCoachModelReply(payload, body.barCount);
+  return parseCoachRouteReply(payload, body.barCount);
 }

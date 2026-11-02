@@ -11,6 +11,7 @@ type VoiceModule = {
 
 type CoachModule = {
   parseCoachModelReply: (reply: unknown, barCount: number) => CoachReply;
+  parseCoachRouteReply: (reply: unknown, barCount: number) => CoachReply;
   INVALID_COACH_REPLY_MESSAGE: string;
 };
 
@@ -199,6 +200,40 @@ function testStubbedModelReplyValidation(): void {
     message: invalidCoachReplyMessage,
     actions: [],
   });
+
+  // Tool calls with no text still have to say what happened.
+  const silent = parseCoachModelReply(
+    {
+      output: [
+        { type: "function_call", name: "set_loop", arguments: '{"start_bar":2,"end_bar":2}' },
+        { type: "function_call", name: "set_tempo", arguments: '{"percent":65}' },
+      ],
+    },
+    8,
+  );
+  assert.equal(silent.message, "Looping bar 2. Tempo set to 65%.");
+
+  // What the browser receives is the route's answer, not the model's raw reply.
+  const routed = coachModule.parseCoachRouteReply(
+    {
+      message: "Bar 4 is late.",
+      actions: [
+        { name: "set_loop", args: { start_bar: 3, end_bar: 5 } },
+        { name: "invent_action", args: {} },
+        { name: "simplify_bar", args: { bar: 99 } },
+      ],
+    },
+    8,
+  );
+  assert.deepEqual(routed, {
+    message: "Bar 4 is late.",
+    actions: [{ name: "set_loop", args: { start_bar: 3, end_bar: 5 } }],
+  });
+  assert.deepEqual(coachModule.parseCoachRouteReply({ message: "Send valid score.", actions: [] }, 8), {
+    message: "Send valid score.",
+    actions: [],
+  });
+  assert.equal(coachModule.parseCoachRouteReply({ output: [] }, 8).message, invalidCoachReplyMessage);
 
   console.log("PASS parseCoachModelReply stubbed-response fixtures");
 }

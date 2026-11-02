@@ -44,6 +44,7 @@ import { TimelineRuler } from "./StudioShell";
 import { CoachPanel } from "./CoachPanel";
 import { useThemeListener } from "./ThemeToggle";
 
+const MIDI_MAX_VELOCITY = 127;
 const MIN_OCTAVE_SHIFT = -2;
 const MAX_OCTAVE_SHIFT = 2;
 
@@ -386,18 +387,23 @@ export function LearnView() {
   const [isCoachThinking, setIsCoachThinking] = useState<boolean>(false);
 
   const analyzeLastTake = useCallback(async () => {
-    if (activeNotes.length === 0 || scoreResult.bars.length === 0) return;
+    if (activeNotes.length === 0 || scoreResult.bars.length === 0) {
+      setCoachMessage("This sound has no notes to score. Pick vocals, bass, guitar or piano.");
+      return;
+    }
     setIsCoachThinking(true);
     setCoachMessage(null);
+    const barCount = scoreResult.bars.length;
     const reply = await requestCoach({
       score: scoreResult.bars,
-      barCount: scoreResult.bars.length,
+      barCount,
+      // The part counts bars from 0 and velocity in MIDI units; the Coach reads bars from 1 and 0–1.
       notes: activeNotes.map((note) => ({
         start: note.start,
         end: note.end,
         pitch: note.pitch,
-        velocity: note.velocity,
-        bar: note.bar,
+        velocity: Math.min(1, note.velocity / MIDI_MAX_VELOCITY),
+        bar: note.bar === undefined ? undefined : Math.min(barCount, Math.max(1, note.bar + 1)),
         hand: note.hand,
       })),
     });
