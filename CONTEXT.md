@@ -112,7 +112,7 @@ Decisions and current state. The plan is in `SPEC.md`, the UI in `DESIGN.md`, th
   exact, measured on one clip and shifted versions of it. The easy part no longer stacks notes on one slot.
 - Done (Nov 1): every screen was cut down to what is real for the clip. Removed the demo link, invented labels
   and fixed durations; the Add screen now states contributor mode. Notes arrive after the sound is playable, so
-  the client waits for them. The demo route still exists, unlinked, and holds no real audio.
+  the client waits for them.
 - Done (Nov 1): voice no longer listens all the time. A sustain pedal, any drum pad or a control the player
   chooses (also `V` and a button) opens the microphone for one phrase and turns the track down. Meta has no
   text-to-speech, so replies are a short sound and a line on screen; the system voice is gone. About 40 phrases
@@ -162,5 +162,6 @@ Decisions and current state. The plan is in `SPEC.md`, the UI in `DESIGN.md`, th
   figures, except CLAP (0.440 to 0.450), which scores a random crop. Stored outputs for the gate and solo guitar were
   re-scored with the same figures. Also added: MIT licence.
 - Done (Nov 2): `/` is a public landing page and the clip list moved to `/studio`, with Add at `/studio/new`. `proxy.ts` asks for `MIXRAY_ACCESS_KEY` on the studio and on the routes that spend model credit; everything stays closed without it, in development too. The web reads it from `apps/web/.env.local`, not the root `.env`. A link `/?key=...` enters too, for judges who open the submission link without reading the key. `MIXRAY_DEMO_VIDEO_URL` adds the demo video.
+- Done (Nov 2): review fixes. A missing recipe says so instead of showing a made-up patch, and the card is called a suggested starting patch. An unanalysed clip has zero confidence and no chords, shown as unknown and left out of summaries. Silence on a new pass clears that pass's old notes as the playhead crosses them. The rights box starts unticked for your own file. The `demo1` route and its synthesised audio are gone; its TrackMap is a test fixture.
 - Open: note accuracy on a real recording with known notes; the author is still learning keyboard, so it needs a labelled
   recording with clean rights.

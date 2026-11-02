@@ -96,7 +96,7 @@ One column, one job.
 
 - Title and a line saying what to do. Drop zone with the real limits: `MP3, WAV, FLAC, MP4 or MOV. Up to 50 MB and 6 minutes.`
 - Once a file is chosen: video preview, where dragging draws an area in `--accent` and a click plays or pauses; the `≤ 30 s` window on a waveform; an optional text field for the sound, hidden once an area is drawn.
-- Rights checkbox with the contributor-mode disclosure, then `Continue`.
+- Rights checkbox, unticked, with the contributor-mode disclosure, then `Continue`. A demo shows only the disclosure, because its rights are credited.
 - While working: the current step, its number, and the seconds elapsed. No percentage, because the steps are not equal in length.
 
 ### 3.2 Isolate (`/c/[id]/pick`)

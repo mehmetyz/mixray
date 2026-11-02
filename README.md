@@ -2,6 +2,8 @@
 
 **Point at a sound. Hear it alone. Learn to play it.**
 
+Built with Muse Spark Open
+
 **Live:** https://mixray.vercel.app
 
 Drop in a track or a video you own, then pick one sound out of the mix: type what you want, take a
@@ -80,7 +82,7 @@ never sees a model key: every model call goes through a server route or Modal. M
 - **SAM Audio** (Meta, open weights, self-hosted on Modal): prompted sound separation
 - **SAM 3.1** (Meta): follows the chosen instrument through the video
 - **Muse Spark** (Meta): suggests sounds, names a drawn area, summarises, coaches through tool calls
-- **Muse Spark Open** (Meta, open weights under the Muse Model License, via Baseten): the sound recipe. Built with Muse Spark Open
+- **Muse Spark Open** (Meta, open weights under the Muse Model License, via Baseten): the sound recipe.
 - **Muse Voice Transcribe** (Meta): hands-free commands while both hands are on the keys
 - **Demucs** and **Basic Pitch** (open source): standard stems, and audio to notes
 
