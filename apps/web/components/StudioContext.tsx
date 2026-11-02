@@ -12,7 +12,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { StemPlayer, type LoopRange, type StemName } from "@/lib/audio/player";
+import { StemPlayer, type LoopRange, type StemName, type StemSource } from "@/lib/audio/player";
 import { waitForNotes } from "@/lib/engine/client";
 import { resolvePlayableStems } from "@/lib/studio/demo-audio";
 import { barRangeToSeconds, matchFallbackStem } from "@/lib/studio/format";
@@ -161,6 +161,7 @@ export function StudioProvider({ clipId, initialTrackMap, children }: StudioProv
   const latestRateRef = useRef<number>(100);
   const latestLoopRef = useRef<LoopRange | null>(null);
   const pendingPlayRef = useRef<boolean>(false);
+  const resumePlayingRef = useRef<boolean>(false);
 
   // A listening preview on Isolate only: every later screen shows the notes of the selected sound,
   // so it has to play and export that same sound.
@@ -232,40 +233,34 @@ export function StudioProvider({ clipId, initialTrackMap, children }: StudioProv
     [trackMap.isolations],
   );
 
+  // The player only depends on which files it plays. A refreshed TrackMap, which arrives whenever
+  // notes or a recipe land, must not rebuild it and stop the music.
+  const mixUrl = trackMap.source.mix_url;
+  const stemKey =
+    selectedIsolation === undefined
+      ? `mix:${mixUrl ?? ""}`
+      : `${effectiveSoundUrl}|${selectedIsolation.rest_url}|${mixUrl ?? ""}`;
+  const playerInputsRef = useRef({ trackMap, selectedIsolation, effectiveSoundUrl });
   useEffect(() => {
-    if (selectedIsolation === undefined) return;
+    playerInputsRef.current = { trackMap, selectedIsolation, effectiveSoundUrl };
+  }, [trackMap, selectedIsolation, effectiveSoundUrl]);
 
+  useEffect(() => {
     let cancelled = false;
     let revokeBlobs: () => void = () => {};
+    const inputs = playerInputsRef.current;
 
-    void resolvePlayableStems(trackMap, selectedIsolation, effectiveSoundUrl).then((resolved) => {
-      if (cancelled) {
-        resolved.revoke();
-        return;
-      }
-      revokeBlobs = resolved.revoke;
-      setIsSynthesizedPreview(resolved.isSynthesizedPreview);
-
-      const wasPlaying = playerRef.current?.playing === true;
+    const startPlayer = (sources: StemSource[]) => {
       const resumeAt = latestTimeRef.current;
-      void playerRef.current?.dispose();
-
-      const nextPlayer = new StemPlayer(
-        [
-          { name: "sound", url: resolved.soundUrl },
-          { name: "rest", url: resolved.restUrl },
-          { name: "mix", url: resolved.mixUrl },
-        ],
-        {
-          onTime: (sec) => {
-            latestTimeRef.current = sec;
-            setCurrentTime(sec);
-          },
-          onEnded: () => {
-            setPlaying(false);
-          },
+      const nextPlayer = new StemPlayer(sources, {
+        onTime: (sec) => {
+          latestTimeRef.current = sec;
+          setCurrentTime(sec);
         },
-      );
+        onEnded: () => {
+          setPlaying(false);
+        },
+      });
 
       nextPlayer.setActive(latestMonitorRef.current);
       nextPlayer.setRate(latestRateRef.current / 100);
@@ -275,25 +270,54 @@ export function StudioProvider({ clipId, initialTrackMap, children }: StudioProv
       }
 
       playerRef.current = nextPlayer;
-      if (wasPlaying || pendingPlayRef.current) {
+      if (resumePlayingRef.current || pendingPlayRef.current) {
+        resumePlayingRef.current = false;
         pendingPlayRef.current = false;
         void nextPlayer
           .play()
           .then(() => setPlaying(true))
-          .catch(() => setPlaying(false));
+          .catch(() => {
+            nextPlayer.pause();
+            setPlaying(false);
+          });
       } else {
         setPlaying(false);
       }
-    });
+    };
+
+    if (inputs.selectedIsolation === undefined) {
+      // No sound separated yet: the mix still plays while the first one is being worked on.
+      const mix = inputs.trackMap.source.mix_url;
+      if (mix !== undefined) startPlayer([{ name: "mix", url: mix }]);
+    } else {
+      void resolvePlayableStems(
+        inputs.trackMap,
+        inputs.selectedIsolation,
+        inputs.effectiveSoundUrl,
+      ).then((resolved) => {
+        if (cancelled) {
+          resolved.revoke();
+          return;
+        }
+        revokeBlobs = resolved.revoke;
+        setIsSynthesizedPreview(resolved.isSynthesizedPreview);
+        startPlayer([
+          { name: "sound", url: resolved.soundUrl },
+          { name: "rest", url: resolved.restUrl },
+          { name: "mix", url: resolved.mixUrl },
+        ]);
+      });
+    }
 
     return () => {
       cancelled = true;
       const activePlayer = playerRef.current;
+      if (activePlayer !== null) resumePlayingRef.current = activePlayer.playing;
       playerRef.current = null;
       void activePlayer?.dispose();
       revokeBlobs();
     };
-  }, [clipId, trackMap, selectedIsolation, effectiveSoundUrl]);
+  }, [clipId, stemKey]);
 
   const selectIsolation = useCallback(
     (isolationId: string) => {
@@ -327,7 +351,10 @@ export function StudioProvider({ clipId, initialTrackMap, children }: StudioProv
     void player
       .play()
       .then(() => setPlaying(true))
-      .catch(() => setPlaying(false));
+      .catch(() => {
+        player.pause();
+        setPlaying(false);
+      });
   }, []);
 
   const getPlaybackTime = useCallback(
@@ -435,7 +462,7 @@ export function StudioProvider({ clipId, initialTrackMap, children }: StudioProv
       fallbackAlternative,
       useDemucsCleaner,
       isSynthesizedPreview,
-      monitor,
+      monitor: selectedIsolation === undefined ? "mix" : monitor,
       playing,
       currentTime,
       duration: trackMap.duration,

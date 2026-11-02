@@ -83,6 +83,9 @@ export class StemPlayer {
   }
 
   async play(): Promise<void> {
+    // Restarting from the end by hand: an ended element only seeks back a moment after `play()`, and
+    // the ticker would see it still ended and stop everything again.
+    if (this.leader?.element.ended === true) this.seek(this.loop?.startSeconds ?? 0);
     await this.context.resume();
     await Promise.all([...this.tracks.values()].map((track) => track.element.play()));
     this.startTicking();
@@ -161,8 +164,11 @@ export class StemPlayer {
     if (leader === undefined) return;
     const now = leader.element.currentTime;
 
-    if (this.loop !== null && now >= this.loop.endSeconds) {
+    // A loop reaching the end of the clip finishes the media, so it has to start playing again.
+    if (this.loop !== null && (now >= this.loop.endSeconds || leader.element.ended)) {
+      const finished = leader.element.ended;
       this.seek(this.loop.startSeconds);
+      if (finished) void this.play().catch(() => this.pause());
       return;
     }
     if (leader.element.ended) {

@@ -69,7 +69,7 @@ export function VideoMaskStage({
   followedTrackId,
   sizeClass,
 }: VideoMaskStageProps) {
-  const { currentTime, duration, playing, togglePlay } = useStudio();
+  const { currentTime, duration, playing, ratePercent, togglePlay } = useStudio();
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [maskFrames, setMaskFrames] = useState<{ id: string; frames: MaskFrame[] } | null>(null);
   const [areaDrag, setAreaDrag] = useState<AreaDrag | null>(null);
@@ -85,6 +85,11 @@ export function VideoMaskStage({
       element.currentTime = currentTime;
     }
   }, [currentTime]);
+
+  // At the audio's rate, or the sync above would keep dragging the picture back.
+  useEffect(() => {
+    if (videoRef.current !== null) videoRef.current.playbackRate = ratePercent / 100;
+  }, [ratePercent]);
 
   useEffect(() => {
     const element = videoRef.current;
