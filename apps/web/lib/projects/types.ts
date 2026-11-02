@@ -7,6 +7,10 @@ export type ProjectKind = "audio" | "video";
  * A clip this browser added: only what is needed to list it. Whether its work is running, done or
  * failed is asked from the engine each time, never stored here.
  */
+export type SoundList = {
+  isolations: readonly { id: string }[];
+};
+
 export type ProjectRecord = {
   /** The engine's clip id. */
   id: string;
@@ -26,9 +30,20 @@ export type ProjectRecord = {
   key?: string;
   activePrompt?: string;
   isolatedSoundLabel?: string;
+  /**
+   * The sounds this browser asked for. A clip is shared by everyone who adds it, so without this
+   * its list would show what others separated. Absent on clips added before this existed.
+   */
+  soundIds?: string[];
   /** Added from a demo card, so the studio can show its label and credit. */
   demoId?: DemoClipId;
 };
+
+/** Only the sounds this browser asked for; they still come at once if someone made them before. */
+export function soundsAskedFor<Map extends SoundList>(trackMap: Map, soundIds: readonly string[] | undefined): Map {
+  if (soundIds === undefined) return trackMap;
+  return { ...trackMap, isolations: trackMap.isolations.filter((sound) => soundIds.includes(sound.id)) };
+}
 
 /** The steps a separation goes through, in order, for showing where it is. */
 export function separationSteps(project: ProjectRecord): readonly JobStage[] {

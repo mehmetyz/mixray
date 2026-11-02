@@ -1,13 +1,11 @@
 import type { LoopRange } from "@/lib/audio/player";
 import type {
-  FallbackStem,
   Isolation,
   IsolationMethod,
   Key,
   Note,
   PitchRange,
   Recipe,
-  StemName as TrackStemName,
   Tempo,
   TimeSignature,
   TrackMap,
@@ -144,40 +142,6 @@ export function methodShortLabel(method: IsolationMethod): string {
   if (method === "demucs") return "Demucs";
   if (method === "unseparated") return "Original";
   return "SAM";
-}
-
-function inferStemKind(text: string): TrackStemName | null {
-  const lower = text.toLowerCase();
-  if (lower.includes("piano") || lower.includes("key")) return "piano";
-  if (lower.includes("bass") || lower.includes("sub")) return "bass";
-  if (lower.includes("vocal") || lower.includes("voice") || lower.includes("sing")) return "vocals";
-  if (lower.includes("drum") || lower.includes("kick") || lower.includes("hat")) return "drums";
-  if (lower.includes("guitar")) return "guitar";
-  if (
-    lower.includes("lead") ||
-    lower.includes("synth") ||
-    lower.includes("saw") ||
-    lower.includes("pluck") ||
-    lower.includes("violin") ||
-    lower.includes("cello")
-  ) {
-    return "other";
-  }
-  return null;
-}
-
-export function matchFallbackStem(
-  isolation: Isolation | undefined,
-  fallbackStems: FallbackStem[] | undefined,
-): FallbackStem | null {
-  if (isolation === undefined || fallbackStems === undefined || fallbackStems.length === 0) {
-    return null;
-  }
-  if (isolation.method === "demucs" || isolation.method === "unseparated") return null;
-  const kind = inferStemKind(`${isolation.label} ${isolation.prompt}`);
-  if (kind === null) return null;
-  const found = fallbackStems.find((stem) => stem.name === kind && stem.level >= 0.08);
-  return found ?? null;
 }
 
 export function deriveMixPeaks(soundPeaks: number[], restPeaks: number[] | undefined): number[] {

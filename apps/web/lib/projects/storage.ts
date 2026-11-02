@@ -90,6 +90,13 @@ export function saveProject(project: ProjectRecord): void {
   }
 }
 
+/** Notes a sound this browser asked for, on clips that keep such a list. */
+export function rememberSound(id: string, soundId: string): void {
+  const soundIds = getProject(id)?.soundIds;
+  if (soundIds === undefined || soundIds.includes(soundId)) return;
+  updateProject(id, { soundIds: [...soundIds, soundId] });
+}
+
 /** Update specific fields on an existing project */
 export function updateProject(id: string, patch: Partial<ProjectRecord>): void {
   if (!isBrowser()) return;

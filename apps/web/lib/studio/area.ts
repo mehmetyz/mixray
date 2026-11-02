@@ -1,11 +1,20 @@
 // Anything shorter than this is a click on the video, which plays or pauses it.
 export const MIN_DRAG_PIXELS = 12;
+// The engine answers 5 frames a second and treats a longer gap as the object leaving the picture.
+const MAX_TRACK_GAP_SECONDS = 0.5;
+const BOX_EASE_MS = 140;
+const BOX_JUMP_PERCENT = 12;
 
 export type VideoArea = {
   left: number;
   top: number;
   right: number;
   bottom: number;
+};
+
+export type TimedArea = {
+  time: number;
+  area: VideoArea;
 };
 
 export type StageBox = {
@@ -24,6 +33,13 @@ export type PixelSize = {
   width: number;
   height: number;
 };
+
+export function clampToStage(point: StagePoint, stage: PixelSize): StagePoint {
+  return {
+    x: Math.min(stage.width, Math.max(0, point.x)),
+    y: Math.min(stage.height, Math.max(0, point.y)),
+  };
+}
 
 /** The stage letterboxes the video, so a pointer position maps through the fitted picture. */
 export function videoAreaFromDrag(
@@ -62,6 +78,29 @@ export function areaAroundPaths(paths: readonly string[]): VideoArea | null {
   };
 }
 
+/**
+ * Where a tracked object is at a moment. Its outlines arrive only a few times a second, so the box
+ * glides between them; past the ends, or across a gap where it left the picture, there is no box.
+ */
+export function areaAtTime(frames: readonly TimedArea[], time: number): VideoArea | null {
+  const nextIndex = frames.findIndex((frame) => frame.time > time);
+  if (nextIndex === 0) return null;
+  const before = frames[nextIndex === -1 ? frames.length - 1 : nextIndex - 1];
+  if (before === undefined) return null;
+  const after = nextIndex === -1 ? undefined : frames[nextIndex];
+  if (after === undefined) return time - before.time <= MAX_TRACK_GAP_SECONDS ? before.area : null;
+  const gap = after.time - before.time;
+  if (gap > MAX_TRACK_GAP_SECONDS) return null;
+  const amount = (time - before.time) / gap;
+  const mix = (from: number, to: number) => from + (to - from) * amount;
+  return {
+    left: mix(before.area.left, after.area.left),
+    top: mix(before.area.top, after.area.top),
+    right: mix(before.area.right, after.area.right),
+    bottom: mix(before.area.bottom, after.area.bottom),
+  };
+}
+
 /** Where an area of the video sits on a stage that letterboxes it, in percent of the stage. */
 export function areaOnStage(area: VideoArea, video: PixelSize, stage: PixelSize): StageBox {
   const scale = Math.min(stage.width / video.width, stage.height / video.height);
@@ -72,6 +111,25 @@ export function areaOnStage(area: VideoArea, video: PixelSize, stage: PixelSize)
     top: ((offsetY + area.top * scale) / stage.height) * 100,
     width: (((area.right - area.left) * scale) / stage.width) * 100,
     height: (((area.bottom - area.top) * scale) / stage.height) * 100,
+  };
+}
+
+/** Follows the object with a short lag, so its box drifts rather than twitches; a seek jumps at once. */
+export function easeStageBox(current: StageBox, target: StageBox, elapsedMs: number): StageBox {
+  const furthest = Math.max(
+    Math.abs(target.left - current.left),
+    Math.abs(target.top - current.top),
+    Math.abs(target.width - current.width),
+    Math.abs(target.height - current.height),
+  );
+  if (furthest > BOX_JUMP_PERCENT) return target;
+  const amount = 1 - Math.exp(-elapsedMs / BOX_EASE_MS);
+  const mix = (from: number, to: number) => from + (to - from) * amount;
+  return {
+    left: mix(current.left, target.left),
+    top: mix(current.top, target.top),
+    width: mix(current.width, target.width),
+    height: mix(current.height, target.height),
   };
 }
 

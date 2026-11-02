@@ -20,7 +20,7 @@ const STEPS: readonly { name: string; text: string }[] = [
 
 const MODELS: readonly { name: string; text: string }[] = [
   { name: "SAM Audio", text: "Separates the sound you asked for." },
-  { name: "SAM 3.1", text: "Keeps a box on the instrument as it moves through the video." },
+  { name: "SAM 3.1", text: "Follows the instrument as it moves through the video." },
   { name: "Muse Spark", text: "Names what you drew, suggests sounds and coaches your take." },
   { name: "Muse Spark Open", text: "Suggests a starting synth patch." },
   { name: "Muse Voice Transcribe", text: "Hears your commands while both hands are on the keys." },

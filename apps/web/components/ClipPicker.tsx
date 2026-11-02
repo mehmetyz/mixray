@@ -8,7 +8,6 @@ import {
   useState,
   type ChangeEvent,
   type DragEvent,
-  type PointerEvent as ReactPointerEvent,
 } from "react";
 import { clipSeconds, clipWindow, MAX_CLIP_SECONDS, type ClipWindow } from "@/lib/audio/clip";
 import { trimToClip } from "@/lib/audio/trim";
@@ -20,7 +19,7 @@ import {
   waitForJob,
 } from "@/lib/engine/client";
 import type { DemoClip } from "@/lib/demos";
-import { saveProject } from "@/lib/projects/storage";
+import { rememberSound, saveProject } from "@/lib/projects/storage";
 import type { ProjectRecord } from "@/lib/projects/types";
 import {
   MIN_DRAG_PIXELS,
@@ -30,6 +29,7 @@ import {
   type StagePoint,
   type VideoArea,
 } from "@/lib/studio/area";
+import { useStageDrag } from "@/lib/studio/use-stage-drag";
 import { formatClockSeconds } from "@/lib/studio/format";
 import { inspectMediaFile, type MediaPreview } from "@/lib/studio/media-preview";
 import { DemoCredit } from "./DemoBadge";
@@ -196,30 +196,28 @@ export function ClipPicker({ onCancel, demo }: ClipPickerProps = {}) {
     }
   };
 
-  const pointOnStage = (event: ReactPointerEvent<HTMLDivElement>): StagePoint => {
-    const box = event.currentTarget.getBoundingClientRect();
-    return { x: event.clientX - box.left, y: event.clientY - box.top };
-  };
-
-  const finishAreaDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
+  const beginAreaDrag = useStageDrag({
+    onChange: (drag) => {
+      if (drag !== null && drag.start === drag.end) setPickedArea(null);
+      setAreaDrag(drag);
+    },
+    onFinish: ({ start, end }, stage) => {
     const element = videoElementRef.current;
-    if (areaDrag === null || element === null) return;
-    const end = pointOnStage(event);
-    if (Math.hypot(end.x - areaDrag.start.x, end.y - areaDrag.start.y) < MIN_DRAG_PIXELS) {
+    if (element === null) return;
+    if (Math.hypot(end.x - start.x, end.y - start.y) < MIN_DRAG_PIXELS) {
       setAreaDrag(null);
       togglePlay();
       return;
     }
-    setAreaDrag({ start: areaDrag.start, end });
+    setAreaDrag({ start, end });
     if (isPlaying) togglePlay();
-    const stage = event.currentTarget.getBoundingClientRect();
     const picture = element.getBoundingClientRect();
     const shiftX = stage.left - picture.left;
     const shiftY = stage.top - picture.top;
     const source = { width: element.videoWidth, height: element.videoHeight };
     setPickedArea({
       area: videoAreaFromDrag(
-        { x: areaDrag.start.x + shiftX, y: areaDrag.start.y + shiftY },
+        { x: start.x + shiftX, y: start.y + shiftY },
         { x: end.x + shiftX, y: end.y + shiftY },
         { width: picture.width, height: picture.height },
         source,
@@ -227,7 +225,8 @@ export function ClipPicker({ onCancel, demo }: ClipPickerProps = {}) {
       source,
       time: element.currentTime,
     });
-  };
+    },
+  });
 
   const handleFileChosen = async (file: File, fromDemo: DemoClip | null = null) => {
     setFileDemo(fromDemo);
@@ -439,6 +438,7 @@ export function ClipPicker({ onCancel, demo }: ClipPickerProps = {}) {
         usesArea: pickedArea !== null,
         activePrompt: initialPrompt || undefined,
         demoId: fileDemo?.id,
+        soundIds: [],
       };
       saveProject(record);
 
@@ -452,7 +452,8 @@ export function ClipPicker({ onCancel, demo }: ClipPickerProps = {}) {
           frame: Math.min(lastFrame, Math.max(0, frame)),
         });
       } else if (initialPrompt.length > 0) {
-        await startIsolation({ jobId: job.id, prompt: initialPrompt });
+        const started = await startIsolation({ jobId: job.id, prompt: initialPrompt });
+        if (started.isolationId !== null) rememberSound(job.id, started.isolationId);
       }
 
       setUploadState("routing");
@@ -620,19 +621,7 @@ export function ClipPicker({ onCancel, demo }: ClipPickerProps = {}) {
           {preview.kind === "video" && videoObjectUrl !== null ? (
             <div className="relative overflow-hidden rounded-well border border-line bg-black">
               <div
-                onPointerDown={(event) => {
-                  event.currentTarget.setPointerCapture(event.pointerId);
-                  const point = pointOnStage(event);
-                  setPickedArea(null);
-                  setAreaDrag({ start: point, end: point });
-                }}
-                onPointerMove={(event) => {
-                  if (areaDrag !== null && pickedArea === null) {
-                    setAreaDrag({ start: areaDrag.start, end: pointOnStage(event) });
-                  }
-                }}
-                onPointerUp={finishAreaDrag}
-                onPointerCancel={() => setAreaDrag(null)}
+                onPointerDown={beginAreaDrag}
                 className="relative aspect-video max-h-52 w-full touch-none cursor-crosshair select-none mx-auto flex items-center justify-center bg-black/90"
                 title={isPlaying ? "Pause" : "Play"}
               >

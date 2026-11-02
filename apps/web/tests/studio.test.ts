@@ -5,7 +5,7 @@ import { separationSteps, type ProjectRecord } from "../lib/projects/types";
 import { strongestPartials } from "../lib/audio/freeze";
 import { sustainTail } from "../lib/audio/key-sampler";
 import { buildStepLinks, stepNumber } from "../lib/steps";
-import { areaAroundPaths, areaOnStage, scaleVideoArea, videoAreaFromDrag } from "../lib/studio/area";
+import { areaAroundPaths, areaAtTime, areaOnStage, clampToStage, easeStageBox, scaleVideoArea, videoAreaFromDrag } from "../lib/studio/area";
 import { addToTake, forgetPassed, startsNewPass, type PassedNote, type TakeNote } from "../lib/studio/take";
 
 describe("drawing an area on a letterboxed video", () => {
@@ -181,6 +181,38 @@ describe("a held key keeps sounding", () => {
 });
 
 describe("the tracked box", () => {
+  const box = (left: number) => ({ left, top: 0, right: left + 10, bottom: 10 });
+  const frames = [
+    { time: 1, area: box(0) },
+    { time: 1.2, area: box(20) },
+    { time: 3, area: box(100) },
+  ];
+
+  it("glides between the moments it knows", () => {
+    assert.ok(Math.abs((areaAtTime(frames, 1.1)?.left ?? 0) - 10) < 1e-9);
+  });
+
+  it("does not show before the object is found or across a gap where it left", () => {
+    assert.equal(areaAtTime(frames, 0.5), null);
+    assert.equal(areaAtTime(frames, 2), null);
+  });
+
+  it("holds briefly after the last answer, then goes", () => {
+    assert.equal(areaAtTime(frames, 3.2)?.left, 100);
+    assert.equal(areaAtTime(frames, 4), null);
+  });
+
+  it("drifts towards the object rather than twitching, and jumps after a seek", () => {
+    const here = { left: 10, top: 10, width: 20, height: 20 };
+    const near = easeStageBox(here, { ...here, left: 14 }, 16).left;
+    assert.ok(near > 10 && near < 11);
+    assert.equal(easeStageBox(here, { ...here, left: 60 }, 16).left, 60);
+  });
+
+  it("keeps a drag inside the stage when the pointer leaves it", () => {
+    assert.deepEqual(clampToStage({ x: -5, y: 900 }, { width: 640, height: 360 }), { x: 0, y: 360 });
+  });
+
   it("wraps every outline of a frame", () => {
     const area = areaAroundPaths(["M399.0 360.0L400.0 359.0L420.5 700.0Z", "M10 20L30 40Z"]);
     assert.deepEqual(area, { left: 10, top: 20, right: 420.5, bottom: 700 });

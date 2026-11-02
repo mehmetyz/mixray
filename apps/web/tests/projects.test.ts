@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { beforeEach, describe, it } from "node:test";
-import { deleteProject, getProject, getProjects, saveProject, subscribeProjects, updateProject } from "../lib/projects/storage";
-import type { ProjectRecord } from "../lib/projects/types";
+import { deleteProject, getProject, getProjects, rememberSound, saveProject, subscribeProjects, updateProject } from "../lib/projects/storage";
+import { soundsAskedFor, type ProjectRecord } from "../lib/projects/types";
 
 const STORAGE_KEY = "mixray.projects";
 
@@ -106,5 +106,31 @@ describe("the clip list in this browser", () => {
     unsubscribe();
     saveProject(project("b"));
     assert.equal(calls, 1);
+  });
+});
+
+describe("the sounds a browser asked for", () => {
+  const clip = { isolations: [{ id: "guitar" }, { id: "piano" }] };
+
+  it("hides what others separated on the same clip", () => {
+    assert.deepEqual(soundsAskedFor(clip, ["piano"]).isolations, [{ id: "piano" }]);
+    assert.deepEqual(soundsAskedFor(clip, []).isolations, []);
+  });
+
+  it("remembers each sound once", () => {
+    saveProject({ ...project("a"), soundIds: [] });
+    rememberSound("a", "piano");
+    rememberSound("a", "piano");
+    assert.deepEqual(getProject("a")?.soundIds, ["piano"]);
+  });
+
+  it("starts no list on a clip that never had one", () => {
+    saveProject(project("a"));
+    rememberSound("a", "piano");
+    assert.equal(getProject("a")?.soundIds, undefined);
+  });
+
+  it("leaves a clip added before the list existed as it was", () => {
+    assert.equal(soundsAskedFor(clip, undefined), clip);
   });
 });

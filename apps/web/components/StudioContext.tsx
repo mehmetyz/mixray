@@ -14,8 +14,10 @@ import {
 } from "react";
 import { StemPlayer, type LoopRange, type StemName, type StemSource } from "@/lib/audio/player";
 import { waitForNotes } from "@/lib/engine/client";
-import { barRangeToSeconds, matchFallbackStem, playableStemUrls } from "@/lib/studio/format";
-import type { FallbackStem, Isolation, TrackMap } from "@/lib/trackmap/trackmap.generated";
+import { barRangeToSeconds, playableStemUrls } from "@/lib/studio/format";
+import { rememberSound, useProject } from "@/lib/projects/storage";
+import { soundsAskedFor } from "@/lib/projects/types";
+import type { Isolation, TrackMap } from "@/lib/trackmap/trackmap.generated";
 
 import type {
   CoachAction,
@@ -67,8 +69,6 @@ export type StudioContextValue = {
   trackMap: TrackMap;
   selectedIsolation: Isolation | undefined;
   selectedIsolationId: string;
-  fallbackAlternative: FallbackStem | null;
-  useDemucsCleaner: boolean;
   monitor: StemName;
   playing: boolean;
   currentTime: number;
@@ -86,12 +86,14 @@ export type StudioContextValue = {
   seek: (seconds: number) => void;
   /** The player's own clock, finer than the `currentTime` state a render reads. */
   getPlaybackTime: () => number;
+  /** Kept here so Track stays on when moving between Isolate and Analyze. */
+  followedTrackId: string | null;
+  setFollowedTrackId: (trackId: string | null) => void;
   setDucked: (ducked: boolean) => void;
   /** The sound is ready but its notes are still being written. */
   notesPending: boolean;
   setRatePercent: (percent: number) => void;
   setLoopBars: (bars: BarLoop | null) => void;
-  setUseDemucsCleaner: (enabled: boolean) => void;
   applyCoachAction: (action: CoachAction) => void;
   resetCoachOverrides: () => void;
 };
@@ -137,19 +139,23 @@ function formatCoachSummary(action: CoachAction): string {
 export function StudioProvider({ clipId, initialTrackMap, children }: StudioProviderProps) {
   const router = useRouter();
   const pathname = usePathname();
-  const trackMap = initialTrackMap;
+  const project = useProject(clipId);
+  const trackMap = useMemo(
+    () => soundsAskedFor(initialTrackMap, project?.soundIds),
+    [initialTrackMap, project?.soundIds],
+  );
 
   const firstIsoId = trackMap.isolations[0]?.id ?? "";
   const [requestedIsoId, setRequestedIsoId] = useState<string>(firstIsoId);
   const [monitor, setMonitorState] = useState<StemName>("sound");
   const [playing, setPlaying] = useState<boolean>(false);
   const [currentTime, setCurrentTime] = useState<number>(0);
+  const [followedTrackId, setFollowedTrackId] = useState<string | null>(null);
   const [ratePercent, setRatePercentState] = useState<number>(100);
   const [loopBars, setLoopBarsState] = useState<BarLoop | null>(null);
   const [problemBar, setProblemBar] = useState<ProblemBarMark | null>(null);
   const [handFilter, setHandFilter] = useState<HandFilter>("both");
   const [simplifiedBars, setSimplifiedBars] = useState<number[]>([]);
-  const [demucsPreviewOn, setUseDemucsCleaner] = useState<boolean>(false);
   const [coachEntries, setCoachEntries] = useState<CoachActionEntry[]>([]);
 
   const playerRef = useRef<StemPlayer | null>(null);
@@ -162,7 +168,6 @@ export function StudioProvider({ clipId, initialTrackMap, children }: StudioProv
 
   // A listening preview on Isolate only: every later screen shows the notes of the selected sound,
   // so it has to play and export that same sound.
-  const useDemucsCleaner = demucsPreviewOn && (pathname?.endsWith("/pick") ?? false);
 
   const selectedIsolation = useMemo(() => {
     const exact = trackMap.isolations.find((item) => item.id === requestedIsoId);
@@ -190,17 +195,7 @@ export function StudioProvider({ clipId, initialTrackMap, children }: StudioProv
     return () => controller.abort();
   }, [notesPending, clipId, selectedIsolationId, router]);
 
-  const fallbackAlternative = useMemo(
-    () => matchFallbackStem(selectedIsolation, trackMap.fallback_stems),
-    [selectedIsolation, trackMap.fallback_stems],
-  );
-
-  const effectiveSoundUrl = useMemo(() => {
-    if (useDemucsCleaner && fallbackAlternative !== null) {
-      return fallbackAlternative.url;
-    }
-    return selectedIsolation?.sound_url ?? trackMap.source.mix_url ?? "";
-  }, [useDemucsCleaner, fallbackAlternative, selectedIsolation, trackMap.source.mix_url]);
+  const effectiveSoundUrl = selectedIsolation?.sound_url ?? trackMap.source.mix_url ?? "";
 
   const loopRange = useMemo<LoopRange | null>(() => {
     if (loopBars === null) return null;
@@ -220,14 +215,14 @@ export function StudioProvider({ clipId, initialTrackMap, children }: StudioProv
   const handleIsoParam = useCallback(
     (iso: string | null) => {
       if (iso !== null && iso.length > 0) {
-        const targetIso = trackMap.isolations.find((item) => item.id === iso);
+        const targetIso = initialTrackMap.isolations.find((item) => item.id === iso);
         if (targetIso !== undefined) {
+          rememberSound(clipId, iso);
           setRequestedIsoId(iso);
-          setUseDemucsCleaner(false);
         }
       }
     },
-    [trackMap.isolations],
+    [clipId, initialTrackMap.isolations],
   );
 
   // The player only depends on which files it plays. A refreshed TrackMap, which arrives whenever
@@ -307,13 +302,13 @@ export function StudioProvider({ clipId, initialTrackMap, children }: StudioProv
 
   const selectIsolation = useCallback(
     (isolationId: string) => {
+      rememberSound(clipId, isolationId);
       setRequestedIsoId(isolationId);
-      setUseDemucsCleaner(false);
       if (pathname !== null && pathname.length > 0) {
         router.replace(`${pathname}?iso=${encodeURIComponent(isolationId)}`, { scroll: false });
       }
     },
-    [pathname, router],
+    [clipId, pathname, router],
   );
 
   const setMonitor = useCallback((stem: StemName) => {
@@ -445,8 +440,6 @@ export function StudioProvider({ clipId, initialTrackMap, children }: StudioProv
       trackMap,
       selectedIsolation,
       selectedIsolationId,
-      fallbackAlternative,
-      useDemucsCleaner,
       monitor: selectedIsolation === undefined ? "mix" : monitor,
       playing,
       currentTime,
@@ -463,11 +456,12 @@ export function StudioProvider({ clipId, initialTrackMap, children }: StudioProv
       togglePlay,
       seek,
       getPlaybackTime,
+      followedTrackId,
+      setFollowedTrackId,
       setDucked,
       notesPending,
       setRatePercent,
       setLoopBars,
-      setUseDemucsCleaner,
       applyCoachAction,
       resetCoachOverrides,
     }),
@@ -476,8 +470,6 @@ export function StudioProvider({ clipId, initialTrackMap, children }: StudioProv
       trackMap,
       selectedIsolation,
       selectedIsolationId,
-      fallbackAlternative,
-      useDemucsCleaner,
       monitor,
       playing,
       currentTime,
@@ -493,6 +485,7 @@ export function StudioProvider({ clipId, initialTrackMap, children }: StudioProv
       togglePlay,
       seek,
       getPlaybackTime,
+      followedTrackId,
       setDucked,
       notesPending,
       setRatePercent,

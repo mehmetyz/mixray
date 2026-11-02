@@ -27,14 +27,22 @@ function stateOf(job: Job): EngineJobState {
 /**
  * What the engine says about a clip's work, asked again every two seconds while it runs. The engine
  * is the only record of it: copies kept in the browser went stale and contradicted each other.
- * `onFinished` fires when work seen running ends, so a page can load what it produced.
+ * `onFinished` fires when work seen running ends, so a page can load what it produced. `askedHere`
+ * says this browser started work that may have ended before the page opened, such as a sound that
+ * already existed; a finished job alone says nothing, since anyone may have started it.
  */
-export function useEngineJob(jobId: string, onFinished?: (job: Job) => void): EngineJobState {
+export function useEngineJob(
+  jobId: string,
+  onFinished?: (job: Job) => void,
+  askedHere = false,
+): EngineJobState {
   const [state, setState] = useState<EngineJobState>({ kind: "checking" });
   const onFinishedRef = useRef(onFinished);
+  const askedHereRef = useRef(askedHere);
   useEffect(() => {
     onFinishedRef.current = onFinished;
-  }, [onFinished]);
+    askedHereRef.current = askedHere;
+  }, [onFinished, askedHere]);
 
   useEffect(() => {
     let cancelled = false;
@@ -69,7 +77,7 @@ export function useEngineJob(jobId: string, onFinished?: (job: Job) => void): En
           await wait();
           continue;
         }
-        if (sawRunning) onFinishedRef.current?.(job);
+        if (sawRunning || askedHereRef.current) onFinishedRef.current?.(job);
         return;
       }
     };

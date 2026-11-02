@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { StemPlayer, type StemName } from "@/lib/audio/player";
+import { TrackedCorners } from "@/components/TrackedCorners";
 import { CAFE_EXCERPT } from "@/lib/landing/cafe-excerpt";
 
 export type StageStep = 0 | 1 | 2 | 3;
@@ -144,15 +145,12 @@ export function CafeStage({ step, onReveal }: CafeStageProps) {
             width: `${(area.right - area.left) * 100}%`,
             height: `${(area.bottom - area.top) * 100}%`,
           }}
-          className={`absolute origin-top-left border-2 border-accent transition-[clip-path] duration-700 ease-out motion-reduce:transition-none ${
-            step >= 1 ? "[clip-path:inset(-2px)]" : "[clip-path:inset(0_100%_100%_0)]"
+          className={`absolute shadow-[0_0_0_100vmax_rgb(0_0_0/0.3)] transition-opacity duration-700 ease-out motion-reduce:transition-none ${
+            step >= 1 ? "opacity-100" : "opacity-0"
           }`}
         >
-          <span
-            className={`absolute left-0 top-0 bg-accent px-1.5 py-0.5 text-xs font-medium text-accent-ink transition-opacity duration-300 delay-500 motion-reduce:transition-none ${
-              step >= 1 ? "opacity-100" : "opacity-0"
-            }`}
-          >
+          <TrackedCorners />
+          <span className="absolute top-1.5 left-2 rounded-full bg-bg/80 px-2 py-0.5 text-xs text-text">
             {label}
           </span>
         </div>

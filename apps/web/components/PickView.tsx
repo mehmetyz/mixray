@@ -24,9 +24,6 @@ export function PickView() {
     selectedIsolation,
     selectedIsolationId,
     selectIsolation,
-    fallbackAlternative,
-    useDemucsCleaner,
-    setUseDemucsCleaner,
     setMonitor,
   } = useStudio();
 
@@ -51,7 +48,11 @@ export function PickView() {
     [router, selectIsolation, setMonitor],
   );
   // A separation started on Add, or before a reload, may still be running on the engine.
-  const engineJob = useEngineJob(clipId, finishSeparation);
+  const engineJob = useEngineJob(
+    clipId,
+    finishSeparation,
+    project?.soundIds?.length === 0 && project.processingSince !== undefined,
+  );
   const resumedStage = workingStage === null && engineJob.kind === "running" ? engineJob.stage : null;
   const shownStage = workingStage ?? resumedStage;
   const shownSteps =
@@ -234,23 +235,6 @@ export function PickView() {
             seconds={shownSeconds}
             note="This can take a few minutes. The mix plays meanwhile."
           />
-        ) : null}
-
-        {fallbackAlternative !== null ? (
-          <label className="flex cursor-pointer items-start gap-2.5 border-t border-line pt-4 text-sm">
-            <input
-              type="checkbox"
-              checked={useDemucsCleaner}
-              onChange={(event) => setUseDemucsCleaner(event.target.checked)}
-              className="mt-0.5 h-4 w-4 cursor-pointer rounded-xs border-line-2 accent-accent"
-            />
-            <span>
-              <span className="block text-text">Hear the Demucs version</span>
-              <span className="mt-0.5 block text-xs leading-relaxed text-muted">
-                For comparison here. The next screens keep the selected sound and its notes.
-              </span>
-            </span>
-          </label>
         ) : null}
 
         <div className="mt-auto pt-3">

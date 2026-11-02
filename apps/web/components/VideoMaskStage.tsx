@@ -1,17 +1,22 @@
 "use client";
 
-import { useEffect, useRef, useState, type PointerEvent } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   areaAroundPaths,
+  areaAtTime,
   areaOnStage,
+  easeStageBox,
   MIN_DRAG_PIXELS,
   videoAreaFromDrag,
   type PixelSize,
-  type StagePoint,
+  type StageBox,
+  type TimedArea,
   type VideoArea,
 } from "@/lib/studio/area";
-import type { TimeRange, Video } from "@/lib/trackmap/trackmap.generated";
+import { useStageDrag, type StageDrag } from "@/lib/studio/use-stage-drag";
+import type { Video } from "@/lib/trackmap/trackmap.generated";
 import { useStudio } from "./StudioContext";
+import { TrackedCorners } from "./TrackedCorners";
 
 export type VideoMaskStageProps = {
   video: Video;
@@ -24,13 +29,10 @@ export type VideoMaskStageProps = {
   sizeClass: string;
 };
 
+// The name is only needed to say what the corners mark, not to sit on the picture.
+const TRACKED_NAME_MS = 2200;
 // The stage below is `aspect-video`.
 const STAGE_SIZE: PixelSize = { width: 16, height: 9 };
-
-type AreaDrag = {
-  start: StagePoint;
-  end: StagePoint;
-};
 
 type MaskFrame = {
   frame: number;
@@ -54,20 +56,6 @@ function parseMaskFrames(json: unknown): MaskFrame[] {
   return frames;
 }
 
-function isTimeInRanges(time: number, ranges: TimeRange[]): boolean {
-  return ranges.some(([start, end]) => time >= start && time <= end);
-}
-
-function nearestFramePaths(frames: MaskFrame[], target: number): string[] {
-  let nearest: MaskFrame | null = null;
-  for (const frame of frames) {
-    if (nearest === null || Math.abs(frame.frame - target) < Math.abs(nearest.frame - target)) {
-      nearest = frame;
-    }
-  }
-  return nearest?.paths ?? [];
-}
-
 export function VideoMaskStage({
   video,
   onSelectArea,
@@ -75,10 +63,12 @@ export function VideoMaskStage({
   followedTrackId,
   sizeClass,
 }: VideoMaskStageProps) {
-  const { currentTime, duration, playing, ratePercent, togglePlay } = useStudio();
+  const { currentTime, duration, getPlaybackTime, playing, ratePercent, togglePlay } = useStudio();
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [maskFrames, setMaskFrames] = useState<{ id: string; frames: MaskFrame[] } | null>(null);
-  const [areaDrag, setAreaDrag] = useState<AreaDrag | null>(null);
+  const trackedBoxRef = useRef<HTMLDivElement | null>(null);
+  const trackedNameRef = useRef<HTMLSpanElement | null>(null);
+  const [areaDrag, setAreaDrag] = useState<StageDrag | null>(null);
   const [dragActive, setDragActive] = useState<boolean>(false);
 
   const fps = video.fps > 0 ? video.fps : 10;
@@ -120,52 +110,84 @@ export function VideoMaskStage({
     };
   }, [masksUrl, followedTrackId]);
 
-  const pointFromEvent = (event: PointerEvent<HTMLDivElement>): StagePoint => {
-    const box = event.currentTarget.getBoundingClientRect();
-    return { x: event.clientX - box.left, y: event.clientY - box.top };
-  };
+  const beginDrag = useStageDrag({
+    onChange: (drag) => {
+      setAreaDrag(drag);
+      setDragActive(drag !== null);
+    },
+    onFinish: ({ start, end }, stage) => {
+      setDragActive(false);
+      if (onSelectArea === undefined) return;
+      if (Math.hypot(end.x - start.x, end.y - start.y) < MIN_DRAG_PIXELS) {
+        setAreaDrag(null);
+        togglePlay();
+        return;
+      }
+      setAreaDrag({ start, end });
+      if (playing) togglePlay();
+      const lastFrame = Math.max(0, Math.floor(duration * fps) - 1);
+      onSelectArea(
+        videoAreaFromDrag(
+          start,
+          end,
+          { width: stage.width, height: stage.height },
+          { width: video.width, height: video.height },
+        ),
+        Math.min(lastFrame, Math.round(getPlaybackTime() * fps)),
+      );
+    },
+  });
 
-  const finishAreaDrag = (event: PointerEvent<HTMLDivElement>) => {
-    setDragActive(false);
-    if (areaDrag === null || onSelectArea === undefined) return;
-    const end = pointFromEvent(event);
-    const box = event.currentTarget.getBoundingClientRect();
-    if (Math.hypot(end.x - areaDrag.start.x, end.y - areaDrag.start.y) < MIN_DRAG_PIXELS) {
-      setAreaDrag(null);
-      togglePlay();
-      return;
+  const trackedAreas = useMemo<TimedArea[]>(() => {
+    if (followed === undefined || maskFrames?.id !== followed.id) return [];
+    const areas: TimedArea[] = [];
+    for (const frame of maskFrames.frames) {
+      const area = areaAroundPaths(frame.paths);
+      if (area !== null) areas.push({ time: frame.frame / fps, area });
     }
-    setAreaDrag({ start: areaDrag.start, end });
-    if (playing) togglePlay();
-    const lastFrame = Math.max(0, Math.floor(duration * fps) - 1);
-    onSelectArea(
-      videoAreaFromDrag(
-        areaDrag.start,
-        end,
-        { width: box.width, height: box.height },
-        { width: video.width, height: video.height },
-      ),
-      Math.min(lastFrame, Math.round(currentTime * fps)),
-    );
-  };
+    return areas;
+  }, [followed, maskFrames, fps]);
 
-  const showMask =
-    followed !== undefined &&
-    maskFrames?.id === followed.id &&
-    isTimeInRanges(currentTime, followed.visible);
-  const trackedArea = showMask
-    ? areaAroundPaths(nearestFramePaths(maskFrames.frames, Math.round(currentTime * fps)))
-    : null;
-  const trackedBox =
-    trackedArea === null
-      ? null
-      : areaOnStage(trackedArea, { width: video.width, height: video.height }, STAGE_SIZE);
+  // Every drawn frame rather than on React's clock, or the box would step behind the picture.
+  useEffect(() => {
+    if (trackedAreas.length === 0) return;
+    const size = { width: video.width, height: video.height };
+    let shown: StageBox | null = null;
+    let shownSince = 0;
+    let lastDraw = performance.now();
+    let request = requestAnimationFrame(function draw(now) {
+      const box = trackedBoxRef.current;
+      const name = trackedNameRef.current;
+      const area = areaAtTime(trackedAreas, getPlaybackTime());
+      if (area === null) {
+        shown = null;
+      } else {
+        const target = areaOnStage(area, size, STAGE_SIZE);
+        if (shown === null) shownSince = now;
+        shown = shown === null ? target : easeStageBox(shown, target, now - lastDraw);
+      }
+      lastDraw = now;
+      if (box !== null) {
+        box.style.opacity = shown === null ? "0" : "1";
+        if (shown !== null) {
+          box.style.left = `${shown.left}%`;
+          box.style.top = `${shown.top}%`;
+          box.style.width = `${shown.width}%`;
+          box.style.height = `${shown.height}%`;
+        }
+      }
+      if (name !== null) name.style.opacity = shown !== null && now - shownSince < TRACKED_NAME_MS ? "1" : "0";
+      request = requestAnimationFrame(draw);
+    });
+    return () => cancelAnimationFrame(request);
+  }, [trackedAreas, getPlaybackTime, video.width, video.height]);
+
   const hint =
     onSelectArea !== undefined
       ? areaBusy
         ? "Finding that sound"
         : "Drag over a sound"
-      : followed !== undefined && trackedBox === null
+      : followed !== undefined && trackedAreas.length === 0
         ? `Tracking ${followed.label}`
         : null;
   const onScreenPercent = (time: number) => (duration > 0 ? (time / duration) * 100 : 0);
@@ -180,20 +202,7 @@ export function VideoMaskStage({
           onClick={onSelectArea === undefined ? togglePlay : undefined}
           onPointerDown={(event) => {
             if (onSelectArea === undefined || areaBusy) return;
-            event.currentTarget.setPointerCapture(event.pointerId);
-            const point = pointFromEvent(event);
-            setAreaDrag({ start: point, end: point });
-            setDragActive(true);
-          }}
-          onPointerMove={(event) => {
-            if (areaDrag !== null && dragActive) {
-              setAreaDrag({ start: areaDrag.start, end: pointFromEvent(event) });
-            }
-          }}
-          onPointerUp={finishAreaDrag}
-          onPointerCancel={() => {
-            setDragActive(false);
-            setAreaDrag(null);
+            beginDrag(event);
           }}
         >
           <video
@@ -204,18 +213,17 @@ export function VideoMaskStage({
             className="h-full w-full object-contain"
           />
 
-          {trackedBox !== null && followed !== undefined ? (
+          {followed !== undefined && trackedAreas.length > 0 ? (
             <div
+              ref={trackedBoxRef}
               aria-hidden="true"
-              style={{
-                left: `${trackedBox.left}%`,
-                top: `${trackedBox.top}%`,
-                width: `${trackedBox.width}%`,
-                height: `${trackedBox.height}%`,
-              }}
-              className="pointer-events-none absolute border-2 border-accent transition-[left,top,width,height] duration-200 ease-linear motion-reduce:transition-none"
+              className="pointer-events-none absolute opacity-0 shadow-[0_0_0_100vmax_rgb(0_0_0/0.3)] transition-opacity duration-300 motion-reduce:transition-none"
             >
-              <span className="absolute top-0 left-0 bg-accent px-1.5 py-0.5 text-xs font-medium text-accent-ink">
+              <TrackedCorners />
+              <span
+                ref={trackedNameRef}
+                className="absolute top-1.5 left-2 rounded-full bg-bg/80 px-2 py-0.5 text-xs text-text opacity-0 transition-opacity duration-500 motion-reduce:transition-none"
+              >
                 {followed.label}
               </span>
             </div>

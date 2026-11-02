@@ -21,9 +21,8 @@ type ClipVideoProps = {
  */
 export function ClipVideo({ onSelectArea, areaBusy, sizeClass }: ClipVideoProps) {
   const router = useRouter();
-  const { clipId, trackMap, selectedIsolationId } = useStudio();
+  const { clipId, trackMap, selectedIsolationId, followedTrackId, setFollowedTrackId } = useStudio();
   // Each holds the track it belongs to, so switching sounds can never show another sound's state.
-  const [followedTrackId, setFollowedTrackId] = useState<string | null>(null);
   const [busyTrackId, setBusyTrackId] = useState<string | null>(null);
   const [trackingError, setTrackingError] = useState<{ trackId: string; message: string } | null>(null);
 
