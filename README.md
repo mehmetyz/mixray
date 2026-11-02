@@ -36,6 +36,17 @@ cd engine && uv sync && uv run modal deploy app.py
 Set the variables listed in `.env.example`. The browser never sees a model key: every model call
 goes through a server route or Modal.
 
+## Demos
+
+The home page offers six demos as shortcuts: clicking one uploads its video through the normal Add
+flow, with the sound to separate already chosen. There are five AI-generated scenes (a café piano under espresso steam, a song in a park,
+a busker with a dog and a taxi, a rooftop singer, a piano on a rainy night) and one real recording,
+a public-domain U.S. Navy Band performance. Each is labelled Real recording or AI-generated, and the
+AI-generated videos carry a watermark. [CREDITS.md](CREDITS.md) lists each one and explains why most
+are AI-generated: an open licence on a video of musicians rarely covers the music they play.
+
+`node scripts/build_demos.mjs <engine-url>` rebuilds the videos and their stills.
+
 ## Rights
 
 All code in this repository was written during the hackathon. Upload only music or video you own

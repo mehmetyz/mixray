@@ -135,6 +135,9 @@ Decisions and current state. The plan is in `SPEC.md`, the UI in `DESIGN.md`, th
   and returned only empty draws on a real guitar video; `AGENTS.md` and `SPEC.md` still call Demucs a
   fallback. Tempo and key accuracy; a full isolation takes up to about 5 minutes; drum hits to pads are
   measured for kick only and not built.
-- Open: demo content (an owned 30 s clip with a clear lead, and a 30 s video of a keyboard with a
-  second sound source visible). SAM 3.1 takes MP4/H.264, so anything in another container is
-  transcoded first.
+- Done (Nov 2): six demos on the home page, as shortcuts: a card opens Add with its video from
+  `apps/web/public/demos` already chosen and its sound typed in; the user can change the name, the sound
+  or draw an area, and Continue runs the real pipeline. Add also gained a project name field. Five were generated in Google Flow (labelled AI-generated, watermark burned in) and one
+  is a real public-domain U.S. Navy Band recording. Most are generated because an open licence on a video
+  of musicians rarely covers the music they play; `CREDITS.md` has the details.
+- Open: a real recording on the Launchkey, with its MIDI, to show note accuracy against what was played.
