@@ -4,7 +4,7 @@ import { SpeechGate, MAX_SPEECH_SECONDS, type SpeechGateEvent } from "../lib/aud
 import { separationSteps, type ProjectRecord } from "../lib/projects/types";
 import { buildStepLinks, stepNumber } from "../lib/steps";
 import { areaAroundPaths, areaOnStage, scaleVideoArea, videoAreaFromDrag } from "../lib/studio/area";
-import { addToTake, type TakeNote } from "../lib/studio/take";
+import { addToTake, forgetPassed, startsNewPass, type PassedNote, type TakeNote } from "../lib/studio/take";
 
 describe("drawing an area on a letterboxed video", () => {
   const video = { width: 1280, height: 720 };
@@ -69,6 +69,43 @@ describe("the take keeps only the latest pass", () => {
     );
     assert.equal(take.length, 4000);
     assert.equal(take[take.length - 1]?.time, 499.9);
+  });
+});
+
+describe("silence on a new pass", () => {
+  const firstPass: PassedNote[] = [0, 1, 2, 3].map((time) => ({ time, pitch: 60, pass: 0 }));
+
+  function playThrough(take: PassedNote[], pass: number, end: number): PassedNote[] {
+    let kept = take;
+    for (let time = 0.5; time <= end; time += 0.5) kept = forgetPassed(kept, time - 0.5, time, pass);
+    return kept;
+  }
+
+  it("clears an earlier pass as the playhead crosses it", () => {
+    assert.deepEqual(playThrough(firstPass, 1, 3.5).map((note) => note.time), [0]);
+  });
+
+  it("leaves what the new pass has not reached", () => {
+    assert.deepEqual(playThrough(firstPass, 1, 1.5).map((note) => note.time), [0, 2, 3]);
+  });
+
+  it("keeps a wrong note played on the new pass, and no old successes with it", () => {
+    const take = [...firstPass, { time: 1.2, pitch: 61, pass: 1 }];
+    assert.deepEqual(playThrough(take, 1, 3.5).map((note) => note.time), [0, 1.2]);
+  });
+
+  it("leaves the first pass alone while it is being played", () => {
+    assert.equal(playThrough(firstPass, 0, 3.5), firstPass);
+  });
+
+  it("does not clear what a seek jumps over", () => {
+    assert.equal(forgetPassed(firstPass, 0.5, 2.5, 1), firstPass);
+  });
+
+  it("counts going back as a new pass, but not clock jitter", () => {
+    assert.equal(startsNewPass(4, 1), true);
+    assert.equal(startsNewPass(4, 3.99), false);
+    assert.equal(startsNewPass(1, 2), false);
   });
 });
 

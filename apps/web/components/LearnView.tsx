@@ -11,7 +11,7 @@ import {
 } from "react";
 import { arrangementOctaveOffset, KeySampler } from "@/lib/audio/key-sampler";
 import { drawLearnPianoRoll, type PlayedNoteDot } from "@/lib/studio/canvas";
-import { addToTake } from "@/lib/studio/take";
+import { addToTake, forgetPassed, REWIND_SECONDS, startsNewPass, type PassedNote } from "@/lib/studio/take";
 import { midiToNoteName } from "@/lib/studio/format";
 import { requestCoach } from "@/lib/coach";
 import {
@@ -51,6 +51,8 @@ const MAX_OCTAVE_SHIFT = 2;
 const BLACK_KEY_LEFT_PERCENT: readonly number[] = [
   5.2, 12.3, 26.6, 33.8, 40.9, 55.2, 62.3, 76.6, 83.8, 90.9,
 ];
+
+type TakeDot = PlayedNoteDot & PassedNote;
 
 function filterArrangementNotes(
   notes: Note[],
@@ -99,7 +101,9 @@ export function LearnView() {
   const [level, setLevel] = useState<PracticeLevel>("easy");
   const [midiDevices, setMidiDevices] = useState<MidiDevice[]>([]);
   const [selectedMidiId, setSelectedMidiId] = useState<string>("all");
-  const [playedDots, setPlayedDots] = useState<PlayedNoteDot[]>([]);
+  const [playedDots, setPlayedDots] = useState<TakeDot[]>([]);
+  const passRef = useRef<number>(0);
+  const previousTimeRef = useRef<number>(currentTime);
   const [lastPlayedLabel, setLastPlayedLabel] = useState<string>("Ready · press A–L");
   const [octaveShift, setOctaveShift] = useState<number>(0);
   const octaveShiftRef = useRef<number>(octaveShift);
@@ -256,7 +260,12 @@ export function LearnView() {
         // Keys pressed while paused are for finding notes: there is no moment to score them against.
         if (playingRef.current) {
           setPlayedDots((prev) =>
-            addToTake(prev, { time: event.onsetSeconds, pitch: event.pitch, offsetMs: 0 }),
+            addToTake(prev, {
+              time: event.onsetSeconds,
+              pitch: event.pitch,
+              offsetMs: 0,
+              pass: passRef.current,
+            }),
           );
         }
       } else if (event.kind === "note_off") {
@@ -290,6 +299,19 @@ export function LearnView() {
       }),
     );
   }, [noteStream, selectedMidiId]);
+
+  useEffect(() => {
+    const from = previousTimeRef.current;
+    previousTimeRef.current = currentTime;
+    if (startsNewPass(from, currentTime)) {
+      passRef.current += 1;
+      const pass = passRef.current;
+      setPlayedDots((prev) => forgetPassed(prev, currentTime - REWIND_SECONDS, currentTime, pass));
+    } else if (playing) {
+      const pass = passRef.current;
+      setPlayedDots((prev) => forgetPassed(prev, from, currentTime, pass));
+    }
+  }, [currentTime, playing]);
 
   const shiftOctave = useCallback((delta: number) => {
     setOctaveShift((prev) => Math.max(MIN_OCTAVE_SHIFT, Math.min(MAX_OCTAVE_SHIFT, prev + delta)));
