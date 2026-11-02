@@ -69,6 +69,9 @@ export type ClipPickerProps = {
   demo?: DemoClip;
 };
 
+const CONTRIBUTOR_NOTICE =
+  "Clips are sent to Meta models in contributor mode and may be used by Meta to improve them. Uploads are deleted after 7 days.";
+
 export function ClipPicker({ onCancel, demo }: ClipPickerProps = {}) {
   const router = useRouter();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -92,7 +95,9 @@ export function ClipPicker({ onCancel, demo }: ClipPickerProps = {}) {
   const [projectTitle, setProjectTitle] = useState<string>("");
   // The demo the chosen file came from, so the clip keeps its label and credit.
   const [fileDemo, setFileDemo] = useState<DemoClip | null>(null);
-  const [rightsChecked, setRightsChecked] = useState<boolean>(true);
+  const [rightsChecked, setRightsChecked] = useState<boolean>(false);
+  // Mixray's own demos are credited, so only someone's own file asks them to confirm its rights.
+  const rightsConfirmed = fileDemo !== null || rightsChecked;
   const [dragActive, setDragActive] = useState<boolean>(false);
   const [uploadState, setUploadState] = useState<UploadState>("idle");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -226,6 +231,7 @@ export function ClipPicker({ onCancel, demo }: ClipPickerProps = {}) {
 
   const handleFileChosen = async (file: File, fromDemo: DemoClip | null = null) => {
     setFileDemo(fromDemo);
+    setRightsChecked(false);
     setAreaDrag(null);
     setPickedArea(null);
     stopPlayback();
@@ -376,7 +382,7 @@ export function ClipPicker({ onCancel, demo }: ClipPickerProps = {}) {
   };
 
   const handleSubmit = async () => {
-    if (selectedFile === null || preview === null || !rightsChecked) return;
+    if (selectedFile === null || preview === null || !rightsConfirmed) return;
     stopPlayback();
     setErrorMessage(null);
 
@@ -923,25 +929,26 @@ export function ClipPicker({ onCancel, demo }: ClipPickerProps = {}) {
 
       {selectedFile !== null && !busy ? (
         <div className="space-y-3">
-          <label className="flex cursor-pointer items-start gap-2.5">
-            <input
-              type="checkbox"
-              checked={rightsChecked}
-              onChange={(event) => setRightsChecked(event.target.checked)}
-              className="mt-0.5 h-4 w-4 rounded-icon border-control bg-bg accent-accent"
-            />
-            <span className="text-sm text-text-2">
-              I own this file or have the rights to use it.
-              <span className="mt-0.5 block text-xs leading-relaxed text-muted">
-                Clips are sent to Meta models in contributor mode and may be used by Meta to improve
-                them. Uploads are deleted after 7 days.
+          {fileDemo === null ? (
+            <label className="flex cursor-pointer items-start gap-2.5">
+              <input
+                type="checkbox"
+                checked={rightsChecked}
+                onChange={(event) => setRightsChecked(event.target.checked)}
+                className="mt-0.5 h-4 w-4 rounded-icon border-control bg-bg accent-accent"
+              />
+              <span className="text-sm text-text-2">
+                I own this file or have the rights to use it.
+                <span className="mt-0.5 block text-xs leading-relaxed text-muted">{CONTRIBUTOR_NOTICE}</span>
               </span>
-            </span>
-          </label>
+            </label>
+          ) : (
+            <p className="text-xs leading-relaxed text-muted">{CONTRIBUTOR_NOTICE}</p>
+          )}
 
           <button
             type="button"
-            disabled={selectedFile === null || !rightsChecked || busy}
+            disabled={selectedFile === null || !rightsConfirmed || busy}
             onClick={() => void handleSubmit()}
             className="flex h-10 w-full cursor-pointer items-center justify-center rounded-full bg-text text-sm font-semibold text-bg transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
           >
