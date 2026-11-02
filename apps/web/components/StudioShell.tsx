@@ -6,7 +6,10 @@ import type { MouseEvent, ReactNode } from "react";
 import type { StemName } from "@/lib/audio/player";
 import type { ClipStepId, NavState } from "@/lib/steps";
 import { barAtTime, formatBarBeat, formatClockSeconds, methodShortLabel } from "@/lib/studio/format";
+import { findDemoClip } from "@/lib/demos";
+import { useProject } from "@/lib/projects/storage";
 import { AppHeader } from "./AppHeader";
+import { DemoCredit } from "./DemoBadge";
 import { useStudio, type BarLoop } from "./StudioContext";
 
 type TimelineRulerProps = {
@@ -173,6 +176,7 @@ export function StudioShell({ children }: StudioShellProps) {
   } = useStudio();
 
   const step = detectStepFromPath(pathname);
+  const demo = findDemoClip(useProject(clipId)?.demoId);
   const nav: NavState = {
     current: step,
     clipId,
@@ -201,6 +205,7 @@ export function StudioShell({ children }: StudioShellProps) {
               <p className="mono-num mt-1 text-xs text-muted">
                 {Math.round(trackMap.tempo.bpm)} BPM, {trackMap.key.tonic} {trackMap.key.mode}
               </p>
+              {demo !== undefined ? <DemoCredit demo={demo} /> : null}
             </div>
 
             <div className="space-y-1">

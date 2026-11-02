@@ -1,3 +1,4 @@
+import type { DemoClipId } from "@/lib/demos";
 import type { JobStage } from "@/lib/engine/types";
 
 export type ProjectKind = "audio" | "video";
@@ -25,6 +26,8 @@ export type ProjectRecord = {
   key?: string;
   activePrompt?: string;
   isolatedSoundLabel?: string;
+  /** Added from a demo card, so the studio can show its label and credit. */
+  demoId?: DemoClipId;
 };
 
 /** The steps a separation goes through, in order, for showing where it is. */

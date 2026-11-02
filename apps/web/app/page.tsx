@@ -5,6 +5,7 @@ import { useSearchParams } from "next/navigation";
 import { ClipPicker } from "@/components/ClipPicker";
 import { ProjectDashboard } from "@/components/ProjectDashboard";
 import { AddShell } from "@/components/StudioShell";
+import { findDemoClip, type DemoClip } from "@/lib/demos";
 import { useProjects } from "@/lib/projects/storage";
 
 function HomeContent() {
@@ -13,19 +14,28 @@ function HomeContent() {
   const [isAdding, setIsAdding] = useState<boolean>(
     searchParams.get("add") === "1" || searchParams.get("new") === "1",
   );
+  // `/?demo=cafe-piano` opens a demo straight from a link.
+  const [demo, setDemo] = useState<DemoClip | undefined>(() =>
+    findDemoClip(searchParams.get("demo") ?? undefined),
+  );
 
-  // Someone with no clips yet has nothing to choose from, so they start on Add.
-  if (isAdding || projects.length === 0) {
+  if (isAdding || demo !== undefined) {
     return (
       <AddShell className="max-w-3xl">
-        <ClipPicker onCancel={projects.length > 0 ? () => setIsAdding(false) : undefined} />
+        <ClipPicker
+          demo={demo}
+          onCancel={() => {
+            setIsAdding(false);
+            setDemo(undefined);
+          }}
+        />
       </AddShell>
     );
   }
 
   return (
-    <AddShell className="max-w-3xl">
-      <ProjectDashboard projects={projects} onAddNew={() => setIsAdding(true)} />
+    <AddShell className="max-w-5xl">
+      <ProjectDashboard projects={projects} onAddNew={() => setIsAdding(true)} onOpenDemo={setDemo} />
     </AddShell>
   );
 }

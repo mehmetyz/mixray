@@ -19,6 +19,7 @@ import {
   uploadClip,
   waitForJob,
 } from "@/lib/engine/client";
+import type { DemoClip } from "@/lib/demos";
 import { saveProject } from "@/lib/projects/storage";
 import type { ProjectRecord } from "@/lib/projects/types";
 import {
@@ -31,6 +32,7 @@ import {
 } from "@/lib/studio/area";
 import { formatClockSeconds } from "@/lib/studio/format";
 import { inspectMediaFile, type MediaPreview } from "@/lib/studio/media-preview";
+import { DemoCredit } from "./DemoBadge";
 import { ScreenHeading } from "./ScreenHeading";
 import { WorkingPanel } from "./WorkingPanel";
 
@@ -63,9 +65,11 @@ function stripExtension(filename: string): string {
 
 export type ClipPickerProps = {
   onCancel?: () => void;
+  /** Open Add with this demo's video already chosen and its sound typed in. */
+  demo?: DemoClip;
 };
 
-export function ClipPicker({ onCancel }: ClipPickerProps = {}) {
+export function ClipPicker({ onCancel, demo }: ClipPickerProps = {}) {
   const router = useRouter();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const previewAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -86,6 +90,8 @@ export function ClipPicker({ onCancel }: ClipPickerProps = {}) {
 
   const [promptInput, setPromptInput] = useState<string>("");
   const [projectTitle, setProjectTitle] = useState<string>("");
+  // The demo the chosen file came from, so the clip keeps its label and credit.
+  const [fileDemo, setFileDemo] = useState<DemoClip | null>(null);
   const [rightsChecked, setRightsChecked] = useState<boolean>(true);
   const [dragActive, setDragActive] = useState<boolean>(false);
   const [uploadState, setUploadState] = useState<UploadState>("idle");
@@ -218,7 +224,8 @@ export function ClipPicker({ onCancel }: ClipPickerProps = {}) {
     });
   };
 
-  const handleFileChosen = async (file: File) => {
+  const handleFileChosen = async (file: File, fromDemo: DemoClip | null = null) => {
+    setFileDemo(fromDemo);
     setAreaDrag(null);
     setPickedArea(null);
     stopPlayback();
@@ -425,6 +432,7 @@ export function ClipPicker({ onCancel }: ClipPickerProps = {}) {
         processingSince: hasIsolation ? now : undefined,
         usesArea: pickedArea !== null,
         activePrompt: initialPrompt || undefined,
+        demoId: fileDemo?.id,
       };
       saveProject(record);
 
@@ -453,6 +461,24 @@ export function ClipPicker({ onCancel }: ClipPickerProps = {}) {
   };
 
   const busy = uploadState !== "idle";
+
+  // A demo card opens Add with its video loaded like a chosen file; everything after is the same.
+  const loadedDemo = useRef<string | null>(null);
+  useEffect(() => {
+    if (demo === undefined || loadedDemo.current === demo.id) return;
+    loadedDemo.current = demo.id;
+    void (async () => {
+      try {
+        const response = await fetch(`/demos/${demo.id}/video.mp4`);
+        if (!response.ok) throw new Error("Could not load the demo video.");
+        const file = new File([await response.blob()], `${demo.title}.mp4`, { type: "video/mp4" });
+        await handleFileChosen(file, demo);
+        setPromptInput(demo.prompt);
+      } catch (error: unknown) {
+        setErrorMessage(error instanceof Error ? error.message : "Could not open the demo.");
+      }
+    })();
+  });
 
   useEffect(() => {
     if (!busy) return;
@@ -562,7 +588,7 @@ export function ClipPicker({ onCancel }: ClipPickerProps = {}) {
           steps={pipelineStages}
           current={Math.min(currentStepIndex, pipelineStages.length - 1)}
           seconds={elapsedSeconds}
-          subject={selectedFile.name}
+          subject={projectTitle.trim() || selectedFile.name}
           note="The sound keeps separating once the studio opens."
         />
       ) : (
@@ -859,6 +885,21 @@ export function ClipPicker({ onCancel }: ClipPickerProps = {}) {
                 </div>
               </div>
             </div>
+          </div>
+
+          <div className="border-t border-line pt-3">
+            <label htmlFor="project-title-input" className="block text-sm text-text">
+              Project name
+            </label>
+            <input
+              id="project-title-input"
+              type="text"
+              value={projectTitle}
+              onChange={(event) => setProjectTitle(event.target.value)}
+              disabled={busy}
+              className="mt-1.5 h-10 w-full rounded-card border border-line-2 bg-inset px-3 text-sm text-text placeholder:text-muted focus:border-control focus:outline-none"
+            />
+            {fileDemo !== null ? <DemoCredit demo={fileDemo} /> : null}
           </div>
 
           {pickedArea === null ? (

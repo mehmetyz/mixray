@@ -3,14 +3,18 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { JOB_STAGE_LABELS, type JobStage } from "@/lib/engine/types";
+import { DEMO_CLIPS, findDemoClip, type DemoClip } from "@/lib/demos";
 import { useEngineJob, type EngineJobState } from "@/lib/projects/engine-job";
 import { deleteProject } from "@/lib/projects/storage";
 import { separationSteps, type ProjectRecord } from "@/lib/projects/types";
+import { ClipThumbnail } from "./ClipThumbnail";
+import { DemoBadge } from "./DemoBadge";
 import { ScreenHeading } from "./ScreenHeading";
 
 type ProjectDashboardProps = {
   projects: readonly ProjectRecord[];
   onAddNew: () => void;
+  onOpenDemo: (demo: DemoClip) => void;
 };
 
 type ProjectRowProps = {
@@ -18,6 +22,11 @@ type ProjectRowProps = {
   isConfirmingRemove: boolean;
   onAskRemove: () => void;
   onCancelRemove: () => void;
+};
+
+type DemoCardProps = {
+  demo: DemoClip;
+  onOpen: () => void;
 };
 
 type ProgressProps = {
@@ -132,10 +141,12 @@ function StatusLabel({ state }: StatusLabelProps) {
 function ProjectRow({ project, isConfirmingRemove, onAskRemove, onCancelRemove }: ProjectRowProps) {
   const href = `/c/${encodeURIComponent(project.id)}/pick`;
   const state = useEngineJob(project.id);
+  const demo = findDemoClip(project.demoId);
 
   return (
     <li className="px-4 py-3.5">
       <div className="flex items-center gap-3">
+        <ClipThumbnail clipId={project.id} kind={project.kind} />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <Link
@@ -145,6 +156,7 @@ function ProjectRow({ project, isConfirmingRemove, onAskRemove, onCancelRemove }
               {project.title}
             </Link>
             <StatusLabel state={state} />
+            {demo !== undefined ? <DemoBadge origin={demo.origin} /> : null}
           </div>
           <p className="mono-num mt-1 truncate text-[11px] text-muted">
             {project.kind === "video" ? "Video" : "Audio"}, {projectFacts(project)}, added{" "}
@@ -214,15 +226,44 @@ function ProjectRow({ project, isConfirmingRemove, onAskRemove, onCancelRemove }
   );
 }
 
-/** The clips this browser added, newest first. */
-export function ProjectDashboard({ projects, onAddNew }: ProjectDashboardProps) {
+function DemoCard({ demo, onOpen }: DemoCardProps) {
+  return (
+    <li>
+      <button
+        type="button"
+        onClick={onOpen}
+        className="group block w-full cursor-pointer overflow-hidden rounded-card border border-line bg-surface text-left transition hover:border-control"
+      >
+        <div className="relative aspect-video bg-inset">
+          {/* eslint-disable-next-line @next/next/no-img-element -- a fixed local still, sized by its box */}
+          <img
+            src={`/demos/${demo.id}/poster.jpg`}
+            alt=""
+            loading="lazy"
+            className="h-full w-full object-cover transition group-hover:opacity-90"
+          />
+          <span className="absolute left-2 top-2 rounded-full bg-bg/85 backdrop-blur-xs">
+            <DemoBadge origin={demo.origin} />
+          </span>
+        </div>
+        <div className="p-3">
+          <p className="truncate text-sm font-semibold text-text group-hover:text-accent">{demo.title}</p>
+          <p className="mt-1 line-clamp-2 text-xs leading-snug text-text-2">{demo.shows}</p>
+        </div>
+      </button>
+    </li>
+  );
+}
+
+/** The demos that open without an upload, then the clips this browser added, newest first. */
+export function ProjectDashboard({ projects, onAddNew, onOpenDemo }: ProjectDashboardProps) {
   const [confirmRemoveId, setConfirmRemoveId] = useState<string | null>(null);
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-8">
       <div className="flex items-end justify-between gap-4">
-        <ScreenHeading title="Your clips">
-          <p className="text-sm text-text-2">Kept in this browser. The engine deletes clips after seven days.</p>
+        <ScreenHeading title="Point at a sound. Hear it alone. Learn to play it.">
+          <p className="text-sm text-text-2">Open a demo, or add a song or a video of your own.</p>
         </ScreenHeading>
         <button
           type="button"
@@ -233,6 +274,47 @@ export function ProjectDashboard({ projects, onAddNew }: ProjectDashboardProps) 
         </button>
       </div>
 
+      <details open className="group/demos rounded-card border border-line bg-surface p-4">
+        <summary className="flex cursor-pointer list-none items-center justify-between gap-4 [&::-webkit-details-marker]:hidden">
+          <span>
+            <span className="block text-lg font-semibold tracking-tight text-text">Try a demo</span>
+            <span className="mt-0.5 block text-sm text-text-2">
+              Opens Add with the video ready: draw an area or type a sound, then continue. Each one
+              says whether it is a real recording or AI-generated.
+            </span>
+          </span>
+          <span className="flex shrink-0 items-center gap-1.5 rounded-icon border border-line-2 px-2.5 py-1.5 text-xs font-medium text-text">
+            <span className="group-open/demos:hidden">Show</span>
+            <span className="hidden group-open/demos:inline">Hide</span>
+            <svg
+              aria-hidden="true"
+              viewBox="0 0 16 16"
+              className="h-3.5 w-3.5 transition group-open/demos:rotate-180"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.75"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M4 6l4 4 4-4" />
+            </svg>
+          </span>
+        </summary>
+        <ul className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          {DEMO_CLIPS.map((demo) => (
+            <DemoCard key={demo.id} demo={demo} onOpen={() => onOpenDemo(demo)} />
+          ))}
+        </ul>
+      </details>
+
+      {projects.length > 0 ? (
+        <section className="space-y-2.5 border-t border-line pt-6">
+          <div>
+            <h2 className="text-sm font-semibold text-text">Your clips</h2>
+            <p className="mt-0.5 text-xs text-muted">
+              Kept in this browser. The engine deletes clips after seven days.
+            </p>
+          </div>
       <ul className="divide-y divide-line rounded-card border border-line bg-surface">
         {projects.map((project) => (
           <ProjectRow
@@ -244,6 +326,8 @@ export function ProjectDashboard({ projects, onAddNew }: ProjectDashboardProps) 
           />
         ))}
       </ul>
+        </section>
+      ) : null}
     </div>
   );
 }

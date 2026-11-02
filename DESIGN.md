@@ -87,7 +87,8 @@ Desktop-first DAW frame (`100dvh` on `lg+`, scrollable stacked panels on mobile)
 
 One column, one job.
 
-- With clips saved in this browser, `/` first lists them (`Your clips`): title, length, tempo, key, the sound, and either the date, the real separation stage or the error; `New clip` opens Add. With none, Add opens directly. A separation keeps running after the studio opens and resumes its progress on Isolate after a reload.
+- `/` opens on the tagline and `New clip`, then `Demos`: six cards, each a still from the video, a `Real recording` or `AI-generated` label and one line on what it shows. A card is a shortcut to Add: it uploads that video through the normal flow with its sound already typed, and `/?demo=<id>` does the same from a link. In the studio a demo carries the same label and its credit under the clip title.
+- Below the demos, `Your clips` lists the clips added in this browser, demos included, with a thumbnail: title, length, tempo, key, the sound, and the engine's live state (Checking, Working with its steps and time, Ready, Failed, Expired); `New clip` opens Add. A separation keeps running after the studio opens and resumes its progress on Isolate after a reload.
 
 - Title and a line saying what to do. Drop zone with the real limits: `MP3, WAV, FLAC, MP4 or MOV. Up to 50 MB and 6 minutes.`
 - Once a file is chosen: video preview, where dragging draws an area in `--accent` and a click plays or pauses; the `≤ 30 s` window on a waveform; an optional text field for the sound, hidden once an area is drawn.
