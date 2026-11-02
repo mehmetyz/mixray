@@ -46,7 +46,6 @@ API_KEY_ENV = "MIXRAY_API_KEY"
 DEV_NO_AUTH_ENV = "MIXRAY_DEV_NO_AUTH"
 DEFAULT_CORS_ORIGINS = (
     "https://mixray.vercel.app",
-    "https://mixray.dev",
     "http://localhost:3000",
     "http://127.0.0.1:3000",
 )
