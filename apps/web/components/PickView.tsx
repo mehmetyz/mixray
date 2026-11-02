@@ -11,7 +11,7 @@ import { separationSteps } from "@/lib/projects/types";
 import type { VideoArea } from "@/lib/studio/area";
 import { useStudio } from "./StudioContext";
 import { TimelineRuler } from "./StudioShell";
-import { VideoMaskStage } from "./VideoMaskStage";
+import { ClipVideo } from "./ClipVideo";
 import { WorkingPanel } from "./WorkingPanel";
 import { WaveformLanes } from "./WaveformLanes";
 
@@ -151,16 +151,13 @@ export function PickView() {
       <section className="flex min-w-0 flex-1 flex-col bg-bg lg:overflow-y-auto">
         <TimelineRuler />
 
-        {trackMap.video !== undefined ? (
-          <VideoMaskStage
-            video={trackMap.video}
-            onSelectArea={(area: VideoArea, frame: number) => {
-              void runJob("naming", () => startAreaIsolation({ jobId: clipId, area, frame }));
-            }}
-            areaBusy={shownStage !== null}
-            sizeClass="max-w-[calc(46dvh*16/9)]"
-          />
-        ) : null}
+        <ClipVideo
+          onSelectArea={(area: VideoArea, frame: number) => {
+            void runJob("naming", () => startAreaIsolation({ jobId: clipId, area, frame }));
+          }}
+          areaBusy={shownStage !== null}
+          sizeClass="max-w-[calc(46dvh*16/9)]"
+        />
 
         <WaveformLanes />
       </section>

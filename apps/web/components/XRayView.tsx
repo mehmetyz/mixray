@@ -1,19 +1,16 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
-import { followTrack, waitForTrackFrames } from "@/lib/engine/client";
 import { drawMiniRoll } from "@/lib/studio/canvas";
 import { firstSoundingBar, formatPitchRange } from "@/lib/studio/format";
 import { RecipeCard } from "./RecipeCard";
 import { useStudio } from "./StudioContext";
 import { TimelineRuler } from "./StudioShell";
 import { useThemeListener } from "./ThemeToggle";
-import { VideoMaskStage } from "./VideoMaskStage";
+import { ClipVideo } from "./ClipVideo";
 
 export function XRayView() {
-  const router = useRouter();
   const {
     clipId,
     trackMap,
@@ -24,32 +21,6 @@ export function XRayView() {
     seek,
     notesPending,
   } = useStudio();
-  const [trackingOn, setTrackingOn] = useState<boolean>(false);
-  const [trackingBusy, setTrackingBusy] = useState<boolean>(false);
-  const [trackingError, setTrackingError] = useState<string | null>(null);
-  const selectedTrack = trackMap.video?.tracks.find(
-    (track) => track.isolation_id === selectedIsolationId,
-  );
-
-  const toggleTracking = async () => {
-    if (selectedTrack === undefined || trackingBusy) return;
-    if (trackingOn || selectedTrack.visible.length > 0) {
-      setTrackingOn(!trackingOn);
-      return;
-    }
-    setTrackingError(null);
-    setTrackingBusy(true);
-    try {
-      await followTrack(clipId, selectedTrack.id);
-      await waitForTrackFrames(selectedTrack.masks_url);
-      router.refresh();
-      setTrackingOn(true);
-    } catch (error: unknown) {
-      setTrackingError(error instanceof Error ? error.message : "Could not track this area.");
-    } finally {
-      setTrackingBusy(false);
-    }
-  };
   const themeTick = useThemeListener();
 
   const notesCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -127,36 +98,7 @@ export function XRayView() {
       <section className="flex min-w-0 flex-1 flex-col bg-bg lg:overflow-y-auto">
         <TimelineRuler />
 
-        {trackMap.video !== undefined && selectedTrack !== undefined ? (
-          <>
-            {trackingOn ? (
-              <VideoMaskStage
-                video={trackMap.video}
-                followedTrackId={selectedTrack.id}
-                sizeClass="max-w-[calc(32dvh*16/9)]"
-              />
-            ) : null}
-            <div className="flex items-center justify-between gap-3 border-b border-line bg-surface px-4 py-2 text-sm">
-              <span role={trackingError !== null ? "alert" : undefined} className="min-w-0 truncate text-muted">
-                {trackingError ??
-                  (trackingBusy
-                    ? `Following ${selectedTrack.label} through the video…`
-                    : `Follow ${selectedTrack.label} in the video`)}
-              </span>
-              <button
-                type="button"
-                aria-pressed={trackingOn}
-                disabled={trackingBusy}
-                onClick={() => void toggleTracking()}
-                className={`shrink-0 cursor-pointer rounded-full border px-3 py-1 text-xs font-medium disabled:cursor-wait disabled:opacity-60 ${
-                  trackingOn ? "border-accent text-accent" : "border-line-2 text-text-2 hover:text-text"
-                }`}
-              >
-                {trackingBusy ? "Tracking…" : trackingOn ? "Track on" : "Track off"}
-              </button>
-            </div>
-          </>
-        ) : null}
+        <ClipVideo sizeClass="max-w-[calc(32dvh*16/9)]" />
 
         <dl className="grid grid-cols-2 divide-x divide-y divide-line border-b border-line bg-surface/90 sm:grid-cols-4 sm:divide-y-0">
           {[
