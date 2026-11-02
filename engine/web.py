@@ -31,6 +31,7 @@ from ingest import (
     check_and_increment_quota,
     clip_dir,
     get_cache_root,
+    has_suggestions,
     ingest_upload,
     isolation_id_for,
     read_job,
@@ -468,7 +469,8 @@ def _start_area_isolation(
 def _start_analysis(record: JobRecord, hooks: RuntimeHooks) -> JobRecord:
     """Start analysis for a fresh clip and persist its running job state."""
     analysis_spawner = hooks["spawn_analysis"]
-    if record["cached"] or analysis_spawner is None:
+    # A clip uploaded again runs once more if Muse never named its sounds, so it can get chips.
+    if analysis_spawner is None or (record["cached"] and has_suggestions(record["id"])):
         return record
     analyzing_record: JobRecord = {
         "id": record["id"],

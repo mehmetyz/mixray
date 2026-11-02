@@ -27,6 +27,7 @@ from typing import TypedDict, TypeGuard
 import modal
 
 import meta_api
+from fallback import stem_for_prompt
 from images import web_image
 from ingest import build_served_trackmap, clip_dir, get_cache_root
 
@@ -52,7 +53,8 @@ MAX_OUTPUT_TOKENS = 4000
 
 WAVEFORM_SIZE = "320x180"
 WAVEFORM_RATE = 5
-MIN_SUGGESTIONS = 3
+# One is allowed: requiring three made the model pad a solo clip with chips like "fallback dummy".
+MIN_SUGGESTIONS = 1
 MAX_SUGGESTIONS = 6
 SUMMARY_ATTEMPTS = 2
 MIDI_PITCHES_PER_OCTAVE = 12
@@ -72,6 +74,17 @@ LISTEN_INSTRUCTION = (
     "hear - instruments, voices, drums, textures. For each one say what it is and how it behaves "
     "in the mix. Then give one sentence describing the clip as a whole: its genre, tempo feel and "
     "mood. Be concrete and only name sounds you actually hear."
+)
+
+# Asking about the audio of a real video failed the way the waveform does: the model described the
+# picture and refused to hear. Asking for every source it hears or sees making sound named the real
+# ones in five of six runs on three clips (piano and espresso machine; guitar, dog and taxi; a funk
+# band), so a clip with a picture is sent as itself.
+VIDEO_LISTEN_INSTRUCTION = (
+    "This is a short video. Name each distinct thing in it that makes sound - instruments, voices, "
+    "animals, machines, vehicles - whether you hear it or see it making sound. For each one say "
+    "what it is and what it does. Then give one sentence describing the clip as a whole: what kind "
+    "of scene or music it is and its mood. Only name things that are really in the clip."
 )
 
 # The mp4 workaround is not reliable every time. A run that fails comes back describing the picture
@@ -116,7 +129,9 @@ STRUCTURE_INSTRUCTION = (
     "prominent the sound is. `label` is a short title for a button, in Title case, at most three "
     "words. `prompt` is the same sound written as a lowercase noun phrase for an audio separation "
     "model, such as 'synth lead' or 'kick drum' - no verbs, no sentence, no punctuation. `summary` "
-    "is the single sentence describing the whole clip."
+    "is the single sentence describing the whole clip. Leave out anything the description calls "
+    "silent or not making sound. Never list the same source twice under different names: one piano "
+    "is one suggestion, not 'piano', 'upright piano' and 'solo piano'."
 )
 
 
@@ -212,7 +227,12 @@ def heard_audio(description: str) -> bool:
     return deaf_marker_in_description(description) is None
 
 
-def listen_to_clip(mp4_path: Path, api_key: str, model: str = LISTEN_MODEL) -> str:
+def listen_to_clip(
+    mp4_path: Path,
+    api_key: str,
+    model: str = LISTEN_MODEL,
+    instruction: str = LISTEN_INSTRUCTION,
+) -> str:
     """Ask the model what it hears, in prose, until it actually hears something.
 
     The picture is never mentioned, by design: telling the model to ignore it reliably brings back
@@ -225,7 +245,7 @@ def listen_to_clip(mp4_path: Path, api_key: str, model: str = LISTEN_MODEL) -> s
             {
                 "role": "user",
                 "content": [
-                    {"type": "input_text", "text": LISTEN_INSTRUCTION},
+                    {"type": "input_text", "text": instruction},
                     # The media source sits directly on the part, and inline base64 travels as a
                     # data URL: an `input_video` carrying a `data` field is rejected with
                     # "input_video content part requires `video_url` or `file_id`".
@@ -236,7 +256,13 @@ def listen_to_clip(mp4_path: Path, api_key: str, model: str = LISTEN_MODEL) -> s
     }
     last_marker = ""
     for attempt in range(1, meta_api.ATTEMPTS + 1):
-        description = meta_api.output_text(meta_api.post_responses(payload, api_key))
+        try:
+            description = meta_api.output_text(meta_api.post_responses(payload, api_key))
+        except RuntimeError as error:
+            # Measured: one reply in six came back with no text part at all.
+            last_marker = str(error)
+            LOGGER.warning("attempt %d/%d got no answer: %s", attempt, meta_api.ATTEMPTS, error)
+            continue
         fired_marker = deaf_marker_in_description(description)
         if fired_marker is None:
             return description
@@ -292,6 +318,7 @@ def parse_suggestions(raw: str) -> ClipSuggestions:
         raise RuntimeError("suggestions reply was missing summary or suggestions")
 
     suggestions: list[Suggestion] = []
+    seen: set[str] = set()
     for item in items:
         if not isinstance(item, dict):
             continue
@@ -299,10 +326,17 @@ def parse_suggestions(raw: str) -> ClipSuggestions:
         if not isinstance(label, str) or not isinstance(prompt, str):
             continue
         cleaned = prompt.strip().lower().rstrip(".")
-        if label.strip() and cleaned:
-            suggestions.append({"label": label.strip(), "prompt": cleaned})
-    if len(suggestions) < MIN_SUGGESTIONS:
-        raise RuntimeError(f"only {len(suggestions)} usable suggestions came back")
+        if not label.strip() or not cleaned:
+            continue
+        # Measured: "solo piano", "upright piano" and "acoustic piano" for one piano, and the same
+        # two chips twice. Prompts for one standard instrument would all separate the same sound.
+        source = stem_for_prompt(cleaned) or cleaned
+        if source in seen:
+            continue
+        seen.add(source)
+        suggestions.append({"label": label.strip(), "prompt": cleaned})
+    if not suggestions:
+        raise RuntimeError("no usable suggestions came back")
     return {"suggestions": suggestions[:MAX_SUGGESTIONS], "summary": summary.strip()}
 
 
@@ -527,10 +561,14 @@ def suggest_clip(
     if not wav_path.exists():
         raise FileNotFoundError(f"no mono mix for clip {clip_id}: {wav_path}")
 
-    mp4_path = directory / "suggest_input.mp4"
-    waveform_mp4(wav_path, mp4_path)
     api_key = meta_api.api_key()
-    described = listen_to_clip(mp4_path, api_key, model)
+    video_path = directory / "video.mp4"
+    if video_path.exists():
+        described = listen_to_clip(video_path, api_key, model, VIDEO_LISTEN_INSTRUCTION)
+    else:
+        mp4_path = directory / "suggest_input.mp4"
+        waveform_mp4(wav_path, mp4_path)
+        described = listen_to_clip(mp4_path, api_key, model)
     LOGGER.info("muse spark heard: %s", described[:200])
     result = structure_description(described, api_key, model)
     (directory / "suggest.json").write_text(json.dumps(result), encoding="utf-8")

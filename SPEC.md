@@ -185,6 +185,11 @@ Sources: dev.meta.ai docs (`/docs`, `/docs/api-reference/responses/schemas`, `/d
   - **Workaround: send the audio inside an mp4 as `input_video`** (the docs state a video part carries its embedded audio). Confirmed: `input_tokens` rises to ≈ 2,600 for 30 s and the model names the parts correctly ("arpeggiated lead synth", "pulsing synth bass", "four-on-the-floor kick", "shimmering chord pad", genre "uplifting trance / EDM").
   - **The video track must not be blank.** With black frames only 2 of 5 runs heard the audio; the rest refused with "I only see a black screen" / "as a text-based AI". With the waveform drawn into the frames (`ffmpeg -filter_complex "[0:a]showwaves=s=320x180:mode=line:rate=5"`) 5 of 5 runs heard it. Five runs is a small sample: the engine still retries and validates before trusting a reply.
   - **Never mention the picture in the prompt.** "Ignore the blank picture" reliably triggers the same refusal. Say "this is a music clip" and nothing about frames.
+  - **A clip with a picture is sent as itself (Nov 2).** Asking about the audio of a real video
+    failed like the waveform: the model described the picture and refused to hear. Asking for every
+    source it hears or sees making sound named the real ones in five of six runs on three clips. The
+    waveform path stays for audio-only clips, where it failed on three of four uploads; a failed run
+    now leaves the clip with no chips instead of a fixed list shown as Muse's.
   - **Give both streams the same length.** `-shortest` against an `lavfi` colour source left a 41 s video over 30 s of audio; pass an explicit `-t`.
   - **Structured output is unreliable while audio is attached:** `json_schema` (strict) worked on a 10 s clip and failed on 30 s, returning an empty object with the same token count. So `suggest` runs in two calls: listen in plain text with the mp4, then structure that text in a second, audio-free call where `json_schema` is safe.
   - **Cost and latency:** ≈ 2,600 input tokens per 30 s clip, 5–8 s per call.

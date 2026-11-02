@@ -430,12 +430,8 @@ def _build_initial_trackmap(meta: ClipMeta, wav_path: Path, probe: MediaProbe) -
             "hop": ENERGY_HOP_SECONDS,
             "values": _compute_energy_curve(wav_path, duration),
         },
-        "suggestions": [
-            {"label": "Synth lead", "prompt": "synth lead"},
-            {"label": "Piano", "prompt": "piano"},
-            {"label": "Bass", "prompt": "bass"},
-            {"label": "Drums", "prompt": "drums"},
-        ],
+        # Filled by Muse Spark when it names the sounds; a fixed list here was shown as if it had.
+        "suggestions": [],
         "isolations": [],
     }
     if meta["kind"] == "video":
@@ -703,11 +699,19 @@ def _overlay_sidecar(trackmap: dict[str, object], path: Path, fields: tuple[str,
             trackmap[field] = sidecar[field]
 
 
+def has_suggestions(clip_id: str, cache_root: Path | None = None) -> bool:
+    """Whether Muse Spark has named this clip's sounds yet."""
+    return (clip_dir(clip_id, cache_root) / "suggest.json").exists()
+
+
 def build_served_trackmap(clip_id: str, cache_root: Path | None = None) -> dict[str, object]:
     """Assemble a TrackMap from its ingest-time base and producer-owned sidecars."""
     root = cache_root if cache_root is not None else get_cache_root()
     directory = clip_dir(clip_id, root)
     trackmap = _read_json_object(trackmap_path(clip_id, root))
+    # Chips come only from Muse Spark's sidecar. Clips ingested before Nov 2 carry a fixed list in
+    # their base that was shown as if Muse had heard it.
+    trackmap["suggestions"] = []
 
     _overlay_sidecar(trackmap, directory / "analysis.json", ANALYSIS_FIELDS)
     _overlay_sidecar(trackmap, directory / "suggest.json", SUGGEST_FIELDS)

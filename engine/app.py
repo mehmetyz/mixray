@@ -204,7 +204,7 @@ def analyze_worker(clip_id: str) -> None:
             # This worker is only started for a fresh ingest, so suggestions begin before Pick.
             suggest_worker.spawn(clip_id)
         except Exception:
-            # The clip remains usable with its default suggestions if Muse is unavailable.
+            # The clip remains usable without chips if Muse is unavailable; the prompt still works.
             LOGGER.exception("could not queue suggestions for clip=%s", clip_id)
         apply_analysis(clip_id)
     except Exception:
@@ -289,7 +289,7 @@ def suggest_worker(clip_id: str) -> None:
     try:
         suggest_clip(clip_id)
     except Exception:
-        # Suggestion failure only leaves the ingest-time fallback chips in place.
+        # Suggestion failure leaves the clip without chips; typing a sound still works.
         LOGGER.exception("suggest failed for clip=%s", clip_id)
     finally:
         CACHE_VOLUME.commit()
