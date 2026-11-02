@@ -35,8 +35,41 @@ const SCREENS: Record<string, ScreenChoice> = {
   export: "take",
 };
 
+const FILLER_START =
+  /^(?:(?:ok|okay|so|um|uh|hey|now|please|can you|could you|would you|i want to|i'd like to|let's|lets|go ahead and)\s+)+/;
+const FILLER_END = /(?:\s+(?:now|please|a bit|a little|for me))+$/;
+const BACK_WORD = /\b(?:back|backward|backwards|rewind|earlier|ago|previous|last)\b/;
+const FORWARD_WORD = /\b(?:forward|forwards|ahead|later|skip|next)\b/;
+// A number in these phrases is a speed, not a distance: "back to 100 percent".
+const NOT_A_DISTANCE = /\b(?:percent|speed|tempo)\b/;
+
+/** Speech to text writes what it hears: measured "go back to Barth" for "go back two bars". */
+function repairMisheard(text: string): string {
+  return text
+    .replace(FILLER_START, "")
+    .replace(FILLER_END, "")
+    .replace(/\b(?:barth|bart|barz|bahrs)\b/g, "bars")
+    .replace(/\b(?:to|too) bars\b/g, "2 bars")
+    .replace(/\bfor bars\b/g, "4 bars")
+    .replace(/\b(?:a )?couple(?: of)? bars\b/g, "2 bars");
+}
+
+/** Reads a move in any word order: "back 2 bars", "2 bars back", "rewind 2", "a bar back". */
+function relativeBars(text: string): number | null {
+  if (NOT_A_DISTANCE.test(text)) return null;
+  const direction = BACK_WORD.test(text) ? -1 : FORWARD_WORD.test(text) ? 1 : 0;
+  if (direction === 0) return null;
+  const count = text.match(/\b(\d+)(?: bars?)?\b/);
+  if (count?.[1] !== undefined) return direction * Number(count[1]);
+  if (/\ba bar\b/.test(text)) return direction;
+  const plainMove =
+    /^(?:go |move |jump |skip )?(?:back|backward|backwards|rewind|forward|forwards|ahead)$|^(?:next|previous|last) bar$/;
+  return plainMove.test(text) ? direction : null;
+}
+
 /** Commands for playing and moving around. Text is lowercase, with digits and no punctuation. */
-export function parseStudioCommand(text: string): StudioCommand | null {
+export function parseStudioCommand(spoken: string): StudioCommand | null {
+  const text = repairMisheard(spoken);
   if (/^(help|commands|what can i say)$/.test(text)) return { name: "help" };
 
   const fact = text.match(/^(?:what(?:'s| is)?|which)\s+(?:the\s+)?(tempo|key|bar)\b/);
@@ -56,14 +89,10 @@ export function parseStudioCommand(text: string): StudioCommand | null {
   if (/\bloop this bar\b/.test(text)) return { name: "loop_here", bars: 1 };
   if (/^loop( this| here| it)?$/.test(text)) return { name: "loop_here", bars: DEFAULT_LOOP_BARS };
 
-  const seekBar = text.match(/^(?:(?:go|jump|skip) to |play from |from |start from )?bar (\d+)$/);
+  const seekBar = text.match(/^(?:(?:go |jump |skip )?(?:back )?to |play from |from |start from )?bar (\d+)$/);
   if (seekBar?.[1] !== undefined) return { name: "seek_bar", bar: Number(seekBar[1]) };
-  const back = text.match(/\b(?:go )?back (\d+) bars?\b/);
-  if (back?.[1] !== undefined) return { name: "seek_relative", bars: -Number(back[1]) };
-  const forward = text.match(/\b(?:go |skip )?(?:forward|ahead) (\d+) bars?\b/);
-  if (forward?.[1] !== undefined) return { name: "seek_relative", bars: Number(forward[1]) };
-  if (/^(next bar|skip ahead|go forward)$/.test(text)) return { name: "seek_relative", bars: 1 };
-  if (/^(previous bar|last bar|go back)$/.test(text)) return { name: "seek_relative", bars: -1 };
+  const bars = relativeBars(text);
+  if (bars !== null) return { name: "seek_relative", bars };
 
   if (/^(?:go |play |a bit |a little )*(?:slower|lower|slow down|slow it down)$/.test(text)) {
     return { name: "tempo_step", delta: -TEMPO_STEP };
@@ -95,6 +124,11 @@ export function parseStudioCommand(text: string): StudioCommand | null {
   if (/^(play|resume|continue|go|start|start playing|let's go)$/.test(text)) return { name: "play" };
 
   return null;
+}
+
+/** Muse Voice Transcribe takes no language setting and turns accented English into Arabic or Chinese. */
+export function isLatinScript(text: string): boolean {
+  return (text.match(/\p{L}/gu) ?? []).every((letter) => /\p{Script=Latin}/u.test(letter));
 }
 
 /** Finds the sound a spoken name refers to, whichever of the two names is the longer one. */
@@ -376,7 +410,7 @@ export function parseVoiceAssistantMessage(phrase: string): ParsedVoiceMessage {
 
 export const VOICE_COMMAND_HELP: readonly { topic: string; examples: string }[] = [
   { topic: "Play", examples: "play, pause, from the top, again" },
-  { topic: "Move", examples: "bar 5, back 2 bars, next bar" },
+  { topic: "Move", examples: "bar 5, 2 bars back, next bar" },
   { topic: "Loop", examples: "loop 4 to 8, loop 2 bars, loop off" },
   { topic: "Tempo", examples: "slower, faster, slow to 70 percent, normal speed" },
   { topic: "Hear", examples: "solo, the rest, full mix, switch to bass" },

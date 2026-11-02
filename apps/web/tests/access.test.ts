@@ -83,6 +83,7 @@ describe("a link with the key", () => {
     process.env.MIXRAY_ACCESS_KEY = KEY;
     assert.equal((await visit(`/studio?key=${KEY}`)).headers.get("location")?.startsWith("http://app.test/?next="), true);
     assert.equal((await visit(`/api/coach?key=${KEY}`)).status, 401);
+    assert.equal((await visit("/api/voice/intent")).status, 401);
   });
 });
 

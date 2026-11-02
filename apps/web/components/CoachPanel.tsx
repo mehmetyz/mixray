@@ -19,11 +19,13 @@ import { barAtTime, keyLabel, tempoLabel } from "@/lib/studio/format";
 import {
   VOICE_COMMAND_HELP,
   matchSoundByName,
+  isLatinScript,
   parseVoiceAssistantMessage,
   type PracticeLevel,
   type StudioCommand,
   type VoiceIntent,
 } from "@/lib/voice-commands";
+import { requestVoiceIntent } from "@/lib/voice-intent";
 import { useStudio } from "./StudioContext";
 
 export interface CoachPanelProps {
@@ -200,12 +202,12 @@ export function CoachPanel({
   };
 
   // Always the latest closure: a command must act on the playing state of the moment it was spoken.
-  const runCommandRef = useRef<(phrase: string) => void>(() => undefined);
+  const runCommandRef = useRef<(phrase: string, heard: string) => void>(() => undefined);
   useEffect(() => {
-    runCommandRef.current = (phrase) => {
+    runCommandRef.current = (phrase, heard) => {
       const { intent } = parseVoiceAssistantMessage(phrase);
       playEarcon(intent.kind === "unknown" ? "unknown" : "done");
-      setExchange({ heard: phrase, reply: runIntent(intent) });
+      setExchange({ heard, reply: runIntent(intent) });
     };
   });
 
@@ -230,7 +232,15 @@ export function CoachPanel({
         setExchange({ heard: "", reply: "Didn't catch that. Press and try again." });
         return;
       }
-      runCommandRef.current(transcript);
+      if (!isLatinScript(transcript)) {
+        playEarcon("unknown");
+        setExchange({ heard: transcript, reply: "Commands work in English only. Try again." });
+        return;
+      }
+      // The parser answers at once and costs nothing, so the model only hears what it could not read.
+      const understood = parseVoiceAssistantMessage(transcript).intent.kind !== "unknown";
+      const meant = understood ? null : await requestVoiceIntent(transcript);
+      runCommandRef.current(meant ?? transcript, transcript);
     } catch {
       playEarcon("unknown");
       setExchange({ heard: "", reply: "Voice is unavailable. Type the command instead." });
@@ -308,7 +318,7 @@ export function CoachPanel({
     event.preventDefault();
     const clean = textCommand.trim();
     if (clean.length === 0) return;
-    runCommandRef.current(clean);
+    runCommandRef.current(clean, clean);
     setTextCommand("");
   };
 

@@ -5,6 +5,7 @@ import {
   parseStudioCommand,
   parseVoiceAssistantMessage,
   parseVoiceCoachCommand,
+  isLatinScript,
   VOICE_COMMAND_HELP,
   type StudioCommand,
 } from "../lib/voice-commands";
@@ -183,6 +184,79 @@ describe("whole spoken messages", () => {
   it("documents at least one example per topic", () => {
     assert.ok(VOICE_COMMAND_HELP.length > 0);
     for (const entry of VOICE_COMMAND_HELP) assert.ok(entry.examples.length > 0, entry.topic);
+  });
+});
+
+describe("what counts as English", () => {
+  it("refuses other scripts, as measured from accented speech", () => {
+    assert.equal(isLatinScript("بارسفای普لейت"), false);
+    assert.equal(isLatinScript("two bars 回"), false);
+  });
+
+  it("lets Latin text and numbers through for the model to judge", () => {
+    assert.equal(isLatinScript("Go back to Barth."), true);
+    assert.equal(isLatinScript("loop 4 to 8"), true);
+  });
+});
+
+describe("saying a command loosely", () => {
+  const moves: readonly (readonly [string, number])[] = [
+    // Transcripts measured from Muse Voice Transcribe.
+    ["two bars back.", -2],
+    ["Two bars back..", -2],
+    ["Back two bars.", -2],
+    ["Go back to Barth.", -2],
+    ["Gol back to bars.", -2],
+    ["Next bar.", 1],
+    // Other ways to say a move.
+    ["go back two bars", -2],
+    ["rewind two bars", -2],
+    ["two bars ago", -2],
+    ["back two", -2],
+    ["a bar back", -1],
+    ["one bar back", -1],
+    ["go back a bar", -1],
+    ["back a couple of bars", -2],
+    ["last two bars", -2],
+    ["go backwards", -1],
+    ["three bars forward", 3],
+    ["skip two bars", 2],
+    ["skip ahead two bars", 2],
+    ["next two bars", 2],
+    ["could you go back two bars please", -2],
+  ];
+
+  for (const [phrase, bars] of moves) {
+    it(`moves ${bars} for "${phrase}"`, () => {
+      const { intent } = parseVoiceAssistantMessage(phrase);
+      assert.equal(intent.kind, "studio");
+      assert.deepEqual(intent.kind === "studio" ? intent.command : null, { name: "seek_relative", bars });
+    });
+  }
+
+  const others: readonly (readonly [string, StudioCommand])[] = [
+    ["go back to bar five", { name: "seek_bar", bar: 5 }],
+    ["go back to the start", { name: "restart" }],
+    ["can you play", { name: "play" }],
+    ["let's go", { name: "play" }],
+    ["pause now", { name: "pause" }],
+    ["slow down a bit", { name: "tempo_step", delta: -10 }],
+    ["loop to bars", { name: "loop_here", bars: 2 }],
+    ["play the backing track", { name: "monitor", stem: "rest" }],
+  ];
+
+  for (const [phrase, command] of others) {
+    it(`understands "${phrase}"`, () => {
+      const { intent } = parseVoiceAssistantMessage(phrase);
+      assert.deepEqual(intent.kind === "studio" ? intent.command : null, command);
+    });
+  }
+
+  it("does not take a bare number or a speed for a move", () => {
+    for (const phrase of ["two bars", "playback", "back to 100 percent"]) {
+      const { intent } = parseVoiceAssistantMessage(phrase);
+      assert.notEqual(intent.kind === "studio" ? intent.command.name : null, "seek_relative", phrase);
+    }
   });
 });
 
