@@ -327,11 +327,23 @@ def _stem_waveforms(clip_id: str, cache_root: Path) -> tuple[int, dict[StemName,
     return sample_rate, waveforms
 
 
-def _is_solo(waveforms: dict[StemName, torch.Tensor]) -> bool:
-    energies = {name: float(waveform.pow(2).mean()) for name, waveform in waveforms.items()}
+def _passes_solo_shares(energies: dict[StemName, float]) -> bool:
     total = max(sum(energies.values()), 1e-20)
     band_share = sum(energies[name] for name in BAND_STEMS) / total
     return band_share < SOLO_MAX_BAND_SHARE and max(energies.values()) / total >= SOLO_MIN_TOP_SHARE
+
+
+def _is_solo(waveforms: dict[StemName, torch.Tensor]) -> bool:
+    """Both tests must pass: plain energy, and energy of the sample-to-sample change.
+
+    Plain energy is dominated by low notes, so a hiss or a clatter over a piano barely counts in it:
+    steam over a café piano held 7% of it and the clip passed as a solo, serving the steam as piano.
+    The change in each sample weights high frequencies the way the ear does; there the same steam
+    held 38%, while Demucs had put it in the drums stem and left the piano stem 20 dB quieter.
+    """
+    plain = {name: float(waveform.pow(2).mean()) for name, waveform in waveforms.items()}
+    bright = {name: float(waveform.diff().pow(2).mean()) for name, waveform in waveforms.items()}
+    return _passes_solo_shares(plain) and _passes_solo_shares(bright)
 
 
 def run_routed_isolation(  # noqa: PLR0913

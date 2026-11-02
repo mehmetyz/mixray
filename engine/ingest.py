@@ -207,7 +207,7 @@ def job_file(clip_id: str, cache_root: Path | None = None) -> Path:
 # Part of the isolation cache key, bumped whenever separation or candidate ranking changes. The
 # clip id is a hash of the audio, so without this a cache hit serves the previous algorithm's
 # result for the same clip and prompt, and a re-run reads as a no-op improvement.
-ISOLATION_ALGORITHM_VERSION = 7
+ISOLATION_ALGORITHM_VERSION = 8
 
 
 def isolation_id_for(clip_id: str, prompt: str) -> str:
