@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import { drawMiniRoll } from "@/lib/studio/canvas";
-import { firstSoundingBar, formatPitchRange } from "@/lib/studio/format";
+import { firstSoundingBar, formatPitchRange, keyLabel, tempoLabel } from "@/lib/studio/format";
 import { RecipeCard } from "./RecipeCard";
 import { useStudio } from "./StudioContext";
 import { TimelineRuler } from "./StudioShell";
@@ -102,8 +102,8 @@ export function XRayView() {
 
         <dl className="grid grid-cols-2 divide-x divide-y divide-line border-b border-line bg-surface/90 sm:grid-cols-4 sm:divide-y-0">
           {[
-            { term: "Tempo", value: `${Math.round(trackMap.tempo.bpm)} BPM` },
-            { term: "Key", value: `${trackMap.key.tonic} ${trackMap.key.mode}` },
+            { term: "Tempo", value: tempoLabel(trackMap.tempo) },
+            { term: "Key", value: keyLabel(trackMap.key) },
             { term: "Range", value: rangeText },
             { term: "First note", value: entersText },
           ].map((stat) => (
@@ -125,6 +125,9 @@ export function XRayView() {
               gridTemplateColumns: `repeat(${Math.max(1, trackMap.chords.length)}, minmax(0, 1fr))`,
             }}
           >
+            {trackMap.chords.length === 0 ? (
+              <span className="flex items-center px-3 text-muted">Chords were not read for this clip</span>
+            ) : null}
             {trackMap.chords.map((chord) => {
               const active = currentTime >= chord.start && currentTime < chord.end;
               return (

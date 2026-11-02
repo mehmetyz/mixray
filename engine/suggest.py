@@ -437,6 +437,8 @@ def isolation_summary_facts(trackmap: dict[str, object], isolation_id: str) -> S
     """Collect only facts already held by the assembled TrackMap for one isolation."""
     tempo = _required_json_object(trackmap.get("tempo"), "tempo")
     key = _required_json_object(trackmap.get("key"), "key")
+    if tempo.get("confidence") == 0 or key.get("confidence") == 0:
+        raise ValueError("tempo and key were not measured, so a summary would state placeholders")
     downbeats = _required_nonempty_list(trackmap.get("downbeats"), "downbeats")
     isolations = _required_nonempty_list(trackmap.get("isolations"), "isolations")
     isolation = _summary_isolation(isolations, isolation_id)

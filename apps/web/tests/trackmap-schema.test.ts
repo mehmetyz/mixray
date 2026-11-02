@@ -7,7 +7,7 @@ type JsonRecord = Record<string, unknown>;
 
 function validTrackMap(): JsonRecord {
   const parsed: JsonRecord = JSON.parse(
-    readFileSync(new URL("../public/demos/demo1/trackmap.json", import.meta.url), "utf8"),
+    readFileSync(new URL("./fixtures/trackmap.json", import.meta.url), "utf8"),
   );
   return parsed;
 }

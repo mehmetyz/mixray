@@ -8,7 +8,9 @@ import {
   formatBarBeat,
   formatClockSeconds,
   formatPitchRange,
+  keyLabel,
   midiToNoteName,
+  tempoLabel,
 } from "../lib/studio/format";
 import type { Note } from "../lib/trackmap/trackmap.generated";
 
@@ -116,5 +118,17 @@ describe("mix waveform", () => {
 
   it("is as long as the longer of the two", () => {
     assert.equal(deriveMixPeaks([0.1, 0.1, 0.1], [0.1]).length, 3);
+  });
+});
+
+describe("tempo and key that were not measured", () => {
+  it("are shown as unknown rather than as their placeholder values", () => {
+    assert.equal(tempoLabel({ bpm: 120, time_signature: [4, 4], confidence: 0 }), "Tempo unknown");
+    assert.equal(keyLabel({ tonic: "A", mode: "minor", confidence: 0 }), "Key unknown");
+  });
+
+  it("are shown when they were", () => {
+    assert.equal(tempoLabel({ bpm: 96.4, time_signature: [4, 4], confidence: 0.2 }), "96 BPM");
+    assert.equal(keyLabel({ tonic: "C", mode: "major", confidence: 0.2 }), "C major");
   });
 });

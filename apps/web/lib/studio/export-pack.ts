@@ -1,5 +1,5 @@
 import type { Isolation, Note, TrackMap } from "@/lib/trackmap/trackmap.generated";
-import { formatPitchRange } from "./format";
+import { formatPitchRange, keyLabel, tempoLabel } from "./format";
 
 export type ZipFileEntry = {
   filename: string;
@@ -226,15 +226,15 @@ export function formatSessionNotes(trackMap: TrackMap, isolation: Isolation): st
     `Title: ${trackMap.source.title}`,
     `Sound: ${isolation.label} (prompt: "${isolation.prompt}")`,
     `Method: ${isolation.method}`,
-    `Tempo: ${Math.round(trackMap.tempo.bpm)} BPM (${trackMap.tempo.time_signature[0]}/${trackMap.tempo.time_signature[1]})`,
-    `Key: ${trackMap.key.tonic} ${trackMap.key.mode}`,
+    `Tempo: ${tempoLabel(trackMap.tempo)} (${trackMap.tempo.time_signature[0]}/${trackMap.tempo.time_signature[1]})`,
+    `Key: ${keyLabel(trackMap.key)}`,
     `Pitch range: ${formatPitchRange(isolation.range, isolation.notes)}`,
     ``,
     `Summary:`,
     isolation.summary ?? trackMap.summary ?? "Isolated stem and MIDI transcription.",
     ``,
     `Chords by bar:`,
-    chordLine,
+    chordLine.length > 0 ? chordLine : "Not read",
     ``,
   ].join("\n");
 }

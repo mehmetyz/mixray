@@ -6,7 +6,7 @@ import type { MouseEvent, ReactNode } from "react";
 import type { StemName } from "@/lib/audio/player";
 import type { ClipStepId, NavState } from "@/lib/steps";
 import type { Isolation } from "@/lib/trackmap/trackmap.generated";
-import { barAtTime, formatBarBeat, formatClockSeconds, methodShortLabel } from "@/lib/studio/format";
+import { barAtTime, formatBarBeat, formatClockSeconds, keyLabel, methodShortLabel, tempoLabel } from "@/lib/studio/format";
 import { findDemoClip } from "@/lib/demos";
 import { useProject } from "@/lib/projects/storage";
 import { AppHeader } from "./AppHeader";
@@ -233,7 +233,7 @@ export function StudioShell({ children }: StudioShellProps) {
         <div className="min-w-0 shrink-0">
           <p className="max-w-48 truncate text-sm font-semibold text-text">{trackMap.source.title}</p>
           <p className="mono-num text-[11px] text-muted">
-            {Math.round(trackMap.tempo.bpm)} BPM, {trackMap.key.tonic} {trackMap.key.mode}
+            {tempoLabel(trackMap.tempo)}, {keyLabel(trackMap.key)}
           </p>
         </div>
         {demo !== undefined ? <DemoBadge origin={demo.origin} /> : null}
@@ -266,7 +266,7 @@ export function StudioShell({ children }: StudioShellProps) {
                 {trackMap.source.title}
               </p>
               <p className="mono-num mt-1 text-xs text-muted">
-                {Math.round(trackMap.tempo.bpm)} BPM, {trackMap.key.tonic} {trackMap.key.mode}
+                {tempoLabel(trackMap.tempo)}, {keyLabel(trackMap.key)}
               </p>
               {demo !== undefined ? <DemoCredit demo={demo} /> : null}
             </div>

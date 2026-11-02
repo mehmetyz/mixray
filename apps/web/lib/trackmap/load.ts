@@ -1,18 +1,8 @@
-import { readFile } from "node:fs/promises";
-import path from "node:path";
 import { cache } from "react";
 import type { FallbackStem, Isolation, TrackMap, Video, VideoTrack } from "./trackmap.generated";
 import { parseTrackMap } from "./validate";
 
-export const DEMO_CLIP_IDS = ["demo1"] as const;
-
-export type DemoClipId = (typeof DEMO_CLIP_IDS)[number];
-
 const SHA256_HEX_PATTERN = /^[0-9a-f]{64}$/;
-
-export function isDemoClipId(id: string): id is DemoClipId {
-  return DEMO_CLIP_IDS.some((demoId) => demoId === id);
-}
 
 function resolveEngineAssetUrl(rawUrl: string | undefined, engineUrl: string): string | undefined {
   if (rawUrl === undefined || rawUrl.length === 0) return rawUrl;
@@ -64,14 +54,8 @@ function normalizeEngineTrackMap(trackMap: TrackMap, engineUrl: string): TrackMa
   };
 }
 
-/** Loads a precomputed demo TrackMap from disk, or a live SHA-256 clip TrackMap from Modal. */
+/** Loads a clip's TrackMap from Modal. */
 export const loadTrackMap = cache(async (clipId: string): Promise<TrackMap | null> => {
-  if (isDemoClipId(clipId)) {
-    const file = path.join(process.cwd(), "public", "demos", clipId, "trackmap.json");
-    const data: unknown = JSON.parse(await readFile(file, "utf8"));
-    return parseTrackMap(data);
-  }
-
   if (!SHA256_HEX_PATTERN.test(clipId)) return null;
 
   const engineUrl = process.env.MIXRAY_ENGINE_URL?.trim().replace(/\/$/, "");

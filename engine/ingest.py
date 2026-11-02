@@ -398,16 +398,6 @@ def _build_initial_trackmap(meta: ClipMeta, wav_path: Path, probe: MediaProbe) -
     beat_count = max(1, int(duration / beat_step))
     beats = [round(idx * beat_step, 3) for idx in range(beat_count)]
     downbeats = [beats[idx] for idx in range(0, len(beats), BEATS_PER_BAR)]
-    chords = [
-        {
-            "bar": bar_idx,
-            "start": start,
-            "end": round(min(duration, start + beat_step * BEATS_PER_BAR), 3),
-            "label": "Am",
-            "root_midi": 57,
-        }
-        for bar_idx, start in enumerate(downbeats)
-    ]
     trackmap: dict[str, object] = {
         "version": 2,
         "id": meta["id"],
@@ -420,11 +410,12 @@ def _build_initial_trackmap(meta: ClipMeta, wav_path: Path, probe: MediaProbe) -
             "mix_url": f"/files/clips/{meta['id']}/mix.mp3",
         },
         "duration": duration,
-        "tempo": {"bpm": DEFAULT_BPM, "time_signature": [4, 4], "confidence": 0.5},
+        # A grid to draw on until the analysis replaces it. Zero confidence: nothing was measured.
+        "tempo": {"bpm": DEFAULT_BPM, "time_signature": [4, 4], "confidence": 0.0},
         "beats": beats,
         "downbeats": downbeats,
-        "key": {"tonic": "A", "mode": "minor", "confidence": 0.5},
-        "chords": chords,
+        "key": {"tonic": "A", "mode": "minor", "confidence": 0.0},
+        "chords": [],
         "sections": [{"start": 0.0, "end": duration, "label": "section"}],
         "energy": {
             "hop": ENERGY_HOP_SECONDS,

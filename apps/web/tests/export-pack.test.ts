@@ -98,7 +98,7 @@ describe("ZIP export", () => {
 describe("session notes", () => {
   it("states the facts of the clip and the sound", () => {
     const trackMap = parseTrackMap(
-      JSON.parse(readFileSync(new URL("../public/demos/demo1/trackmap.json", import.meta.url), "utf8")),
+      JSON.parse(readFileSync(new URL("./fixtures/trackmap.json", import.meta.url), "utf8")),
     );
     const isolation = trackMap.isolations[0];
     assert.ok(isolation !== undefined);

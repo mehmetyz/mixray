@@ -14,6 +14,7 @@ import { TimelineRuler } from "./StudioShell";
 import { ClipVideo } from "./ClipVideo";
 import { WorkingPanel } from "./WorkingPanel";
 import { WaveformLanes } from "./WaveformLanes";
+import { keyLabel } from "@/lib/studio/format";
 
 export function PickView() {
   const router = useRouter();
@@ -72,8 +73,8 @@ export function PickView() {
   // The list shows what the clip holds; only facts are kept, never whether work is running.
   useEffect(() => {
     updateProject(clipId, {
-      bpm: Math.round(trackMap.tempo.bpm),
-      key: `${trackMap.key.tonic} ${trackMap.key.mode}`,
+      bpm: trackMap.tempo.confidence > 0 ? Math.round(trackMap.tempo.bpm) : undefined,
+      key: trackMap.key.confidence > 0 ? keyLabel(trackMap.key) : undefined,
       isolatedSoundLabel: (selectedIsolation ?? trackMap.isolations[0])?.label,
     });
   }, [clipId, trackMap, selectedIsolation]);

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { resolvePlayableStems } from "@/lib/studio/demo-audio";
+import { keyLabel, playableStemUrls, tempoLabel } from "@/lib/studio/format";
 import {
   encodeStandardMidi,
   encodeStoreZip,
@@ -111,19 +111,17 @@ export function TakeHomeView() {
     setBundling(true);
     setStatusMessage(null);
 
-    let revoke: () => void = () => {};
     try {
-      const resolved = await resolvePlayableStems(trackMap, selectedIsolation, soundUrl);
-      revoke = resolved.revoke;
+      const stems = playableStemUrls(trackMap, selectedIsolation, soundUrl);
 
       const entries: ZipFileEntry[] = [];
       const encoder = new TextEncoder();
 
       if (selected.soundWav) {
-        entries.push({ filename: soundFile, data: await fetchBytes(resolved.soundUrl) });
+        entries.push({ filename: soundFile, data: await fetchBytes(stems.soundUrl) });
       }
       if (selected.restWav) {
-        entries.push({ filename: restFile, data: await fetchBytes(resolved.restUrl) });
+        entries.push({ filename: restFile, data: await fetchBytes(stems.restUrl) });
       }
       if (selected.midi && hasNotes) {
         const { easy, intermediate } = selectedIsolation.arrangements;
@@ -158,7 +156,6 @@ export function TakeHomeView() {
     } catch (error: unknown) {
       setStatusMessage(error instanceof Error ? error.message : "Could not build the download.");
     } finally {
-      revoke();
       setBundling(false);
     }
   };
@@ -168,7 +165,7 @@ export function TakeHomeView() {
       <div className="mx-auto w-full max-w-3xl space-y-6 p-5 md:p-8">
         <ScreenHeading title="Take it to your DAW">
           <p className="text-sm text-text-2">
-            {Math.round(trackMap.tempo.bpm)} BPM, {trackMap.key.tonic} {trackMap.key.mode}. All files
+            {tempoLabel(trackMap.tempo)}, {keyLabel(trackMap.key)}. All files
             start at the same moment, so they line up when placed at the same position.
           </p>
         </ScreenHeading>

@@ -15,7 +15,7 @@ import { VoiceRecordingError, listenForPhrase } from "@/lib/audio/voice";
 import { talkBindingLabel, type TalkBinding } from "@/lib/midi";
 import type { ScoreBar, ScoreResult } from "@/lib/score";
 import { STEP_LABELS } from "@/lib/steps";
-import { barAtTime } from "@/lib/studio/format";
+import { barAtTime, keyLabel, tempoLabel } from "@/lib/studio/format";
 import {
   VOICE_COMMAND_HELP,
   matchSoundByName,
@@ -171,9 +171,9 @@ export function CoachPanel({
       case "tell":
         if (command.fact === "bar") return `Bar ${currentBar} of ${barCount}`;
         if (command.fact === "tempo") {
-          return `${Math.round(trackMap.tempo.bpm)} BPM, playing at ${ratePercent}%`;
+          return `${tempoLabel(trackMap.tempo)}, playing at ${ratePercent}%`;
         }
-        return `Key: ${trackMap.key.tonic} ${trackMap.key.mode}`;
+        return keyLabel(trackMap.key);
       case "help":
         setIsHelpOpen(true);
         return description;

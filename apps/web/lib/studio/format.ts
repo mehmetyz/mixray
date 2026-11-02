@@ -3,11 +3,14 @@ import type {
   FallbackStem,
   Isolation,
   IsolationMethod,
+  Key,
   Note,
   PitchRange,
   Recipe,
   StemName as TrackStemName,
+  Tempo,
   TimeSignature,
+  TrackMap,
 } from "@/lib/trackmap/trackmap.generated";
 
 const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"] as const;
@@ -189,29 +192,37 @@ export function deriveMixPeaks(soundPeaks: number[], restPeaks: number[] | undef
   return combined;
 }
 
-export function parseRecipeSummary(recipe: Recipe | undefined): ParsedRecipe {
+/** A confidence of zero means nothing was measured, so the grid's placeholder values are not shown. */
+export function tempoLabel(tempo: Tempo): string {
+  return tempo.confidence > 0 ? `${Math.round(tempo.bpm)} BPM` : "Tempo unknown";
+}
+
+export function keyLabel(key: Key): string {
+  return key.confidence > 0 ? `${key.tonic} ${key.mode}` : "Key unknown";
+}
+
+export type PlayableStemUrls = {
+  mixUrl: string;
+  soundUrl: string;
+  restUrl: string;
+};
+
+export function playableStemUrls(
+  trackMap: TrackMap,
+  isolation: Isolation,
+  soundUrlOverride?: string,
+): PlayableStemUrls {
+  const soundUrl = soundUrlOverride ?? isolation.sound_url;
+  return { mixUrl: trackMap.source.mix_url ?? soundUrl, soundUrl, restUrl: isolation.rest_url };
+}
+
+export function parseRecipeSummary(recipe: Recipe): ParsedRecipe {
   const defaultEnvelope: AmpEnvelopeView = {
     attackMs: 5,
     decayMs: 320,
     sustain: 0.75,
     releaseMs: 280,
   };
-
-  if (recipe === undefined) {
-    return {
-      oscillatorRows: [
-        { label: "Wave", value: "Sawtooth" },
-        { label: "Voices", value: "5 unison" },
-      ],
-      filterRows: [
-        { label: "Type", value: "Lowpass 24 dB" },
-        { label: "Cutoff", value: "5.8 kHz" },
-      ],
-      fxRows: [{ label: "Space", value: "Hall reverb · 20%" }],
-      playRows: [{ label: "Voicing", value: "Polyphonic" }],
-      envelope: defaultEnvelope,
-    };
-  }
 
   const oscillatorRows: RecipeRow[] = [];
   const rawOscs = recipe.oscillators;

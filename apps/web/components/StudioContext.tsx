@@ -14,8 +14,7 @@ import {
 } from "react";
 import { StemPlayer, type LoopRange, type StemName, type StemSource } from "@/lib/audio/player";
 import { waitForNotes } from "@/lib/engine/client";
-import { resolvePlayableStems } from "@/lib/studio/demo-audio";
-import { barRangeToSeconds, matchFallbackStem } from "@/lib/studio/format";
+import { barRangeToSeconds, matchFallbackStem, playableStemUrls } from "@/lib/studio/format";
 import type { FallbackStem, Isolation, TrackMap } from "@/lib/trackmap/trackmap.generated";
 
 import type {
@@ -70,7 +69,6 @@ export type StudioContextValue = {
   selectedIsolationId: string;
   fallbackAlternative: FallbackStem | null;
   useDemucsCleaner: boolean;
-  isSynthesizedPreview: boolean;
   monitor: StemName;
   playing: boolean;
   currentTime: number;
@@ -152,7 +150,6 @@ export function StudioProvider({ clipId, initialTrackMap, children }: StudioProv
   const [handFilter, setHandFilter] = useState<HandFilter>("both");
   const [simplifiedBars, setSimplifiedBars] = useState<number[]>([]);
   const [demucsPreviewOn, setUseDemucsCleaner] = useState<boolean>(false);
-  const [isSynthesizedPreview, setIsSynthesizedPreview] = useState<boolean>(false);
   const [coachEntries, setCoachEntries] = useState<CoachActionEntry[]>([]);
 
   const playerRef = useRef<StemPlayer | null>(null);
@@ -246,8 +243,6 @@ export function StudioProvider({ clipId, initialTrackMap, children }: StudioProv
   }, [trackMap, selectedIsolation, effectiveSoundUrl]);
 
   useEffect(() => {
-    let cancelled = false;
-    let revokeBlobs: () => void = () => {};
     const inputs = playerInputsRef.current;
 
     const startPlayer = (sources: StemSource[]) => {
@@ -290,32 +285,23 @@ export function StudioProvider({ clipId, initialTrackMap, children }: StudioProv
       const mix = inputs.trackMap.source.mix_url;
       if (mix !== undefined) startPlayer([{ name: "mix", url: mix }]);
     } else {
-      void resolvePlayableStems(
+      const stems = playableStemUrls(
         inputs.trackMap,
         inputs.selectedIsolation,
         inputs.effectiveSoundUrl,
-      ).then((resolved) => {
-        if (cancelled) {
-          resolved.revoke();
-          return;
-        }
-        revokeBlobs = resolved.revoke;
-        setIsSynthesizedPreview(resolved.isSynthesizedPreview);
-        startPlayer([
-          { name: "sound", url: resolved.soundUrl },
-          { name: "rest", url: resolved.restUrl },
-          { name: "mix", url: resolved.mixUrl },
-        ]);
-      });
+      );
+      startPlayer([
+        { name: "sound", url: stems.soundUrl },
+        { name: "rest", url: stems.restUrl },
+        { name: "mix", url: stems.mixUrl },
+      ]);
     }
 
     return () => {
-      cancelled = true;
       const activePlayer = playerRef.current;
       if (activePlayer !== null) resumePlayingRef.current = activePlayer.playing;
       playerRef.current = null;
       void activePlayer?.dispose();
-      revokeBlobs();
     };
   }, [clipId, stemKey]);
 
@@ -461,7 +447,6 @@ export function StudioProvider({ clipId, initialTrackMap, children }: StudioProv
       selectedIsolationId,
       fallbackAlternative,
       useDemucsCleaner,
-      isSynthesizedPreview,
       monitor: selectedIsolation === undefined ? "mix" : monitor,
       playing,
       currentTime,
@@ -493,7 +478,6 @@ export function StudioProvider({ clipId, initialTrackMap, children }: StudioProv
       selectedIsolationId,
       fallbackAlternative,
       useDemucsCleaner,
-      isSynthesizedPreview,
       monitor,
       playing,
       currentTime,

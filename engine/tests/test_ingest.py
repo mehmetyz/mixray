@@ -27,6 +27,8 @@ from ingest import (
     trackmap_path,
     write_job,
 )
+from suggest import isolation_summary_facts
+from transcribe import left_hand_accompaniment
 
 
 def _upload(
@@ -56,6 +58,24 @@ def _job(clip_id: str, status: str = "running") -> JobRecord:
         "error": None,
     }
     return record
+
+
+def test_an_unanalysed_clip_claims_no_tempo_key_or_chords(
+    cache_root: Path, trackmap_validator: Draft202012Validator
+) -> None:
+    record = ingest_upload(_upload(tone_wav(seconds=2.0)), cache_root)
+
+    trackmap = build_served_trackmap(record["id"], cache_root)
+
+    trackmap_validator.validate(trackmap)
+    tempo = trackmap["tempo"]
+    key = trackmap["key"]
+    assert isinstance(tempo, dict) and tempo["confidence"] == 0
+    assert isinstance(key, dict) and key["confidence"] == 0
+    assert trackmap["chords"] == []
+    assert left_hand_accompaniment([], [0.0], []) == []
+    with pytest.raises(ValueError, match="not measured"):
+        isolation_summary_facts(trackmap, "any")
 
 
 def test_an_upload_writes_playable_audio_and_a_valid_trackmap(

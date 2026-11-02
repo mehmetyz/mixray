@@ -8,6 +8,10 @@ type RecipeCardProps = {
   recipe: Recipe | undefined;
 };
 
+type RecipeDetailsProps = {
+  recipe: Recipe;
+};
+
 type BlockProps = {
   title: string;
   rows: RecipeRow[];
@@ -32,6 +36,18 @@ function ParameterBlock({ title, rows }: BlockProps) {
 }
 
 export function RecipeCard({ recipe }: RecipeCardProps) {
+  if (recipe === undefined) {
+    return (
+      <div className="space-y-1.5">
+        <span className="eyebrow">Suggested starting patch</span>
+        <p className="text-xs leading-relaxed text-muted">No patch was suggested for this sound.</p>
+      </div>
+    );
+  }
+  return <RecipeDetails recipe={recipe} />;
+}
+
+function RecipeDetails({ recipe }: RecipeDetailsProps) {
   const parsed = useMemo(() => parseRecipeSummary(recipe), [recipe]);
   const { envelope } = parsed;
 
@@ -43,7 +59,7 @@ export function RecipeCard({ recipe }: RecipeCardProps) {
   return (
     <div className="space-y-2.5">
       <div className="flex items-center justify-between">
-        <span className="eyebrow">Sound recipe</span>
+        <span className="eyebrow">Suggested starting patch</span>
       </div>
 
       <div className="grid grid-cols-2 gap-2">
