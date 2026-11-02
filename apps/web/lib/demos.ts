@@ -32,7 +32,7 @@ export const DEMO_ORIGIN_LABELS: Record<DemoOrigin, string> = {
 };
 
 const FLOW_CREDIT = "Video and music generated with Google Flow for Mixray";
-const FLOW_LICENSE = "Made for Mixray; marked as AI-generated";
+const FLOW_LICENSE = "AI-generated and marked as such; not under the repository's code licence";
 
 /**
  * Shortcuts to Add: a demo is a video in `public/demos` that goes through the same upload, analysis

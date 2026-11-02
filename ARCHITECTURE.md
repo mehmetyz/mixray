@@ -28,8 +28,9 @@ upload → analyze → isolate → transcribe → arrange → learn
    features. Tempo is not read from a single estimator: candidate grids are proposed by several
    estimators, scored against the onset envelope under a tempo prior, and the winner reports a
    confidence derived from its margin over the runner-up.
-3. **Isolate.** SAM Audio separates the sound the user asked for. Demucs is a fallback for the six
-   standard stems, and the UI can switch between them.
+3. **Isolate.** `engine/fallback.py` routes the prompt to the separator measured best for it: a solo
+   recording is served as it is, vocals, bass, guitar and piano go to SAM Audio, other instruments to
+   Demucs, and sound events to SAM Audio with one draw.
 4. **Transcribe.** Basic Pitch turns the isolated sound into notes, which are snapped to the beat
    grid from step 2 rather than to a second, independently estimated tempo.
 5. **Arrange.** The notes become an easy single-voice part and an intermediate two-hand part, using
@@ -56,12 +57,12 @@ browser.
 
 ## Why each model is where it is
 
-- **SAM Audio** runs self-hosted on Modal (`facebook/sam-audio-small`, fp32, 24 GB GPU). The
-  auxiliary ranker stack is left unloaded at `from_pretrained` time, which drops roughly 7 GB of
-  weights that only matter when drawing multiple candidates; a 30 s clip then separates in about
-  5 s at a 14.3 GB peak.
+- **SAM Audio** runs self-hosted on Modal (`facebook/sam-audio-large`, A100 40 GB). Instruments get
+  eight draws with spans, scored one at a time by Judge; a best score under 2.0 means every draw
+  was empty, and the sound goes to Demucs. Piano's output is laid onto the real mix as a mask, and
+  its notes are read from the Demucs stem. Eight draws take about 88 GPU seconds.
 - **Area selection:** the area drawn on a frame is cropped and named by Muse Spark, and that **name**
-  drives separation. **SAM 3.1** only draws the on-demand Track overlay, at 640 px and 5 fps; a mask
+  drives separation. **SAM 3.1** only draws the on-demand Track overlay on Isolate and Analyze, at 640 px and 5 fps; a mask
   is never fed to SAM Audio, because that path measured an order of magnitude slower and leaked
   neighbouring sounds.
 - **Muse Spark** gets the audio for suggestions and summaries, and the computed per-bar score for
@@ -70,7 +71,7 @@ browser.
 - **Muse Spark Open** runs on Baseten partner inference, because an 816B mixture-of-experts model
   cannot be self-hosted inside this project's budget. It accepts a JSON schema but does not
   enforce one, so its reply is validated and retried rather than trusted.
-- **Muse Voice Transcribe** takes a 16 kHz mono WAV from push-to-talk. It writes numbers as words,
+- **Muse Voice Transcribe** takes a 16 kHz mono WAV from one press of a pedal, pad or key. It writes numbers as words,
   so the command parser reads spoken numbers.
 
 ## Producers never share a file

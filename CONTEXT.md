@@ -21,7 +21,9 @@ Decisions and current state. The plan is in `SPEC.md`, the UI in `DESIGN.md`, th
   learning is a post-hackathon idea.
 - **Routing is measured, not preferred** (`engine/fallback.py`): a solo recording is served
   unseparated; vocals, bass and guitar in a band go to SAM Audio `large` (spans, 8 draws, Judge pick),
-  and to Demucs when every draw is empty; piano, organ, synth, strings, drums and speech go to Demucs;
+  and to Demucs when every draw is empty; piano goes the same way (Nov 2), but its SAM Audio output is laid
+  as a mask onto the real mix and its notes are read from the Demucs piano stem; organ, synth, strings, drums and
+  speech go to Demucs;
   horn, footsteps, dog and siren go to SAM Audio with one draw. Notes are only claimed for vocals, bass,
   guitar and piano, or a solo recording. Level gates answer "not found" for an absent sound.
 - **The user draws an area, on Add or Isolate.** Muse Spark names the crop and that name drives
@@ -95,15 +97,11 @@ Decisions and current state. The plan is in `SPEC.md`, the UI in `DESIGN.md`, th
   `request` part beside the `audio` part, and it writes numbers as words, so the command parser reads
   spoken numbers.
 - Done (Nov 1): routing above, area selection on Add and Isolate, and the Track toggle in Analyze.
-  Live on a dev server: piano area named `Piano Keyboard`, served unseparated, 327 notes;
-  guitar area fell back to Demucs after 8 empty draws, 106 notes; Track took 65 s and 181 s. Production
-  still runs the older engine, and the area and Track UI has not been run in a browser against the
-  new engine.
-- Measured (Nov 1), 50 ms note F1: solo guitar 0.87, solo piano 0.53, band vocals/bass/guitar SAM Audio
-  0.68 against Demucs 0.71 (n=7), piano in a band 0.48. Tempo is right on 7/12 clips, key on 5/12.
-- Done (Nov 1): the evaluation scripts, the datasets and every test video of unverified licence were
-  deleted from the working copy. Measuring again means rebuilding that harness; the figures above are
-  what remains. Run the engine checks with `uv run --all-groups`, because `numpy` comes from those.
+  Checked on a dev server. Production still runs the older engine, and the area and Track UI has not been run
+  in a browser against the new engine.
+- Measured (Nov 1), 50 ms note F1: solo guitar 0.87, band vocals/bass/guitar SAM Audio 0.68 against Demucs 0.71
+  (n=7). Tempo is right on 7/12 clips, key on 5/12.
+- Run the engine checks with `uv run --all-groups`, because `numpy` comes from those.
 - Done (Nov 1): keys play the selected sound itself, at the pitch heard in the track, with a synth only as
   fallback; the take score keeps the latest pass over each moment and ignores keys pressed while paused; voice
   listens continuously through Muse Voice Transcribe, with the browser's speech service removed. Verified by
@@ -140,4 +138,28 @@ Decisions and current state. The plan is in `SPEC.md`, the UI in `DESIGN.md`, th
   or draw an area, and Continue runs the real pipeline. Add also gained a project name field. Five were generated in Google Flow (labelled AI-generated, watermark burned in) and one
   is a real public-domain U.S. Navy Band recording. Most are generated because an open licence on a video
   of musicians rarely covers the music they play; `CREDITS.md` has the details.
-- Open: a real recording on the Launchkey, with its MIDI, to show note accuracy against what was played.
+- Measured (Nov 2), piano note decoding, 50 ms note F1: 20 public-domain pieces from Mutopia rendered with the
+  Salamander grand piano samples, with a generated bass and drums or steam-like noise; tuned on 10, reported once
+  on the other 10. Onset threshold 0.6 and no melodia trick beat the old values in a band (0.683 to 0.751), under
+  steam (0.753 to 0.824) and solo (0.791 to 0.885), on all 10 pieces in a band. Applied to piano only. The rendered
+  test material is easier than a real band, so these are not real-recording scores.
+- Done (Nov 2, deployed): piano through SAM Audio masked onto the mix, notes from the Demucs stem with the new
+  decoder. On the café demo steam fell from 20.2 to 11.8 and the off-beat note starts from 8 to 1, with the same 14
+  of 16 beats found. Results from an older isolation version are no longer listed, so a version bump clears a clip's
+  sounds until they are separated again.
+- Done (Nov 2): state audit in a browser. Fixed: the Coach failed on every request (notes sent in units the route
+  refused, and the route's answer parsed as a raw model reply); Play was silent until a first sound existed; playback
+  stopped when notes arrived or a sound was switched; Play after the end of a clip stopped at once; a loop reaching
+  the clip's end stopped; video ran at full speed under a slowed track; Track state leaked between sounds. Run with
+  scripted checks on Play, Pause, Space, screen changes, rate, loop, area, Track on both screens, Practice, Coach and
+  Export. Not yet run with a real microphone or the Launchkey.
+- Done (Nov 2): tests and CI. `engine/tests` (pytest, with real ffmpeg and librosa, no model or network) and
+  `apps/web/tests` (`node --test` through `tests/setup.ts`, which resolves `@/` and extensionless imports) beside the
+  older fixtures. `.github/workflows/ci.yml` runs lint, types, tests and build. README gained the evaluation table and
+  setup; `CREDITS.md` lists the evaluation data.
+- Done (Nov 2): `evaluation/` holds the Colab work by topic with its output, limited to data with a clear licence.
+  Run again: piano and guitar decoding, and eight SAM Audio draws on an A100 with the same seeds. All gave the Nov 1
+  figures, except CLAP (0.440 to 0.450), which scores a random crop. Stored outputs for the gate and solo guitar were
+  re-scored with the same figures. Also added: MIT licence.
+- Open: note accuracy on a real recording with known notes; nobody on the team plays, so it needs a labelled
+  recording with clean rights.

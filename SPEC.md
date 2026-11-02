@@ -264,7 +264,7 @@ Sources: dev.meta.ai docs (`/docs`, `/docs/api-reference/responses/schemas`, `/d
   - **Why `.half()` failed:** `processor(...)` emits `float32` audio tensors while DAC-VAE `weight_norm` layers have `Half` biases (`RuntimeError: Input type (float) and bias type (c10::Half) should be the same`). Since `fp32` peaks at 14.26 GB on a 23.7 GB card, run full `fp32`.
   - **Output shape & WAV saving:** `separation.target` and `separation.residual` are `list[Tensor]` (1D tensor per batch item), and TorchAudio ≥ 2.9 routes `torchaudio.save` through `torchcodec` (not installed in the image). Index `[0]`, `.unsqueeze(0)` for channels, and write 16-bit PCM WAV via Python's stdlib `wave` module.
   - **Separation verified Oct 27, and a wrong prompt fails quietly.** Asking for "synth lead" on a
-    dub techno clip that has none returned noise at a plausible level: `target` and `residual` both
+    test clip that has none returned noise at a plausible level: `target` and `residual` both
     sat at rms 0.010 against the mix's 0.161 and reconstructed nothing (error 1.007). With prompts
     that match what is playing, the same clip and model behave correctly:
 
@@ -293,7 +293,7 @@ Sources: dev.meta.ai docs (`/docs`, `/docs/api-reference/responses/schemas`, `/d
     will work. The tell is spectral: the isolated output crossed zero three times as often as the
     mix.
   - **Implication for Modal:** a single 24 GB GPU (`L4` or `A10G`) is sufficient and fast (5.1 s per 30 s clip) in `fp32` with `vision_encoder` still resident for video prompts.
-  - **Signal energy & reconstruction (`"synth lead"` on the 30 s dub techno clip):** `mix_rms = 0.16069`, `sound_rms = 0.07149`, `rest_rms = 0.12179`, `reconstruction_error = 0.17204` (`rms(mix - (sound + rest)) / rms(mix)`, matching DAC-VAE codec roundtrip). The isolated lead carries a clean subset of the mix energy while the backing track stays in `rest`.
+  - **Signal energy & reconstruction (`"synth lead"` on the 30 s test clip):** `mix_rms = 0.16069`, `sound_rms = 0.07149`, `rest_rms = 0.12179`, `reconstruction_error = 0.17204` (`rms(mix - (sound + rest)) / rms(mix)`, matching DAC-VAE codec roundtrip). The isolated lead carries a clean subset of the mix energy while the backing track stays in `rest`.
   - **Quality levers, read from the pinned source Oct 28 (not yet measured on GPU).** The first
     isolations sounded weak, and the cause is configuration, not the weights: `run_isolation` asks
     for `reranking_candidates=1`, and at that setting `separate` generates exactly one sample from
@@ -474,7 +474,7 @@ Sources: dev.meta.ai docs (`/docs`, `/docs/api-reference/responses/schemas`, `/d
     vision encoder runs over frames resampled to the audio feature length. That is the number to
     design the click flow around.
   - **Masks do NOT prove the right source was picked.** All eight outputs sit between 0.056 and
-    0.072 rms with reconstruction error near 0.33, well above the 0.15 seen on the dub techno clip,
+    0.072 rms with reconstruction error near 0.33, well above the 0.15 seen on the test clip,
     and nothing in those numbers says the pianist's box returned piano. Deciding whether visual
     prompting is worth its latency needs either listening or a CLAP cross-score of each output
     against each label; the rms figures alone cannot answer it.

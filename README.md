@@ -2,53 +2,219 @@
 
 **Point at a sound. Hear it alone. Learn to play it.**
 
-Drop in a track or a video you own, pick one sound out of the mix — by typing what you want, by
-taking a suggestion, or by drawing over the instrument in the video — and Mixray isolates it, shows
-what it plays, and teaches you to play it on a keyboard with a coach that listens to your take.
+**Live:** https://mixray.vercel.app
 
-Built for the **Meta Global AI Developer Hackathon** (Oct 26 – Nov 4, 2026).
+Drop in a track or a video you own, then pick one sound out of the mix: type what you want, take a
+suggestion, or draw over the instrument in the video. Mixray isolates it, shows what it plays and
+teaches you to play it on a keyboard, with a coach that reads your take.
 
-## Meta models
+Built for the **Meta Global AI Developer Hackathon** (Oct 26 – Nov 4, 2026), problem statement
+*Build for Your World*.
 
-- **SAM Audio** (open weights, self-hosted on Modal): prompted sound separation — the core of the product
-- **SAM 3.1**: follows a selected instrument through the video as a Track overlay on the Analyze screen
-- **Muse Spark**: listens to the clip, suggests sounds worth isolating, and coaches the practice session through tool calls
-- **Muse Spark Open** (open weights, via Baseten partner inference): the Sound Recipe for each isolated sound
-- **Muse Voice Transcribe**: hands-free commands while both hands are on the keys
+**Built during the event.** The first commit is from Oct 26, 2026, and all code in this repository
+was written during the hackathon. The models and datasets it uses already existed; they are listed
+below and in [CREDITS.md](CREDITS.md).
 
-Supporting open-source signal models: **Demucs** (fallback separation for standard stems) and
-**Basic Pitch** (audio to MIDI).
+## Why
 
-## How it fits together
+You hear a part in a song or a video and want to play it. Today that means hoping someone made a
+tutorial for that exact song, or working it out by ear while the rest of the band plays over it.
 
-See [ARCHITECTURE.md](ARCHITECTURE.md).
+Stem splitters give you a few fixed stems. The thing you noticed is often not one of them, and it
+may be the piano you can see in the corner of the video. Mixray starts from what
+you noticed: you point at it, in words or on the picture. Then it carries on past the separation, to
+the notes, a part sized for your hands, and practice with both hands on the keys and your voice
+driving the transport.
 
-## Run locally
+## What it does
 
-```bash
-# web
-cd apps/web && pnpm install && pnpm dev
+1. **Add** a clip of up to 30 seconds, or open one of six demos.
+2. **Isolate** a sound by name, by suggestion or by drawing an area on the video. Sound, Rest and
+   Full mix stay in sync, and Track outlines the chosen instrument through the video.
+3. **Analyze** tempo, key, chords, notes and a sound recipe.
+4. **Practice** on a MIDI keyboard, the on-screen keys or QWERTY. Your take is scored per bar and the
+   Coach can set the loop, the tempo or the hand through fixed tools. A pedal or pad opens the
+   microphone for one voice command.
+5. **Export** the separated audio, the MIDI parts, the recipe and session notes as a ZIP.
 
-# engine (needs a Modal account and the mixray-secrets, mixray-hf and mixray-baseten secrets)
-cd engine && uv sync && uv run modal deploy app.py
+## How it works
+
+```mermaid
+flowchart LR
+  B["Browser<br/>Next.js, Web Audio, Web MIDI"] -->|"trimmed clip"| I["Ingest<br/>ffmpeg, 48 kHz, frames"]
+  I --> A["Analyze<br/>tempo, key, chords"]
+  I --> S["Muse Spark<br/>suggests sounds"]
+  B -->|"drawn area"| N["Muse Spark<br/>names the area"]
+  B -->|"sound name"| R{"Route by<br/>what was measured"}
+  N --> R
+  R -->|"solo recording"| U["Served as it is"]
+  R -->|"vocals, bass, guitar, piano"| SA["SAM Audio large<br/>8 draws, Judge picks"]
+  R -->|"drums, organ, synth, speech"| D["Demucs stems"]
+  R -->|"horn, dog, siren, footsteps"| SE["SAM Audio<br/>1 draw with spans"]
+  U --> BP["Basic Pitch<br/>notes"]
+  SA --> BP
+  D -->|"sound only"| H["Sound to hear"]
+  D -.->|"piano's notes"| BP
+  SE --> H
+  BP --> AR["Part for the keyboard"]
+  AR --> L["Practice in the browser"]
+  L -->|"per-bar score"| C["Muse Spark<br/>Coach tools"]
+  B -->|"Track switch"| T["SAM 3.1<br/>outline through the video"]
 ```
 
-Set the variables listed in `.env.example`. The browser never sees a model key: every model call
-goes through a server route or Modal.
+`schema/trackmap.schema.json` is the only contract between the web app and the engine. The browser
+never sees a model key: every model call goes through a server route or Modal. More in
+[ARCHITECTURE.md](ARCHITECTURE.md).
+
+### Models
+
+- **SAM Audio** (Meta, open weights, self-hosted on Modal): prompted sound separation
+- **SAM 3.1** (Meta): follows the chosen instrument through the video
+- **Muse Spark** (Meta): suggests sounds, names a drawn area, summarises, coaches through tool calls
+- **Muse Spark Open** (Meta, open weights, via Baseten): the sound recipe
+- **Muse Voice Transcribe** (Meta): hands-free commands while both hands are on the keys
+- **Demucs** and **Basic Pitch** (open source): standard stems, and audio to notes
+
+## Evaluation
+
+These measurements shaped the product, including where SAM Audio lost. The rule was to fix the metric before
+running, tune on one part of the data and report once on the rest. The calculations and
+experiments that were scattered across Colab notebooks are organised in [evaluation](evaluation/README.md),
+with their code, printed output and results.
+
+The last column says how each figure was checked again on Nov 2. **Run again** means the measurement was
+repeated. **Re-scored** means stored separated audio was decoded and scored again, without a new separation.
+Each gave the same result as the first time.
+
+| Decision | Data | Measure | Result | Checked again |
+|---|---|---|---|---|
+| Read piano notes with a stricter decoder | 20 public-domain Mutopia pieces rendered with Salamander piano, 10 to tune, 10 to report | Note F1, 50 ms | In a band 0.684 → **0.757**, under steam 0.752 → **0.823**, solo 0.791 → **0.885** | Run again |
+| Keep Basic Pitch's own note length for guitar | GuitarSet, 180 unseen excerpts, split by player | Note F1, 50 ms | 0.732 → **0.777** | Run again |
+| Eight SAM Audio draws, picked by Judge | AlbumDB, 10 unseen targets | Note agreement with the clean stem | First draw 0.281 → **0.479** (Demucs 0.547) | Run again |
+| Vocals, bass and guitar stay with SAM Audio | AlbumDB, 7 targets, a subgroup chosen after seeing results | Note agreement | SAM Audio 0.685, Demucs 0.710: a project choice, not a measured win | Run again |
+| Answer "not found" for an absent sound | AlbumDB, 120 stems | Level gate at −25 dB | **31 of 31** absent stems caught, 8 of 89 present ones flagged | Re-scored |
+| Serve a solo guitar unseparated | GuitarSet, 12 recordings | Note F1, 50 ms | Raw **0.87**, Demucs 0.87, SAM Audio 0.18 | Re-scored |
+| Lay SAM Audio's piano onto the real mix as a mask | One demo clip | Steam level, off-beat note starts | Steam 20.2 → 11.8, off-beat starts 8 → 1, same 14 of 16 beats | No |
+
+**What these numbers do not say:**
+
+- Tempo was within 1 BPM on 7 of 12 real guitar recordings and key was right on 5 of 12. On the
+  same 12 clips the keyboard part scored about 0.61 on solos and 0.44 on chordal playing.
+- Rendered piano is easier than a real recording. Note accuracy on a real recording with known notes for
+  every instrument is still open.
+- Note agreement compares against notes read from the clean stem, so it judges separation, not the
+  note decoder.
+- Most sets are small, the steam figure is one clip, and nobody has run a formal listening test.
+- The demo clip's steam figure has no script here.
+- Running SAM Audio again with the same seeds shows the figures repeat. It does not show they hold on
+  other music: the separation rows rest on one album.
+- On guitar, 100 ms scored higher than the 127.7 ms the engine uses: 0.787 against 0.777 on the unseen
+  players. The engine keeps Basic Pitch's own default rather than a value picked from this table.
+- The Coach's words and its tool calls do not always match, and voice and MIDI have only been run
+  with a fake microphone and fake MIDI input.
+
+## Timeline
+
+Built during the event, Oct 26 to Nov 4, 2026.
+
+| Day | What changed |
+|---|---|
+| Mon Oct 26 | Repository, spec, design and the TrackMap schema; web scaffold and Modal engine scaffold |
+| Tue Oct 27 | SAM Audio running on Modal; upload, job API, separation cache and API key auth |
+| Wed Oct 28 | Five-screen studio; tempo, chord and key analysis; Demucs fallback; Basic Pitch notes and keyboard parts; take scoring |
+| Thu Oct 29 | MIDI, on-screen keys and QWERTY on one clock; Muse Spark suggestion chips; a tap on the video becomes tracked masks |
+| Fri Oct 30 | The Coach through tool calls; sound recipes on Muse Spark Open; voice commands; checked summaries; a tap names the sound |
+| Sat Oct 31 (weekend) | Coach, Analyze and Practice rebuilt; first test on real recordings: note F1 0.532 → 0.673 on 12 guitar recordings |
+| Sun Nov 1 (weekend) | A day of measurement in Colab, then routing by measurement; areas drawn on the video; keys play the selected sound; a pedal or pad opens the microphone; every screen cut down to what is real |
+| Mon Nov 2 | Six demos; clip list with live progress; chips only from Muse Spark; piano through a SAM Audio mask with stricter decoding; Track on Isolate and Analyze; works on phones and tablets; browser audit fixed the Coach, playback and looping; tests, CI, this evaluation and the licence |
+
+## Run it yourself
+
+### Tests only: no accounts needed
+
+Needs Node 22.18 or newer (CI uses 26), [pnpm](https://pnpm.io) 10, [uv](https://docs.astral.sh/uv/) and ffmpeg.
+
+```bash
+pnpm install
+pnpm lint && pnpm typecheck && pnpm test
+
+cd engine
+uv sync --all-groups
+uv run ruff check . && uv run mypy . && uv run pytest
+uv run python transcribe.fixture.py
+```
+
+No test calls a model, a GPU or the network. The engine tests run real uploads through ffmpeg and
+real analysis through librosa. Web tests are in `apps/web/tests` and `apps/web/lib/*.fixture.ts`;
+engine tests are in `engine/tests`. CI runs all of this on every push. To repeat the measurements, see
+[evaluation](evaluation/README.md).
+
+### The whole app
+
+**1. Accounts and keys**
+
+| Service | What for | Name |
+|---|---|---|
+| [Modal](https://modal.com) | Engine and GPU | `uv run modal token new` |
+| Meta Model API | Muse Spark, SAM 3.1, Muse Voice Transcribe | `META_API_KEY` |
+| [Baseten](https://baseten.co) | Muse Spark Open | `BASETEN_API_KEY` |
+| [Hugging Face](https://huggingface.co/facebook/sam-audio-large), after accepting the model's licence | SAM Audio weights | `HF_TOKEN` |
+| You | Any long random string shared by the web app and the engine | `MIXRAY_API_KEY` |
+
+**2. Engine**
+
+```bash
+cd engine
+uv sync --all-groups
+uv run modal secret create mixray-secrets META_API_KEY=... MIXRAY_API_KEY=...
+uv run modal secret create mixray-baseten BASETEN_API_KEY=...
+uv run modal secret create mixray-hf HF_TOKEN=...
+uv run modal deploy app.py    # on macOS: MODAL_DISABLE_API_PROXY=1 uv run modal deploy app.py
+```
+
+Deploying prints the engine's URL. The volumes are created on first use, and the first separation
+downloads the weights, so it is slow. An eight-draw separation uses an A100 40 GB for about 88 s,
+roughly $0.05. Use `uv run modal serve app.py` to work on the engine with hot reload.
+
+If the web app is not on `localhost:3000`, add `MIXRAY_CORS_ORIGINS=https://your.domain` (comma
+separated) to `mixray-secrets`.
+
+**3. Web**
+
+Create `apps/web/.env.local`:
+
+```bash
+MIXRAY_ENGINE_URL=https://...modal.run
+MIXRAY_API_KEY=...          # the same value as on the engine
+META_API_KEY=...            # for the Coach and voice routes
+```
+
+```bash
+pnpm dev                      # http://localhost:3000
+```
+
+To host it on Vercel, set the root directory to `apps/web` and add the same three variables.
+
+**Limits** are in `engine/ingest.py`: 50 MB and 6 minutes per upload, 30 s per clip, and 25 clips and
+50 separations per IP per day (`MIXRAY_DAILY_CLIP_QUOTA`, `MIXRAY_DAILY_ISOLATION_QUOTA`). Clips are
+deleted after 7 days.
+
+A MIDI keyboard needs a browser with Web MIDI, such as Chrome, Edge or Brave. QWERTY works anywhere.
 
 ## Demos
 
-The home page offers six demos as shortcuts: clicking one uploads its video through the normal Add
-flow, with the sound to separate already chosen. There are five AI-generated scenes (a café piano under espresso steam, a song in a park,
-a busker with a dog and a taxi, a rooftop singer, a piano on a rainy night) and one real recording,
-a public-domain U.S. Navy Band performance. Each is labelled Real recording or AI-generated, and the
-AI-generated videos carry a watermark. [CREDITS.md](CREDITS.md) lists each one and explains why most
-are AI-generated: an open licence on a video of musicians rarely covers the music they play.
+The home page offers six demos as shortcuts: clicking one opens Add with its video and sound already
+chosen, and it then goes through the same pipeline as any upload. There are five AI-generated scenes
+(a café piano under espresso steam, a song in a park, a busker with a dog and a taxi, a rooftop
+singer, a piano on a rainy night) and one real recording, a public-domain U.S. Navy Band performance.
+Each is labelled Real recording or AI-generated, and the AI-generated videos carry a watermark.
 
-`node scripts/build_demos.mjs <engine-url>` rebuilds the videos and their stills.
+Most are generated because an open licence on a video of musicians rarely covers the music they
+play; [CREDITS.md](CREDITS.md) explains this and lists each one. They are test material, not evidence
+of accuracy on real recordings. `node scripts/build_demos.mjs <engine-url>` rebuilds the videos and
+their stills.
 
-## Rights
+## Licence and rights
 
-All code in this repository was written during the hackathon. Upload only music or video you own
-or have the rights to; third-party media used in the demo is listed in [CREDITS.md](CREDITS.md)
-with its licence and author.
+The code is under the [MIT License](LICENSE). Demo media, models and data are not: they keep their own terms,
+listed in [CREDITS.md](CREDITS.md). Upload only music or video you own or have the rights to.

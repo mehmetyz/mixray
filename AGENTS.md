@@ -50,6 +50,7 @@ apps/web/                 Next.js (App Router, TypeScript, Tailwind). UI, Web Au
 engine/                   Python, Modal app: ingest, suggest, track, isolate, fallback, analyze, transcribe, arrange, recipe, voice proxy
 schema/trackmap.schema.json   the ONLY contract between engine and web
 scripts/                  one-off tools
+evaluation/               how the figures in the README were measured
 SPEC.md  AGENTS.md  ARCHITECTURE.md  README.md
 ```
 
@@ -60,13 +61,14 @@ Keep this layout. Do not add new top-level folders, a database, or a second fron
 ```bash
 # web
 cd apps/web && pnpm install && pnpm dev          # http://localhost:3000
-pnpm typecheck && pnpm lint && pnpm build        # check before reporting
+pnpm typecheck && pnpm lint && pnpm test && pnpm build   # check before reporting
 
 # engine
 cd engine && uv sync
 uv run modal serve app.py                        # dev, hot reload
 uv run modal deploy app.py                       # deploy
-uv run ruff format . && uv run ruff check . && uv run mypy .   # check before reporting (mypy strict)
+uv run --all-groups ruff format . && uv run --all-groups ruff check . && uv run --all-groups mypy .
+uv run --all-groups pytest && uv run --all-groups python transcribe.fixture.py   # check before reporting
 ```
 
 ## Code style
