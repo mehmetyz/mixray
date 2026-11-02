@@ -14,8 +14,8 @@ still of it, and clicking a demo uploads that video through the same Add flow as
 sound already chosen. Each demo is labelled on screen as **Real recording** or **AI-generated**, and
 the studio shows this credit beside it.
 
-The landing page plays the audio of `cafe-piano` and the piano Mixray separated from it, both in
-`apps/web/public/landing/`.
+The landing page plays the audio of the piano and espresso steam demo and the piano Mixray separated
+from it, both in `apps/web/public/landing/`.
 
 | Demo (`id`) | Origin | Author | Source | Licence | Changes |
 |---|---|---|---|---|---|
