@@ -26,11 +26,21 @@ and I would want to play it. Getting there meant a stem splitter, a transcriptio
 that might not exist for that song, and a DAW that felt like a cockpit. I am learning keyboard now,
 and most of those evenings ended before I played a single bar.
 
-I am not unusual. Fender's CEO has said that
-[90% of first-time players abandon the instrument within their first year](https://fortune.com/2022/10/21/guitar-industry-fender-ceo-credits-diversity-players-pandemic-revival),
-and in a 2009 Gallup survey for NAMM,
-[85% of people who don't play an instrument said they wish they had learned](https://www.namm.org/news/press-releases/new-gallup-survey-namm-reflects-majority-americans-agree-many-benefits-playing).
-The wish is there. The path from "I love this sound" to "I can play it" is what breaks.
+I am not unusual. Making music is common: MIDiA Research counted
+[76 million music creators in 2023](https://www.hypebot.com/highlights-from-midias-state-of-the-music-creator-economy-report/),
+up 12% in a year. Sticking with it is not. Fender's CEO has said that
+[90% of first-time players abandon the instrument within their first year](https://fortune.com/2022/10/21/guitar-industry-fender-ceo-credits-diversity-players-pandemic-revival)
+(a figure from the company's own research). In a 2022
+[YouGov survey of 3,000 US adults](https://yougov.com/en-us/articles/43512-young-americans-increasingly-exposed-music),
+about half of those who never learned an instrument wish they had, and 51% of people who quit the
+guitar regret it. The wish is there. The path from "I love this sound" to "I can play it" is what
+breaks.
+
+That path runs through recordings. Studying how popular musicians learn by ear,
+[Liscio and Brown](https://arxiv.org/abs/2406.04058) write that "the recording stands as the source
+of truth for popular musicians." But a recording is a mix, and the tools that turn audio into notes
+expect one part at a time: Spotify's Basic Pitch, for one, says it
+["works best on one instrument at a time"](https://github.com/spotify/basic-pitch).
 
 Tutorials exist for hit songs. Mixray is for everything else: the piano in the corner of a video,
 a street musician's tune, the bass line in a track nobody has covered. Stem splitters give you a
