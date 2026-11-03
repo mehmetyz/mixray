@@ -66,8 +66,11 @@ SUGGEST_TIMEOUT_SECONDS = 300
 SUMMARY_TIMEOUT_SECONDS = 120
 CLEANUP_TIMEOUT_SECONDS = 300
 MAX_ISOLATE_CONTAINERS = 2
-# Long enough to outlast the Demucs check it starts beside; at most about $0.07 of idle A100.
-ISOLATE_SCALEDOWN_SECONDS = 120
+# Up for 20 minutes after its last use, so someone working on a clip never waits for it to load
+# twice: at most about $0.70 of idle A100 per visit, which `claim_warm_slot` bounds.
+ISOLATE_SCALEDOWN_SECONDS = 20 * 60
+# The API is CPU only, about $0.35 a day kept up; a cold one took 85 s to answer an upload.
+API_MIN_CONTAINERS = 1
 
 CACHE_VOLUME = modal.Volume.from_name("mixray-cache", create_if_missing=True)
 API_SECRET = modal.Secret.from_name("mixray-secrets")
@@ -527,6 +530,7 @@ def cleanup_old_uploads() -> int:
     secrets=[API_SECRET],
     timeout=WEB_TIMEOUT_SECONDS,
     gpu=None,
+    min_containers=API_MIN_CONTAINERS,
 )
 @modal.asgi_app()
 def api() -> FastAPI:
@@ -540,4 +544,5 @@ def api() -> FastAPI:
         spawn_analysis=analyze_worker.spawn,
         commit_volume=CACHE_VOLUME.commit,
         reload_volume=CACHE_VOLUME.reload,
+        spawn_warm=IsolationWorker().warm.spawn,
     )

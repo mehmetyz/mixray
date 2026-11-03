@@ -35,6 +35,11 @@ RETENTION_SECONDS = 7 * 24 * 60 * 60
 DAILY_CLIP_QUOTA = 25
 DAILY_ISOLATION_QUOTA = 50
 DISABLE_QUOTA_ENV = "MIXRAY_DISABLE_QUOTA"
+WARM_STATE_FILE = "warm.json"
+# A warm GPU stays up for its scaledown window after the last use, so a visit at most every 15
+# minutes, and 12 a day, bounds the idle cost to about $8 a day.
+WARM_INTERVAL_SECONDS = 15 * 60
+MAX_WARMS_PER_DAY = 12
 QUOTA_KEY_SECRET_ENV = "MIXRAY_API_KEY"
 CLIP_QUOTA_ENV = "MIXRAY_DAILY_CLIP_QUOTA"
 ISOLATION_QUOTA_ENV = "MIXRAY_DAILY_ISOLATION_QUOTA"
@@ -331,6 +336,25 @@ def _save_quotas(cache_root: Path, quotas: dict[str, IpQuotaCounter]) -> None:
     tmp_path = path.with_suffix(".json.tmp")
     tmp_path.write_text(json.dumps(quotas), encoding="utf-8")
     tmp_path.replace(path)
+
+
+def claim_warm_slot(cache_root: Path, now: float | None = None) -> bool:
+    """Whether the GPU may be warmed now: once per interval and a few times a day, whoever asks."""
+    moment = time.time() if now is None else now
+    day = time.strftime("%Y-%m-%d", time.gmtime(moment))
+    path = cache_root / WARM_STATE_FILE
+    state = _read_optional_json_object(path) or {}
+    raw_count, raw_last = state.get("count"), state.get("last")
+    count = raw_count if isinstance(raw_count, int) and state.get("day") == day else 0
+    last = float(raw_last) if isinstance(raw_last, (int, float)) else 0.0
+    if moment - last < WARM_INTERVAL_SECONDS or count >= MAX_WARMS_PER_DAY:
+        return False
+    tmp_path = path.with_suffix(".json.tmp")
+    tmp_path.write_text(
+        json.dumps({"day": day, "count": count + 1, "last": moment}), encoding="utf-8"
+    )
+    tmp_path.replace(path)
+    return True
 
 
 def check_and_increment_quota(

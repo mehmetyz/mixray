@@ -30,6 +30,7 @@ from ingest import (
     JobStatus,
     build_served_trackmap,
     check_and_increment_quota,
+    claim_warm_slot,
     clip_dir,
     get_cache_root,
     has_suggestions,
@@ -70,6 +71,7 @@ IsolationSpawner = Callable[[str, str, str, str], object]
 AreaIsolationSpawner = Callable[[str, RegionBounds, int], object]
 FollowSpawner = Callable[[str, str], object]
 AnalysisSpawner = Callable[[str], object]
+WarmSpawner = Callable[[], object]
 VolumeHook = Callable[[], object]
 FileRoute = Callable[[str], Response]
 
@@ -89,6 +91,7 @@ class RuntimeHooks(TypedDict):
     spawn_area_isolation: AreaIsolationSpawner | None
     spawn_follow: FollowSpawner | None
     spawn_analysis: AnalysisSpawner | None
+    spawn_warm: WarmSpawner | None
     commit: Callable[[], None]
     reload: Callable[[], None]
 
@@ -114,6 +117,12 @@ class TrackRequest(BaseModel):
     right: StrictInt = Field(..., ge=0)
     bottom: StrictInt = Field(..., ge=0)
     frame: StrictInt = Field(default=0, ge=0)
+
+
+class WarmResponse(BaseModel):
+    """Whether this visit started the GPU; at most one does in each interval."""
+
+    warming: bool
 
 
 class FollowResponse(BaseModel):
@@ -501,13 +510,14 @@ def get_health() -> HealthResponse:
     return HealthResponse(ok=True)
 
 
-def create_api(  # noqa: PLR0913, PLR0917
+def create_api(  # noqa: PLR0913, PLR0915, PLR0917
     spawn_isolation: IsolationSpawner | None = None,
     spawn_area_isolation: AreaIsolationSpawner | None = None,
     spawn_follow: FollowSpawner | None = None,
     spawn_analysis: AnalysisSpawner | None = None,
     commit_volume: VolumeHook | None = None,
     reload_volume: VolumeHook | None = None,
+    spawn_warm: WarmSpawner | None = None,
 ) -> FastAPI:
     """Create the engine HTTP API."""
     api = FastAPI()
@@ -535,6 +545,7 @@ def create_api(  # noqa: PLR0913, PLR0917
         "spawn_area_isolation": spawn_area_isolation,
         "spawn_follow": spawn_follow,
         "spawn_analysis": spawn_analysis,
+        "spawn_warm": spawn_warm,
         "commit": _commit,
         "reload": _reload,
     }
@@ -588,7 +599,18 @@ def create_api(  # noqa: PLR0913, PLR0917
             raise HTTPException(status_code=404, detail="Job not found.")
         return _to_job_response(record)
 
+    def post_warm(request: Request) -> WarmResponse:
+        _require_auth(request)
+        spawner = hooks["spawn_warm"]
+        _reload()
+        if spawner is None or not claim_warm_slot(get_cache_root()):
+            return WarmResponse(warming=False)
+        _commit()
+        spawner()
+        return WarmResponse(warming=True)
+
     api.add_api_route("/health", get_health, methods=["GET"], response_model=HealthResponse)
+    api.add_api_route("/warm", post_warm, methods=["POST"], response_model=WarmResponse)
     api.add_api_route("/jobs", post_job, methods=["POST"], response_model=JobResponse)
     api.add_api_route(
         "/jobs/{job_id}/isolate", post_isolate, methods=["POST"], response_model=JobResponse

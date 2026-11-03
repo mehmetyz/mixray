@@ -33,6 +33,7 @@ class Workers:
         self.areas: list[tuple[str, RegionBounds, int]] = []
         self.follows: list[tuple[str, str]] = []
         self.analyses: list[str] = []
+        self.warms = 0
 
     def spawn_isolation(self, clip: str, iso: str, prompt: str, label: str) -> None:
         self.isolations.append((clip, iso, prompt, label))
@@ -45,6 +46,9 @@ class Workers:
 
     def spawn_analysis(self, clip: str) -> None:
         self.analyses.append(clip)
+
+    def spawn_warm(self) -> None:
+        self.warms += 1
 
 
 @pytest.fixture
@@ -59,7 +63,11 @@ def client(
     monkeypatch.setenv("MIXRAY_API_KEY", SECRET)
     monkeypatch.delenv("MIXRAY_DEV_NO_AUTH", raising=False)
     api = create_api(
-        workers.spawn_isolation, workers.spawn_area, workers.spawn_follow, workers.spawn_analysis
+        workers.spawn_isolation,
+        workers.spawn_area,
+        workers.spawn_follow,
+        workers.spawn_analysis,
+        spawn_warm=workers.spawn_warm,
     )
     with TestClient(api) as test_client:
         yield test_client
@@ -384,6 +392,20 @@ def test_only_clips_are_served(client: TestClient, cache_root: Path, path: str) 
 
     assert response.status_code == 404
     assert "private" not in response.text
+
+
+def test_a_visit_warms_the_gpu_once_in_a_while(client: TestClient, workers: Workers) -> None:
+    first = client.post("/warm", headers=AUTH)
+    second = client.post("/warm", headers=AUTH)
+
+    assert first.json() == {"warming": True}
+    assert second.json() == {"warming": False}
+    assert workers.warms == 1
+
+
+def test_warming_needs_the_engine_key(client: TestClient, workers: Workers) -> None:
+    assert client.post("/warm").status_code == 401
+    assert workers.warms == 0
 
 
 def test_a_missing_file_is_404(client: TestClient) -> None:

@@ -11,7 +11,10 @@ import pytest
 from ingest import (
     DAILY_CLIP_QUOTA,
     DAILY_ISOLATION_QUOTA,
+    MAX_WARMS_PER_DAY,
+    WARM_INTERVAL_SECONDS,
     QuotaExceededError,
+    claim_warm_slot,
     cleanup_expired_clips,
 )
 from ingest import check_and_increment_quota as charge
@@ -99,3 +102,19 @@ def test_the_quota_can_be_switched_off_for_local_work(
     monkeypatch.setenv("MIXRAY_DAILY_CLIP_QUOTA", "0")
     charge("1.1.1.1", "clips", cache_root)
     assert not (cache_root / "quotas").exists()
+
+
+def test_the_gpu_is_warmed_at_most_once_an_interval(cache_root: Path) -> None:
+    start = 1_000_000.0
+    assert claim_warm_slot(cache_root, start)
+    assert not claim_warm_slot(cache_root, start + WARM_INTERVAL_SECONDS - 1)
+    assert claim_warm_slot(cache_root, start + WARM_INTERVAL_SECONDS)
+
+
+def test_the_gpu_is_warmed_a_few_times_a_day_at_most(cache_root: Path) -> None:
+    day = 1_000_000.0 - 1_000_000.0 % 86_400
+    times = [day + index * WARM_INTERVAL_SECONDS for index in range(MAX_WARMS_PER_DAY + 1)]
+    assert [claim_warm_slot(cache_root, moment) for moment in times].count(
+        True
+    ) == MAX_WARMS_PER_DAY
+    assert claim_warm_slot(cache_root, day + 86_400)
