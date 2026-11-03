@@ -136,6 +136,8 @@ function formatCoachSummary(action: CoachAction): string {
   }
 }
 
+const PRACTICE_PLAYBACK_VOLUME = 0.4;
+
 export function StudioProvider({ clipId, initialTrackMap, children }: StudioProviderProps) {
   const router = useRouter();
   const pathname = usePathname();
@@ -161,6 +163,14 @@ export function StudioProvider({ clipId, initialTrackMap, children }: StudioProv
   const playerRef = useRef<StemPlayer | null>(null);
   const latestTimeRef = useRef<number>(0);
   const latestMonitorRef = useRef<StemName>("sound");
+
+  // On Practice the keys carry the part, so the track sits under them instead of over them.
+  const playbackVolume = pathname?.endsWith("/learn") === true ? PRACTICE_PLAYBACK_VOLUME : 1;
+  const latestVolumeRef = useRef<number>(playbackVolume);
+  useEffect(() => {
+    latestVolumeRef.current = playbackVolume;
+    playerRef.current?.setVolume(playbackVolume);
+  }, [playbackVolume]);
   const latestRateRef = useRef<number>(100);
   const latestLoopRef = useRef<LoopRange | null>(null);
   const pendingPlayRef = useRef<boolean>(false);
@@ -253,6 +263,7 @@ export function StudioProvider({ clipId, initialTrackMap, children }: StudioProv
       });
 
       nextPlayer.setActive(latestMonitorRef.current);
+      nextPlayer.setVolume(latestVolumeRef.current);
       nextPlayer.setRate(latestRateRef.current / 100);
       nextPlayer.setLoop(latestLoopRef.current);
       if (resumeAt > 0) {

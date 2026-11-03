@@ -38,6 +38,8 @@ export class StemPlayer {
   private loop: LoopRange | null = null;
   private ticker: number | null = null;
   private lastSyncTime = 0;
+  private volume = 1;
+  private ducked = false;
 
   constructor(sources: StemSource[], events: Partial<PlayerEvents> = {}) {
     const first = sources[0];
@@ -122,7 +124,19 @@ export class StemPlayer {
 
   /** Turns the track down while the player speaks, so the microphone can hear them over it. */
   setDucked(ducked: boolean): void {
-    for (const track of this.tracks.values()) track.element.volume = ducked ? DUCKED_VOLUME : 1;
+    this.ducked = ducked;
+    this.applyVolume();
+  }
+
+  /** How loud the track plays, from 0 to 1, before any ducking. */
+  setVolume(volume: number): void {
+    this.volume = Math.min(1, Math.max(0, volume));
+    this.applyVolume();
+  }
+
+  private applyVolume(): void {
+    const volume = this.volume * (this.ducked ? DUCKED_VOLUME : 1);
+    for (const track of this.tracks.values()) track.element.volume = volume;
   }
 
   setRate(rate: number): void {
