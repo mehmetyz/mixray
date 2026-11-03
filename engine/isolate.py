@@ -52,6 +52,16 @@ EVENT_DRAWS = 1
 # present events stayed above -21 dB. The one below this bar was a failed output with SI-SDR
 # improvement -62 dB.
 ABSENT_OUTPUT_LEVEL_DB = -40.0
+# A peak this far above the average is one click in silence, not a sound: "rain" on a clip with none
+# came back at 44.8 dB, while a single bark measured 25 and an espresso machine 32.
+LONE_TRANSIENT_CREST_DB = 40.0
+# SAM Audio resynthesises, so it can make a sound that is not in the clip. Counted as invented: the
+# share of the output's energy at frequencies where the mix holds a tenth as much or less. "Rain" on
+# a clip with none measured 0.53; of 16 real sounds across the six demos an espresso machine was the
+# highest at 0.04, and the rest 0.00.
+MAX_INVENTED_SHARE = 0.3
+INVENTED_RATIO = 10.0
+SPECTRUM_FFT = 2048
 # Judge splits draws into two groups: empty ones near 1, real ones above 3.9 (48 draws, 6 sounds).
 MIN_CANDIDATE_SCORE = 2.0
 # Dropping the two built-in rankers keeps ImageBind and CLAP from being built: candidates are drawn
@@ -128,6 +138,34 @@ def _mask_onto_mix(
 
 def _rms(waveform: "torch.Tensor") -> float:
     return float(waveform.pow(2).mean().sqrt())
+
+
+def invented_share(sound_power: list[float], mix_power: list[float]) -> float:
+    """Share of the sound's energy at frequencies where the mix has almost none."""
+    sound_total = sum(sound_power) or 1.0
+    mix_total = sum(mix_power) or 1.0
+    return sum(
+        power / sound_total
+        for power, mix in zip(sound_power, mix_power, strict=True)
+        if power / sound_total > INVENTED_RATIO * mix / mix_total
+    )
+
+
+def _mean_power_spectrum(waveform: "torch.Tensor") -> list[float]:
+    import torch
+
+    spectrum = torch.stft(
+        waveform.float().reshape(-1),
+        SPECTRUM_FFT,
+        hop_length=SPECTRUM_FFT // 4,
+        return_complex=True,
+    )
+    return [float(value) for value in spectrum.abs().pow(2).mean(dim=1)]
+
+
+def crest_db(peak: float, rms: float) -> float:
+    """How far the loudest sample stands above the average level."""
+    return 20.0 * math.log10(max(peak, 1e-12) / max(rms, 1e-12))
 
 
 def _normalize_tensor(waveform: "torch.Tensor") -> "torch.Tensor":
@@ -331,6 +369,14 @@ def _separate_and_persist(  # noqa: PLR0913
     level = 20.0 * math.log10(max(_rms(sound), 1e-12) / max(_rms(mix.float().cpu()), 1e-12))
     if level < ABSENT_OUTPUT_LEVEL_DB:
         LOGGER.info("output sits %.1f dB under the mix for %s (%s)", level, clip_id, prompt)
+        raise SoundNotFoundError(prompt)
+    crest = crest_db(float(sound.abs().max()), _rms(sound))
+    if crest > LONE_TRANSIENT_CREST_DB:
+        LOGGER.info("output for %s (%s) is a lone click, %.1f dB crest", clip_id, prompt, crest)
+        raise SoundNotFoundError(prompt)
+    invented = invented_share(_mean_power_spectrum(sound), _mean_power_spectrum(mix.float().cpu()))
+    if invented > MAX_INVENTED_SHARE:
+        LOGGER.info("output for %s (%s) is %.2f invented; refusing it", clip_id, prompt, invented)
         raise SoundNotFoundError(prompt)
     return persist_isolation(
         clip_id,
