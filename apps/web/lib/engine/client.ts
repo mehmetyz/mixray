@@ -287,6 +287,15 @@ export async function waitForJob(jobId: string, options: WaitOptions = {}): Prom
   throw new EngineError("The engine is taking too long. Try again.");
 }
 
+/** Asks the engine to start the GPU now, so the first sound does not wait for it to load. */
+export async function warmEngine(): Promise<void> {
+  const { token, engineUrl } = await session();
+  await engineFetch(`${engineUrl}/warm`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}` },
+  });
+}
+
 /** Turns a path the engine reported into a URL the browser can load. */
 export async function engineFileUrl(path: string): Promise<string> {
   const { engineUrl } = await session();

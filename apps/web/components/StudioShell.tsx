@@ -8,6 +8,7 @@ import type { ClipStepId, NavState } from "@/lib/steps";
 import type { Isolation } from "@/lib/trackmap/trackmap.generated";
 import { barAtTime, formatBarBeat, formatClockSeconds, keyLabel, methodShortLabel, tempoLabel } from "@/lib/studio/format";
 import { findDemoClip } from "@/lib/demos";
+import { useEngineWarmup } from "@/lib/engine/use-engine-warmup";
 import { useProject } from "@/lib/projects/storage";
 import { AppHeader } from "./AppHeader";
 import { DemoBadge, DemoCredit } from "./DemoBadge";
@@ -146,6 +147,7 @@ export function TimelineRuler({ rightSlot }: TimelineRulerProps) {
 /** Quiet shell for `/` (Dashboard / Add). */
 export function AddShell({ children, className = "max-w-6xl" }: AddShellProps) {
   const nav: NavState = { current: "add" };
+  useEngineWarmup();
 
   return (
     <div className="flex min-h-dvh flex-col bg-bg text-text">
@@ -191,6 +193,7 @@ function SoundButton({ isolation, isSelected, onSelect, variant }: SoundButtonPr
 
 export function StudioShell({ children }: StudioShellProps) {
   const pathname = usePathname();
+  useEngineWarmup();
   const {
     clipId,
     trackMap,
