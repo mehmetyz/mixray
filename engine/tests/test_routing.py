@@ -60,10 +60,24 @@ def test_vocals_bass_and_guitar_go_to_sam_audio_with_ranked_draws(prompt: str) -
 
 
 @pytest.mark.parametrize("prompt", ["electronic keyboard", "keyboards", "keys"])
-def test_a_keyboard_goes_to_sam_audio_but_claims_no_notes(prompt: str) -> None:
+def test_a_keyboard_goes_to_sam_audio_and_gets_notes(prompt: str) -> None:
     assert route_for_prompt(prompt) == "sam_candidates"
     assert stem_for_prompt(prompt) == "other"
+    assert prompt_has_notes(prompt)
+
+
+@pytest.mark.parametrize("prompt", ["saxophone", "trumpet", "trombone", "brass section"])
+def test_a_horn_goes_to_sam_audio_and_claims_no_notes(prompt: str) -> None:
+    assert route_for_prompt(prompt) == "sam_candidates"
     assert not prompt_has_notes(prompt)
+
+
+def test_a_car_horn_is_still_an_event() -> None:
+    assert route_for_prompt("car horn") == "sam_event"
+
+
+def test_a_saxophone_and_a_trumpet_are_different_sounds() -> None:
+    assert instrument_key("saxophone") != instrument_key("trumpet")
 
 
 @pytest.mark.parametrize("prompt", ["drums", "organ", "strings", "synth pad"])

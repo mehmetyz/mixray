@@ -429,7 +429,7 @@ export function LearnView() {
 
   const analyzeLastTake = useCallback(async () => {
     if (activeNotes.length === 0 || scoreResult.bars.length === 0) {
-      setCoachMessage("This sound has no notes to score. Pick vocals, bass, guitar or piano.");
+      setCoachMessage("This sound has no notes to score. Pick vocals, bass, guitar, piano or keys.");
       return;
     }
     setIsCoachThinking(true);
@@ -574,7 +574,7 @@ export function LearnView() {
                     <>
                       <p className="text-xs font-semibold text-text">No notes for this sound</p>
                       <p className="mt-1 text-[11px] text-muted">
-                        Mixray writes notes for vocals, bass, guitar and piano. You can still listen to this one.
+                        Mixray writes notes for vocals, bass, guitar, piano and keys. You can still listen to this one.
                       </p>
                     </>
                   )}

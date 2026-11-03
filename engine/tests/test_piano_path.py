@@ -34,6 +34,10 @@ def test_other_sounds_keep_the_output_their_scores_were_measured_on(prompt: str)
     assert not notes_from_demucs(prompt)
 
 
+def test_a_keyboard_is_read_with_the_piano_decoder() -> None:
+    assert transcribe._note_decoder("electronic keyboard") == transcribe.PIANO_NOTE_DECODER
+
+
 def test_piano_notes_use_the_decoder_measured_for_piano_only() -> None:
     piano = transcribe._note_decoder("grand piano")
     assert piano == transcribe.PIANO_NOTE_DECODER

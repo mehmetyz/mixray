@@ -68,9 +68,12 @@ SAM_CANDIDATE_STEMS: frozenset[StemName] = frozenset({"vocals", "bass", "guitar"
 # Sounds whose SAM Audio output is used as a mask on the mix instead of as audio. Only the piano was
 # compared; the others keep the output their note scores were measured on.
 MIX_MASKED_STEMS: frozenset[StemName] = frozenset({"piano"})
-# A keyboard has no stem of its own, and `other` is whatever the five named stems left behind, so
-# SAM Audio is asked for it by name; if all its draws come back empty, Demucs `other` still answers.
-SAM_CANDIDATE_WORDS = frozenset({"keys", "keyboard", "keyboards"})
+# A keyboard or a horn has no stem of its own, and `other` is whatever the five named stems left
+# behind: on the Navy demo a saxophone and a trumpet both came back as that same leftover. SAM Audio
+# is asked for them by name; if all its draws come back empty, Demucs `other` still answers.
+KEYBOARD_WORDS = frozenset({"keys", "keyboard", "keyboards"})
+HORN_WORDS = frozenset({"sax", "saxophone", "trumpet", "trombone", "brass", "horn", "horns"})
+SAM_CANDIDATE_WORDS = KEYBOARD_WORDS | HORN_WORDS
 NOTE_STEMS: frozenset[StemName] = frozenset({"vocals", "bass", "guitar", "piano"})
 # Speech reads as vocals, but SAM Audio measured -14 dB on it where the Demucs stem held +1.7 dB.
 SPEECH_WORDS = frozenset({"speech", "speaking", "speak", "talking", "talk", "spoken", "narration"})
@@ -204,7 +207,7 @@ def instrument_key(prompt: str) -> str:
     stem = stem_for_prompt(prompt)
     if stem is not None and stem != "other":
         return "speech" if _is_speech(prompt) else stem
-    if words & SAM_CANDIDATE_WORDS:
+    if words & KEYBOARD_WORDS:
         return "keyboard"
     return " ".join(sorted(words))
 
@@ -238,9 +241,18 @@ def has_stems(clip_id: str, cache_root: Path | None = None) -> bool:
     return (clip_dir(clip_id, root) / "fallback_stems.json").exists()
 
 
+def names_keyboard(prompt: str) -> bool:
+    return bool(frozenset(PROMPT_TOKEN_PATTERN.findall(prompt.lower())) & KEYBOARD_WORDS)
+
+
 def prompt_has_notes(prompt: str) -> bool:
-    """Whether Mixray claims notes for this sound: other pitched stems measured only 0.13."""
-    return stem_for_prompt(prompt) in NOTE_STEMS and not _is_speech(prompt)
+    """Whether Mixray claims notes for this sound: other pitched stems measured only 0.13.
+
+    A keyboard is the exception, because a keyboard is what Mixray teaches: it is read from SAM
+    Audio's own separation with the piano decoder. Its accuracy has not been measured.
+    """
+    named = stem_for_prompt(prompt) in NOTE_STEMS or names_keyboard(prompt)
+    return named and not _is_speech(prompt)
 
 
 def _fallback_directory(clip_id: str, cache_root: Path) -> Path:
@@ -443,6 +455,13 @@ def run_routed_isolation(  # noqa: PLR0913
     mix_rate, mixture = _read_mono(clip_dir(clip_id, root) / "mix.wav")
     method: IsolationMethod = "demucs"
     sound, rest, rate = waveforms[stem], None, sample_rate
+    # Presence first: a solo recording served whole would otherwise answer for any instrument,
+    # a violin asked of a piano solo included.
+    level = _level_against_db(sound, mixture)
+    bar = PIANO_STEM_LEVEL_DB if stem == "piano" else ABSENT_STEM_LEVEL_DB
+    if level < bar:
+        LOGGER.info("stem=%s sits %.1f dB under clip=%s; refusing it", stem, level, clip_id)
+        raise SoundNotFoundError(stem)
     if stem not in BAND_STEMS and _is_solo(waveforms):
         LOGGER.info("clip=%s is a solo recording; serving it unseparated", clip_id)
         method, sound, rest, rate = (
@@ -451,14 +470,8 @@ def run_routed_isolation(  # noqa: PLR0913
             mixture.new_zeros(mixture.shape),
             mix_rate,
         )
-    else:
-        level = _level_against_db(sound, mixture)
-        bar = PIANO_STEM_LEVEL_DB if stem == "piano" else ABSENT_STEM_LEVEL_DB
-        if level < bar:
-            LOGGER.info("stem=%s sits %.1f dB under clip=%s; refusing it", stem, level, clip_id)
-            raise SoundNotFoundError(stem)
-        if sam_allowed and route_for_prompt(prompt) == "sam_candidates":
-            return None
+    elif sam_allowed and route_for_prompt(prompt) == "sam_candidates":
+        return None
     if rest is None:
         rest = sum(
             (waveform for name, waveform in waveforms.items() if name != stem),

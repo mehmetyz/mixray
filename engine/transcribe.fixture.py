@@ -244,8 +244,8 @@ def _routing_fixture() -> None:
         ("car honking", "sam_event", False),
         ("car horn", "sam_event", False),
         ("vehicle horn", "sam_event", False),
-        ("french horn", "demucs", False),
-        ("brass horn", "demucs", False),
+        ("french horn", "sam_candidates", False),
+        ("brass horn", "sam_candidates", False),
     ):
         assert route_for_prompt(sound) == route, sound
         assert prompt_has_notes(sound) is has_notes, sound

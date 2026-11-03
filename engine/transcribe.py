@@ -26,6 +26,7 @@ from fallback import (
     FALLBACK_DIRECTORY_NAME,
     STEM_NAMES,
     StemName,
+    names_keyboard,
     notes_from_demucs,
     prompt_has_notes,
     stem_for_prompt,
@@ -335,7 +336,7 @@ PIANO_NOTE_DECODER = NoteDecoder(PIANO_BASIC_PITCH_ONSET_THRESHOLD, PIANO_BASIC_
 
 def _note_decoder(prompt: str | None) -> NoteDecoder:
     """Pick the decoder measured for this instrument."""
-    if prompt is not None and stem_for_prompt(prompt) == "piano":
+    if prompt is not None and (stem_for_prompt(prompt) == "piano" or names_keyboard(prompt)):
         return PIANO_NOTE_DECODER
     return DEFAULT_NOTE_DECODER
 

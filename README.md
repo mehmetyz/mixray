@@ -75,7 +75,7 @@ flowchart LR
   B -->|"sound name"| R{"Route by<br/>what was measured"}
   N --> R
   R -->|"solo recording"| U["Served as it is"]
-  R -->|"vocals, bass, guitar, piano"| SA["SAM Audio large<br/>8 draws, Judge picks"]
+  R -->|"vocals, bass, guitar, piano, keys, horns"| SA["SAM Audio large<br/>8 draws, Judge picks"]
   R -->|"drums, organ, synth, speech"| D["Demucs stems"]
   R -->|"horn, dog, siren, footsteps"| SE["SAM Audio<br/>1 draw with spans"]
   U --> BP["Basic Pitch<br/>notes"]
