@@ -71,6 +71,9 @@ MAX_ISOLATE_CONTAINERS = 2
 ISOLATE_SCALEDOWN_SECONDS = 20 * 60
 # The API is CPU only, about $0.35 a day kept up; a cold one took 85 s to answer an upload.
 API_MIN_CONTAINERS = 1
+# An upload waits for tempo, key and chords, and a cold analysis container made that 48 s on a 7 s
+# clip. CPU only, so about as much as the API to keep up.
+ANALYZE_MIN_CONTAINERS = 1
 
 CACHE_VOLUME = modal.Volume.from_name("mixray-cache", create_if_missing=True)
 API_SECRET = modal.Secret.from_name("mixray-secrets")
@@ -213,6 +216,7 @@ class IsolationWorker:
     volumes={DEFAULT_CACHE_PATH: CACHE_VOLUME},
     timeout=ANALYZE_TIMEOUT_SECONDS,
     gpu=None,
+    min_containers=ANALYZE_MIN_CONTAINERS,
 )
 def analyze_worker(clip_id: str) -> None:
     """Apply CPU clip analysis and finish the job without blocking playback."""
