@@ -813,6 +813,21 @@ def transcribe_isolated_sound(
         note_source, frequency_bounds, minimum_note_length, decoder
     )
     notes, amplitudes = _notes_from_events(events)
+    stem = stem_for_prompt(prompt) if prompt is not None else None
+    if (
+        not notes
+        and stem_paths is not None
+        and stem is not None
+        and note_source != stem_paths[stem]
+    ):
+        # A separation can come back holding the wrong instrument. On a band clip SAM Audio's
+        # "guitar" held the horns and gave no notes at all, while the Demucs guitar stem was clean.
+        LOGGER.info("no notes in the separated %s; reading them from its Demucs stem", prompt)
+        note_source = stem_paths[stem]
+        events = _isolation_basic_pitch_events(
+            note_source, frequency_bounds, minimum_note_length, decoder
+        )
+        notes, amplitudes = _notes_from_events(events)
     if stem_paths is not None:
         stem_vote = _majority_stem_vote(notes, stem_paths)
         if (
