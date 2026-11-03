@@ -55,6 +55,12 @@ const BLACK_KEY_LEFT_PERCENT: readonly number[] = [
 
 type TakeDot = PlayedNoteDot & PassedNote;
 
+/** Says which part this is, so a simplified part does not look like notes went missing. */
+function partLabel(level: PracticeLevel, shown: number, heard: number): string {
+  const part = level === "easy" ? "Easy part" : "Intermediate part";
+  return shown < heard ? `${part} · ${shown} of ${heard} notes` : `${part} · ${shown} notes`;
+}
+
 function filterArrangementNotes(
   notes: Note[],
   handFilter: HandFilter,
@@ -97,6 +103,8 @@ export function LearnView() {
     simplifiedBars,
     applyCoachAction,
     resetCoachOverrides,
+    monitor,
+    setMonitor,
   } = useStudio();
 
   const [level, setLevel] = useState<PracticeLevel>("easy");
@@ -124,6 +132,15 @@ export function LearnView() {
     width: 1024,
     height: 320,
   });
+
+  // The keys carry the part here, so it plays along with the rest of the mix; whatever was chosen
+  // before comes back on leaving.
+  const monitorOnArrival = useRef(monitor);
+  useEffect(() => {
+    const previous = monitorOnArrival.current;
+    setMonitor("rest");
+    return () => setMonitor(previous);
+  }, [setMonitor]);
 
   const playingRef = useRef<boolean>(playing);
   useEffect(() => {
@@ -529,7 +546,7 @@ export function LearnView() {
                 {selectedIsolation?.label ?? "Melody"}
               </span>
               <span className="mono-num text-[11px] font-medium text-accent block mt-1">
-                {activeNotes.length} notes
+                {partLabel(level, activeNotes.length, selectedIsolation?.notes.length ?? 0)}
               </span>
             </div>
 
