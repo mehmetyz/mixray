@@ -6,6 +6,7 @@ import { strongestPartials } from "../lib/audio/freeze";
 import { sustainTail } from "../lib/audio/key-sampler";
 import { buildStepLinks, stepNumber } from "../lib/steps";
 import { areaAroundPaths, areaAtTime, areaOnStage, clampToStage, easeStageBox, scaleVideoArea, videoAreaFromDrag } from "../lib/studio/area";
+import { reachedNotes } from "../lib/score";
 import { addToTake, forgetPassed, startsNewPass, type PassedNote, type TakeNote } from "../lib/studio/take";
 
 describe("drawing an area on a letterboxed video", () => {
@@ -71,6 +72,26 @@ describe("the take keeps only the latest pass", () => {
     );
     assert.equal(take.length, 4000);
     assert.equal(take[take.length - 1]?.time, 499.9);
+  });
+});
+
+describe("the live score", () => {
+  const part = [
+    { onsetSeconds: 1, pitch: 60 },
+    { onsetSeconds: 2, pitch: 62 },
+    { onsetSeconds: 3, pitch: 64 },
+  ];
+
+  it("does not count a note the playhead has not reached as missed", () => {
+    assert.deepEqual(reachedNotes(part, [{ onsetSeconds: 1.01, pitch: 60 }], 1.05), [part[0]]);
+  });
+
+  it("counts a note once its moment has passed without it", () => {
+    assert.deepEqual(reachedNotes(part, [], 2.2), [part[0], part[1]]);
+  });
+
+  it("counts a note played a little early as soon as it is played", () => {
+    assert.deepEqual(reachedNotes(part, [{ onsetSeconds: 1.92, pitch: 62 }], 1.93), [part[0], part[1]]);
   });
 });
 

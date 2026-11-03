@@ -15,6 +15,7 @@ import { addToTake, forgetPassed, REWIND_SECONDS, startsNewPass, type PassedNote
 import { midiToNoteName } from "@/lib/studio/format";
 import { requestCoach } from "@/lib/coach";
 import {
+  reachedNotes,
   scorePerformance,
   type ScoreInput,
   type ScoreNote,
@@ -224,14 +225,15 @@ export function LearnView() {
   }, [activeNotes, currentTime]);
 
   const scoreResult = useMemo<ScoreResult>(() => {
+    const playedNotes = toScorePlayedNotes(playedDots);
     const scoreInput: ScoreInput = {
-      referenceNotes: toScoreReferenceNotes(activeNotes),
-      playedNotes: toScorePlayedNotes(playedDots),
+      referenceNotes: reachedNotes(toScoreReferenceNotes(activeNotes), playedNotes, currentTime),
+      playedNotes,
       downbeats: trackMap.downbeats,
       durationSeconds: duration,
     };
     return scorePerformance(scoreInput);
-  }, [activeNotes, playedDots, trackMap.downbeats, duration]);
+  }, [activeNotes, playedDots, trackMap.downbeats, duration, currentTime]);
 
   const handleNoteOn = useCallback(
     (midi: number) => {

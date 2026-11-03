@@ -208,6 +208,24 @@ function toScoreBars(ranges: BarRange[], accumulators: BarAccumulator[]): ScoreB
   });
 }
 
+/**
+ * The notes the take can be judged on at `time`: those whose window has passed, and those already
+ * played. A note still ahead of the playhead is not a miss yet, and counting it as one made the
+ * score start low and climb while someone played every note right.
+ */
+export function reachedNotes(
+  reference: readonly ScoreNote[],
+  played: readonly ScoreNote[],
+  time: number,
+): ScoreNote[] {
+  const window = MATCH_WINDOW_MS / 1000;
+  return reference.filter(
+    (note) =>
+      note.onsetSeconds + window <= time ||
+      played.some((dot) => dot.pitch === note.pitch && Math.abs(dot.onsetSeconds - note.onsetSeconds) <= window),
+  );
+}
+
 export function scorePerformance(input: ScoreInput): ScoreResult {
   const ranges = createBarRanges(input.downbeats, input.durationSeconds);
   const accumulators = createAccumulators(ranges);
