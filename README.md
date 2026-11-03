@@ -10,7 +10,7 @@ Built with Muse Spark Open
 
 ![Mixray marks the piano in a video, then the part is played on the keys and scored bar by bar](.github/assets/mixray-demo.gif)
 
-*Recorded from the live app. The café clip is AI-generated in Google Flow and labelled as such; see [CREDITS.md](CREDITS.md).*
+*Recorded from the app against the live engine. In Practice the keys were pressed by a script on the notes of the part, not by hand. The café clip is AI-generated in Google Flow and labelled as such; see [CREDITS.md](CREDITS.md).*
 
 Drop in a track or a video you own, then pick one sound out of the mix: type what you want, take a
 suggestion, or draw over the instrument in the video. Mixray isolates it, shows what it plays and
