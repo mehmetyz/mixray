@@ -27,7 +27,7 @@ from typing import TypedDict, TypeGuard
 import modal
 
 import meta_api
-from fallback import stem_for_prompt
+from fallback import instrument_key, stem_for_prompt
 from images import web_image
 from ingest import build_served_trackmap, clip_dir, get_cache_root
 
@@ -576,6 +576,41 @@ def suggest_clip(
     (directory / "suggest.json").write_text(json.dumps(result), encoding="utf-8")
     LOGGER.info("suggested %d sounds for clip=%s", len(result["suggestions"]), clip_id)
     return result
+
+
+def drop_absent_suggestion(clip_id: str, prompt: str, cache_root: Path | None = None) -> bool:
+    """Withdraw a chip once its sound was asked for and found absent.
+
+    Chips for a video are named from what Muse Spark sees as well as hears, so rain on a window can
+    be offered for a clip whose audio holds none. Once separation answers that it is not there, the
+    chip is not offered again.
+    """
+    path = (
+        clip_dir(clip_id, cache_root if cache_root is not None else get_cache_root())
+        / "suggest.json"
+    )
+    if not path.exists():
+        return False
+    sidecar = json.loads(path.read_text(encoding="utf-8"))
+    suggestions = sidecar.get("suggestions") if isinstance(sidecar, dict) else None
+    if not isinstance(suggestions, list):
+        return False
+    absent = instrument_key(prompt)
+    kept = [
+        s
+        for s in suggestions
+        if not (
+            isinstance(s, dict)
+            and isinstance(s.get("prompt"), str)
+            and instrument_key(s["prompt"]) == absent
+        )
+    ]
+    if len(kept) == len(suggestions):
+        return False
+    sidecar["suggestions"] = kept
+    path.write_text(json.dumps(sidecar), encoding="utf-8")
+    LOGGER.info("withdrew the %s chip for clip=%s: the sound is not in the audio", prompt, clip_id)
+    return True
 
 
 @app.function(

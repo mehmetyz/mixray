@@ -42,7 +42,7 @@ from isolate import (
     run_isolation,
 )
 from recipe import write_recipe
-from suggest import suggest_clip, write_isolation_summary
+from suggest import drop_absent_suggestion, suggest_clip, write_isolation_summary
 from transcribe import apply_transcription
 
 if TYPE_CHECKING:
@@ -82,6 +82,15 @@ API_SECRET = modal.Secret.from_name("mixray-secrets")
 BASETEN_SECRET = modal.Secret.from_name("mixray-baseten")
 
 app = modal.App("mixray")
+
+
+def _withdraw_absent_chip(clip_id: str, prompt: str) -> None:
+    """Stop offering a chip whose sound was just found absent, without hiding that answer."""
+    try:
+        if drop_absent_suggestion(clip_id, prompt):
+            CACHE_VOLUME.commit()
+    except Exception:
+        LOGGER.exception("could not withdraw the %s chip for clip=%s", prompt, clip_id)
 
 
 def _sound_not_found_job(clip_id: str, iso_id: str, prompt: str) -> JobRecord:
@@ -182,6 +191,7 @@ class IsolationWorker:
             )
         except SoundNotFoundError:
             LOGGER.info("no audible %s in clip=%s", prompt, clip_id)
+            _withdraw_absent_chip(clip_id, prompt)
             write_job(_sound_not_found_job(clip_id, iso_id, prompt))
         except CandidatesRejectedError:
             LOGGER.info("every draw empty for %s in clip=%s; serving Demucs", prompt, clip_id)
@@ -379,6 +389,7 @@ def demucs_isolation_worker(
         entry = run_routed_isolation(clip_id, iso_id, prompt, label, sam_allowed=sam_allowed)
     except SoundNotFoundError:
         LOGGER.info("no audible %s in clip=%s", prompt, clip_id)
+        _withdraw_absent_chip(clip_id, prompt)
         write_job(_sound_not_found_job(clip_id, iso_id, prompt))
     except Exception:
         LOGGER.exception("routed isolation failed for clip=%s prompt=%s", clip_id, prompt)
