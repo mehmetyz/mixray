@@ -159,7 +159,9 @@ Built during the event, Oct 26 to Nov 4, 2026.
 | Fri Oct 30 | The Coach through tool calls; sound recipes on Muse Spark Open; voice commands; checked summaries; a tap names the sound |
 | Sat Oct 31 (weekend) | Coach, Analyze and Practice rebuilt; first test on real recordings: note F1 0.532 → 0.673 on 12 guitar recordings |
 | Sun Nov 1 (weekend) | A day of measurement in Colab, then routing by measurement; areas drawn on the video; keys play the selected sound; a pedal or pad opens the microphone; every screen cut down to what is real |
-| Mon Nov 2 | Six demos; clip list with live progress; chips only from Muse Spark; piano through a SAM Audio mask with stricter decoding; Track on Isolate and Analyze; works on phones and tablets; browser audit fixed the Coach, playback and looping; tests, CI, this evaluation and the licence |
+| Mon Nov 2 | Six demos; clip list with live progress; chips only from Muse Spark; piano through a SAM Audio mask with stricter decoding; Track on Isolate and Analyze; works on phones and tablets; browser audit fixed the Coach, playback and looping; tests, CI, this evaluation and the licence; landing page and access key; files served only from clips, and no addresses kept in the quota files |
+| Tue Nov 3 | The API and analysis worker kept up and the GPU warmed when the studio opens; Practice plays the rest of the mix under the keys, names the part and scores only the notes reached; notes for keys and keyboards; horns to SAM Audio by name; notes from the Demucs stem when a separation gives none; a lone click or a sound the mix does not hold answers "not found"; why Mixray exists, with sources; a GIF recorded from the live site |
+| Wed Nov 4 | Run with a real keyboard (Launchkey MK4 49) and microphone; a suggested chip is withdrawn once its sound is found absent; the demo video |
 
 ## Run it yourself
 
