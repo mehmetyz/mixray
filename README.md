@@ -6,6 +6,8 @@ Built with Muse Spark Open
 
 **Live:** https://mixray.vercel.app
 
+**Demo video (2:48):** https://youtu.be/sdNPUq3Tu7o
+
 **Judges:** the access key is in the submission notes.
 
 ![Mixray marks the piano in a video, then the part is played on the keys and scored bar by bar](.github/assets/mixray-demo.gif)
