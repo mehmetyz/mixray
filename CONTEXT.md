@@ -179,3 +179,5 @@ Decisions and current state. The plan is in `SPEC.md`, the UI in `DESIGN.md`, th
 - Open: `_client_ip` trusts the first `X-Forwarded-For` value, which a client can set. Modal's docs point to `request.client.host`, but what a deployed app sees there has not been checked, and a shared proxy address would put every visitor on one quota.
 - Open: note accuracy on a real recording with known notes; the author is still learning keyboard, so it needs a labelled
   recording with clean rights.
+- Done (Nov 4): run with a Launchkey MK4 49 and a USB camera microphone. Spoken phrases worked as said: "can you make it slower?" (tempo 90%), "okay start again", "how did I do?" (the Coach looped bars 2 to 3), "go to bar two", "you can stop". The microphone stayed silent until Brave was started by macOS itself: launched from the editor, macOS asked the editor for the permission and fed Brave silence.
+- Done (Nov 4): chips for a video are named from what Muse Spark sees too, so the rainy demo offered "Rain" with no rain in the audio. A chip whose sound is answered "not found" is now withdrawn from the clip's suggestions.

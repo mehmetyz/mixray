@@ -141,8 +141,8 @@ Each gave the same result as the first time.
   other music: the separation rows rest on one album.
 - On guitar, 100 ms scored higher than the 127.7 ms the engine uses: 0.787 against 0.777 on the unseen
   players. The engine keeps Basic Pitch's own default rather than a value picked from this table.
-- The Coach's words and its tool calls do not always match, and voice and MIDI have only been run
-  with a fake microphone and fake MIDI input.
+- The Coach's words and its tool calls do not always match, and voice and MIDI have been run with
+  one keyboard (a Launchkey MK4 49) and one microphone.
 
 ## Timeline
 
